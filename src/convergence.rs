@@ -17,7 +17,7 @@ pub enum ConvergenceStatus {
 pub struct ConvergenceInfo {
     /// Primal infeasibility: max |c_i(x)| for violated constraints.
     pub primal_inf: f64,
-    /// Dual infeasibility: ||grad_f - J^T lambda - z||_inf.
+    /// Dual infeasibility: ||grad_f + J^T y - z||_inf.
     pub dual_inf: f64,
     /// Complementarity: max |x_i * z_i - mu|.
     pub compl_inf: f64,
@@ -42,9 +42,11 @@ pub fn check_convergence(
 ) -> ConvergenceStatus {
     // Ipopt-style dual scaling: s_d = max(s_max, sum|mults| / count) / s_max
     // This scales the tolerance to account for large multiplier magnitudes.
+    // Cap s_d to prevent false convergence when multipliers explode.
     let s_max: f64 = 100.0;
+    let s_d_max: f64 = 1e4; // Don't let tolerance scale more than 10000x
     let s_d = if info.multiplier_count > 0 {
-        (s_max.max(info.multiplier_sum / info.multiplier_count as f64)) / s_max
+        ((s_max.max(info.multiplier_sum / info.multiplier_count as f64)) / s_max).min(s_d_max)
     } else {
         1.0
     };
@@ -53,6 +55,10 @@ pub fn check_convergence(
     let dual_tol = options.tol * s_d;
     let compl_tol = options.tol * s_d;
 
+    // Ipopt-style unscaled dual infeasibility threshold (dual_inf_tol).
+    // Even if the scaled check passes (using z_opt), the unscaled check
+    // with iterative z must also pass. This prevents false convergence
+    // where z_opt absorbs huge gradient residuals into bound multipliers.
     // Check strict convergence
     if info.primal_inf <= primal_tol
         && info.dual_inf <= dual_tol

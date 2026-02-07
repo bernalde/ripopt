@@ -106,51 +106,68 @@ pub fn assemble_kkt(
         rhs[col] -= jac_vals[idx] * y[row];
     }
 
-    // RHS: primal residual r_p (last m entries)
-    // For equality constraints: rhs = -(g - g_l)
-    // For inequality constraints with slack elimination:
-    //   When feasible (slack > 0): rhs = -(g - g_l) - mu/y (barrier correction)
-    //   When infeasible (slack <= 0): rhs = -(g - g_l) (no barrier, drive to feasibility)
+    // RHS: primal residual r_p (last m entries) and (2,2) block for inequality constraints.
+    //
+    // After condensing the slack variables from the KKT system, the condensed system is:
+    //   [H + Σ_x    J^T         ] [Δx]   [r_d                            ]
+    //   [J          -Σ_s^{-1}   ] [Δy] = [Σ_s^{-1} * (y + μ/s_l - μ/s_u)]
+    //
+    // where Σ_s = z_sl/s_l + z_su/s_u is the barrier contribution from constraint slacks,
+    // z_sl, z_su are the slack bound multipliers, and s_l = g - g_l, s_u = g_u - g.
+    //
+    // For equality constraints: no slack, (2,2) = 0, r_c = -(g - g_l).
+    // For infeasible inequality constraints: no barrier, r_c = -(g - bound).
     for i in 0..m {
         let is_equality = g_l[i].is_finite() && g_u[i].is_finite() && (g_l[i] - g_u[i]).abs() < 1e-15;
         if is_equality {
             rhs[n + i] = -(g[i] - g_l[i]);
-        } else if g_l[i].is_finite() {
-            rhs[n + i] = -(g[i] - g_l[i]);
-        } else if g_u[i].is_finite() {
-            rhs[n + i] = -(g[i] - g_u[i]);
-        }
-    }
-
-    // (2,2) block: slack contribution for inequality constraints.
-    // After implicit slack elimination, D_i = -y_i / s_i where s_i is the
-    // constraint slack. The matrix entry is -D_i.
-    // When the constraint is violated (s <= 0), skip the barrier contribution
-    // and let the Newton step drive toward feasibility.
-    for i in 0..m {
-        let is_equality = g_l[i].is_finite() && g_u[i].is_finite() && (g_l[i] - g_u[i]).abs() < 1e-15;
-        if is_equality {
             continue;
         }
 
-        let mut d_ii = 0.0;
+        // Compute Σ_s and the RHS correction term (y + μ/s_l - μ/s_u)
+        let mut sigma_s = 0.0;
+        let mut rhs_correction = y[i]; // starts with y
+        let mut any_feasible = false;
+        let mut rhs_infeasible = 0.0;
+
         if g_l[i].is_finite() {
             let slack = g[i] - g_l[i];
-            if slack > 1e-10 && y[i] < -1e-20 {
-                // Feasible: D = -y/s > 0 (y < 0, s > 0)
-                d_ii += -y[i] / slack;
+            if slack >= -1e-8 {
+                // Feasible or at bound: use barrier with safeguarded slack
+                let safe_slack = slack.max(mu.max(1e-10));
+                let z_sl = if y[i] < -1e-20 { -y[i] } else { mu / safe_slack };
+                sigma_s += z_sl / safe_slack;
+                rhs_correction += mu / safe_slack;
+                any_feasible = true;
+            } else {
+                // Truly infeasible: drive toward feasibility
+                rhs_infeasible += -(g[i] - g_l[i]);
             }
         }
         if g_u[i].is_finite() {
             let slack = g_u[i] - g[i];
-            if slack > 1e-10 && y[i] > 1e-20 {
-                // Feasible: D = y/s > 0 (y > 0, s > 0)
-                d_ii += y[i] / slack;
+            if slack >= -1e-8 {
+                // Feasible or at bound: use barrier with safeguarded slack
+                let safe_slack = slack.max(mu.max(1e-10));
+                let z_su = if y[i] > 1e-20 { y[i] } else { mu / safe_slack };
+                sigma_s += z_su / safe_slack;
+                rhs_correction -= mu / safe_slack;
+                any_feasible = true;
+            } else {
+                // Truly infeasible: drive toward feasibility
+                rhs_infeasible += -(g[i] - g_u[i]);
             }
         }
-        if d_ii > 0.0 {
-            // Matrix entry is -D (negative for correct KKT inertia)
-            matrix.add(n + i, n + i, -d_ii);
+
+        if any_feasible && sigma_s > 1e-20 {
+            let sigma_s_inv = 1.0 / sigma_s;
+            // (2,2) block: -Σ_s^{-1} (always negative, correct for KKT inertia)
+            matrix.add(n + i, n + i, -sigma_s_inv);
+            // RHS: Σ_s^{-1} * (y + μ/s_l - μ/s_u) + infeasible contributions
+            rhs[n + i] = sigma_s_inv * rhs_correction + rhs_infeasible;
+        } else {
+            // All infeasible: just drive toward feasibility
+            rhs[n + i] = rhs_infeasible;
         }
     }
 
@@ -246,6 +263,7 @@ pub fn factor_with_inertia_correction(
         (params.delta_w_last / params.delta_w_growth).max(params.delta_w_init)
     };
     let delta_c = params.delta_c;
+    let mut best_delta_w = delta_w;
 
     for attempt in 0..params.max_attempts {
         // Create perturbed matrix
@@ -266,6 +284,8 @@ pub fn factor_with_inertia_correction(
             }
         }
 
+        best_delta_w = delta_w;
+
         // Increase perturbation
         delta_w *= params.delta_w_growth;
 
@@ -277,21 +297,65 @@ pub fn factor_with_inertia_correction(
         );
     }
 
-    Err(crate::linear_solver::SolverError::NumericalFailure(
-        "inertia correction failed after maximum attempts".to_string(),
-    ))
+    // Inertia correction failed — use last perturbed matrix and proceed.
+    // The line search will reject bad steps, and restoration can recover.
+    log::warn!(
+        "Inertia correction failed after {} attempts (delta_w={:.2e}), proceeding with approximate factorization",
+        params.max_attempts, best_delta_w
+    );
+    let mut perturbed = kkt.matrix.clone();
+    perturbed.add_diagonal_range(0, n, best_delta_w);
+    if m > 0 {
+        perturbed.add_diagonal_range(n, n + m, -delta_c);
+    }
+    solver.factor(&perturbed)?;
+    kkt.matrix = perturbed;
+    params.delta_w_last = best_delta_w;
+    Ok((best_delta_w, delta_c))
 }
 
 /// Solve the KKT system for the search direction, given a factored solver.
 ///
 /// Returns (dx, dy) where dx is the primal step and dy is the dual step.
 /// Bound multiplier steps dz_l, dz_u are recovered from complementarity.
+///
+/// Uses iterative refinement to improve solution accuracy for ill-conditioned
+/// systems (e.g., near-singular Hessians in equality-constrained problems).
 pub fn solve_for_direction(
     kkt: &KktSystem,
     solver: &mut dyn LinearSolver,
 ) -> Result<(Vec<f64>, Vec<f64>), crate::linear_solver::SolverError> {
-    let mut solution = vec![0.0; kkt.dim];
+    let dim = kkt.dim;
+    let mut solution = vec![0.0; dim];
     solver.solve(&kkt.rhs, &mut solution)?;
+
+    // Iterative refinement: correct the solution using the residual
+    let max_refinements = 3;
+    let mut residual = vec![0.0; dim];
+    for _ref_iter in 0..max_refinements {
+        // Compute residual: r = b - A*x
+        kkt.matrix.matvec(&solution, &mut residual);
+        let mut res_norm: f64 = 0.0;
+        for i in 0..dim {
+            residual[i] = kkt.rhs[i] - residual[i];
+            res_norm = res_norm.max(residual[i].abs());
+        }
+
+        if res_norm < 1e-12 {
+            break;
+        }
+
+        // Solve A * correction = residual
+        let mut correction = vec![0.0; dim];
+        if solver.solve(&residual, &mut correction).is_err() {
+            break;
+        }
+
+        // Update solution
+        for i in 0..dim {
+            solution[i] += correction[i];
+        }
+    }
 
     let dx = solution[..kkt.n].to_vec();
     let dy = solution[kkt.n..].to_vec();

@@ -163,7 +163,13 @@ impl SolverState {
         problem.hessian_values(&self.x, obj_factor, &self.y, &mut self.hess_vals);
     }
 
-    /// Compute the barrier objective: f(x) - mu * sum(ln(x_i - x_l_i) + ln(x_u_i - x_i))
+    /// Compute the barrier objective:
+    /// f(x) - mu * sum(ln(x_i - x_l_i) + ln(x_u_i - x_i))  [variable bounds only]
+    ///
+    /// Note: constraint slack barriers are NOT included because with implicit slacks
+    /// (no explicit slack variables), the nonlinear constraint evaluation g(x) can
+    /// cause large jumps in the barrier objective for tight constraints, breaking
+    /// the filter line search. Constraint feasibility is handled by theta in the filter.
     fn barrier_objective(&self) -> f64 {
         let mut phi = self.obj;
         for i in 0..self.n {
@@ -185,6 +191,8 @@ impl SolverState {
     }
 
     /// Compute the directional derivative of the barrier objective along the search direction.
+    ///
+    /// ∇φ·dx = (∇f - μ/(x-x_l) + μ/(x_u-x))·dx  [variable bounds only]
     fn barrier_directional_derivative(&self) -> f64 {
         let mut grad_phi_dx = 0.0;
         for i in 0..self.n {
@@ -229,6 +237,12 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     // Initialize filter
     let mut filter = Filter::new(1e4);
 
+    // Stall detection: count consecutive iterations with alpha_primal ≈ 0.
+    // Progressive recovery: first reset filter only, then bump mu on repeated stalls.
+    let mut consecutive_zero_alpha: usize = 0;
+    let stall_threshold: usize = 5;
+    let mut stall_recovery_count: usize = 0;
+
     // Initial evaluation
     state.evaluate(problem, 1.0);
 
@@ -255,12 +269,16 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     for iteration in 0..options.max_iter {
         state.iter = iteration;
 
-        // Compute optimality measures
+        // Compute optimality measures.
         let primal_inf = state.constraint_violation();
-        // Compute z values from stationarity for convergence check.
-        // For bound-active variables, z_l is determined by stationarity.
-        // For free variables, z_l should be 0 at the NLP optimum.
-        // This avoids reporting oscillating z as dual infeasibility.
+
+        // Compute z_opt from stationarity for the scaled convergence check.
+        // At optimality, grad_f + J^T y - z_l + z_u = 0. For active bounds,
+        // z_opt captures the true bound multiplier. For inactive bounds, z=0.
+        //
+        // Complementarity gate: only use z_opt when z_opt * slack is consistent
+        // with the barrier problem (z*s ~ mu). If z_opt * slack >> mu, the point
+        // is not a barrier-optimal point and z_opt would hide a true infeasibility.
         let (z_l_opt, z_u_opt) = {
             let mut grad_jty = state.grad_f.clone();
             for (idx, (&row, &col)) in state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate() {
@@ -268,19 +286,19 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             }
             let mut zl = vec![0.0; n];
             let mut zu = vec![0.0; n];
+            let kappa_compl = 1e10; // allow z*s up to 1e10 * mu (matches kappa_sigma)
             for i in 0..n {
-                // From stationarity: grad_jty[i] - z_l[i] + z_u[i] = 0
-                // So z_l[i] - z_u[i] = grad_jty[i]
-                // Active lower bound: z_u = 0, z_l = grad_jty[i]
-                // Active upper bound: z_l = 0, z_u = -grad_jty[i]
-                // Free variable: z_l = z_u = 0 (stationarity residual is the error)
                 if grad_jty[i] > 0.0 && state.x_l[i].is_finite() {
-                    zl[i] = grad_jty[i];
+                    let s_l = (state.x[i] - state.x_l[i]).max(1e-20);
+                    if grad_jty[i] * s_l <= kappa_compl * state.mu.max(1e-20) {
+                        zl[i] = grad_jty[i];
+                    }
                 } else if grad_jty[i] < 0.0 && state.x_u[i].is_finite() {
-                    zu[i] = -grad_jty[i];
+                    let s_u = (state.x_u[i] - state.x[i]).max(1e-20);
+                    if (-grad_jty[i]) * s_u <= kappa_compl * state.mu.max(1e-20) {
+                        zu[i] = -grad_jty[i];
+                    }
                 }
-                // If neither bound should be active, z_l = z_u = 0 and
-                // dual_infeasibility captures the stationarity violation.
             }
             (zl, zu)
         };
@@ -296,7 +314,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             n,
         );
         let compl_inf =
-            complementarity_error(&state.x, &state.x_l, &state.x_u, &z_l_opt, &z_u_opt, 0.0);
+            complementarity_error(&state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0);
 
         if options.print_level >= 5 {
             log::info!(
@@ -410,7 +428,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         // Compute maximum step sizes using fraction-to-boundary rule
         let tau = (1.0 - state.mu).max(options.tau_min);
 
-        // Primal step: ensure x + alpha*dx stays within bounds
+        // Primal step: ensure x + alpha*dx stays within variable bounds
         let mut alpha_primal_max: f64 = 1.0;
         for i in 0..n {
             if state.x_l[i].is_finite() && state.dx[i] < 0.0 {
@@ -424,6 +442,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 alpha_primal_max = alpha_primal_max.min(ratio);
             }
         }
+
         alpha_primal_max = alpha_primal_max.clamp(0.0, 1.0);
 
         // Dual step: ensure z + alpha*dz > 0
@@ -469,7 +488,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             let theta_trial =
                 convergence::primal_infeasibility(&g_trial, &state.g_l, &state.g_u);
 
-            // Compute barrier objective at trial
+            // Compute barrier objective at trial (variable bounds only)
             let mut phi_trial = obj_trial;
             #[allow(clippy::needless_range_loop)]
             for i in 0..n {
@@ -548,25 +567,58 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 &state.x,
                 &state.x_l,
                 &state.x_u,
-                &state.g,
                 &state.g_l,
                 &state.g_u,
-                &state.grad_f,
                 &state.jac_rows,
                 &state.jac_cols,
-                &state.jac_vals,
                 n,
                 m,
-                &mut lin_solver,
                 options,
                 &|theta, phi| filter.is_acceptable(theta, phi),
+                &|x_eval, g_out| problem.constraints(x_eval, g_out),
+                &|x_eval, jac_out| problem.jacobian_values(x_eval, jac_out),
             );
 
             if success {
+                // Check if restoration actually moved the point
+                let move_dist: f64 = x_rest.iter().zip(state.x.iter())
+                    .map(|(a, b)| (a - b).abs())
+                    .fold(0.0f64, f64::max);
+
                 state.x = x_rest;
                 state.alpha_primal = 0.0;
                 // Re-evaluate at restoration point
                 state.evaluate(problem, 1.0);
+
+                if move_dist < 1e-14 && primal_inf < options.tol {
+                    // Restoration returned same point AND constraints already satisfied.
+                    // This happens for unconstrained problems or when the filter blocks
+                    // progress on a fully feasible iterate (e.g., concave objectives).
+                    consecutive_zero_alpha += 1;
+                    if consecutive_zero_alpha >= stall_threshold {
+                        stall_recovery_count += 1;
+                        filter.reset();
+                        inertia_params.delta_w_last = 0.0;
+                        consecutive_zero_alpha = 0;
+
+                        if stall_recovery_count >= 2 {
+                            // Repeated stalls: filter reset alone isn't enough.
+                            // Bump mu to change the barrier landscape.
+                            let mu_new = (state.mu * 100.0).max(options.mu_init);
+                            log::debug!(
+                                "Repeated stall (recovery #{}), mu: {:.2e} -> {:.2e}",
+                                stall_recovery_count, state.mu, mu_new
+                            );
+                            state.mu = mu_new;
+                            stall_recovery_count = 0;
+                        } else {
+                            log::debug!("Stall detected, resetting filter (recovery #{})", stall_recovery_count);
+                        }
+                    }
+                } else {
+                    consecutive_zero_alpha = 0;
+                }
+
                 continue;
             } else {
                 log::warn!("Restoration failed at iteration {}", iteration);
@@ -574,17 +626,30 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             }
         }
 
+        // Step was accepted — reset stall counter (any accepted step is progress)
+        consecutive_zero_alpha = 0;
+
         // Update dual variables
         let alpha_d = alpha_dual_max;
         for i in 0..m {
             state.y[i] += alpha_d * state.dy[i];
         }
+        // Ipopt kappa_sigma safeguard: keep z*s in [mu/kappa_sigma, kappa_sigma*mu]
+        let kappa_sigma = 1e10;
         for i in 0..n {
             if state.x_l[i].is_finite() {
-                state.z_l[i] = (state.z_l[i] + alpha_d * state.dz_l[i]).max(1e-20);
+                let z_new = (state.z_l[i] + alpha_d * state.dz_l[i]).max(1e-20);
+                let s_l = (state.x[i] - state.x_l[i]).max(1e-20);
+                let z_lo = state.mu / (kappa_sigma * s_l);
+                let z_hi = kappa_sigma * state.mu / s_l;
+                state.z_l[i] = z_new.clamp(z_lo, z_hi);
             }
             if state.x_u[i].is_finite() {
-                state.z_u[i] = (state.z_u[i] + alpha_d * state.dz_u[i]).max(1e-20);
+                let z_new = (state.z_u[i] + alpha_d * state.dz_u[i]).max(1e-20);
+                let s_u = (state.x_u[i] - state.x[i]).max(1e-20);
+                let z_lo = state.mu / (kappa_sigma * s_u);
+                let z_hi = kappa_sigma * state.mu / s_u;
+                state.z_u[i] = z_new.clamp(z_lo, z_hi);
             }
         }
 
@@ -626,10 +691,16 @@ fn attempt_soc<P: NlpProblem>(
         return None;
     }
 
-    // Compute constraint violation at trial
+    // Compute constraint residual at trial point, respecting constraint type
     let mut c_soc = vec![0.0; m];
     for i in 0..m {
-        c_soc[i] = g_trial[i] - state.g_l[i]; // residual
+        let is_equality = state.g_l[i].is_finite() && state.g_u[i].is_finite()
+            && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
+        if is_equality || state.g_l[i].is_finite() {
+            c_soc[i] = g_trial[i] - state.g_l[i];
+        } else if state.g_u[i].is_finite() {
+            c_soc[i] = g_trial[i] - state.g_u[i];
+        }
     }
 
     for _soc_iter in 0..options.max_soc {
@@ -666,6 +737,7 @@ fn attempt_soc<P: NlpProblem>(
 
         let theta_soc = convergence::primal_infeasibility(&g_soc, &state.g_l, &state.g_u);
 
+        // Compute barrier objective (variable bounds only)
         let mut phi_soc = obj_soc;
         #[allow(clippy::needless_range_loop)]
         for i in 0..n {
@@ -692,9 +764,15 @@ fn attempt_soc<P: NlpProblem>(
             return Some((x_soc, obj_soc, g_soc, alpha));
         }
 
-        // Update c_soc for next SOC iteration
+        // Update c_soc for next SOC iteration (respecting constraint type)
         for i in 0..m {
-            c_soc[i] = g_soc[i] - state.g_l[i];
+            let is_equality = state.g_l[i].is_finite() && state.g_u[i].is_finite()
+                && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
+            if is_equality || state.g_l[i].is_finite() {
+                c_soc[i] = g_soc[i] - state.g_l[i];
+            } else if state.g_u[i].is_finite() {
+                c_soc[i] = g_soc[i] - state.g_u[i];
+            }
         }
     }
 
@@ -707,7 +785,6 @@ fn update_barrier_parameter(state: &SolverState, options: &SolverOptions) -> f64
 
     if options.mu_strategy_adaptive {
         // Adaptive (Loqo) rule: mu = (x^T z) / (n * kappa)
-        // Compute average complementarity
         let mut sum_compl = 0.0;
         let mut count = 0;
         for i in 0..state.n {
@@ -724,14 +801,13 @@ fn update_barrier_parameter(state: &SolverState, options: &SolverOptions) -> f64
         }
 
         if count == 0 {
-            // No bounds — reduce monotonically
             return (mu * options.mu_linear_decrease_factor).max(options.mu_min);
         }
 
         let avg_compl = sum_compl / count as f64;
 
         // Kappa adaptive: reduce faster when progress is good
-        let kappa = 10.0; // Ipopt uses more sophisticated kappa selection
+        let kappa = 10.0;
         let mu_new = (avg_compl / kappa).max(options.mu_min);
 
         // Don't let mu increase

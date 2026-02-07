@@ -101,6 +101,12 @@ impl DenseLdl {
                     // Swap rows/columns k and p1
                     self.swap_rows_cols(&mut a, n, k, p1);
                     self.perm.swap(k, p1);
+                    // Also swap L entries for previously computed columns
+                    for j in 0..k {
+                        let idx_k = Self::l_idx(n, k, j);
+                        let idx_p1 = Self::l_idx(n, p1, j);
+                        self.l.swap(idx_k, idx_p1);
+                    }
                 }
 
                 let akk = a[k * n + k];
@@ -132,11 +138,23 @@ impl DenseLdl {
                 if p2 != k + 1 {
                     self.swap_rows_cols(&mut a, n, k + 1, p2);
                     self.perm.swap(k + 1, p2);
+                    // Also swap L entries for previously computed columns
+                    for j in 0..k {
+                        let idx_k1 = Self::l_idx(n, k + 1, j);
+                        let idx_p2 = Self::l_idx(n, p2, j);
+                        self.l.swap(idx_k1, idx_p2);
+                    }
                 }
                 // Now if p1 != k, swap
                 if p1 != k {
                     self.swap_rows_cols(&mut a, n, k, p1);
                     self.perm.swap(k, p1);
+                    // Also swap L entries for previously computed columns
+                    for j in 0..k {
+                        let idx_k = Self::l_idx(n, k, j);
+                        let idx_p1 = Self::l_idx(n, p1, j);
+                        self.l.swap(idx_k, idx_p1);
+                    }
                 }
 
                 let akk = a[k * n + k];

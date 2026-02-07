@@ -119,6 +119,25 @@ impl SymmetricMatrix {
         }
     }
 
+    /// Compute y = A * x (symmetric matrix-vector product).
+    pub fn matvec(&self, x: &[f64], y: &mut [f64]) {
+        let n = self.n;
+        for i in 0..n {
+            y[i] = 0.0;
+        }
+        for j in 0..n {
+            // Diagonal
+            let ajj = self.data[Self::packed_index(n, j, j)];
+            y[j] += ajj * x[j];
+            // Off-diagonal (lower triangle)
+            for i in (j + 1)..n {
+                let aij = self.data[Self::packed_index(n, i, j)];
+                y[i] += aij * x[j];
+                y[j] += aij * x[i];
+            }
+        }
+    }
+
     /// Convert to full dense matrix (row-major) for debugging.
     pub fn to_full(&self) -> Vec<Vec<f64>> {
         let mut m = vec![vec![0.0; self.n]; self.n];
