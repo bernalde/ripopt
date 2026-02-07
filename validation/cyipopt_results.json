@@ -1,0 +1,159 @@
+[
+  {
+    "problem": "rosenbrock",
+    "n_vars": 2,
+    "n_constraints": 0,
+    "x_opt": [
+      0.99999999999875,
+      0.9999999999974958
+    ],
+    "obj_opt": 1.564280125981075e-24,
+    "mult_g": [],
+    "mult_x_L": [
+      1.6666666527781254e-12,
+      1.6666666527784735e-12
+    ],
+    "mult_x_U": [
+      2.499999968749219e-12,
+      2.4999999687484353e-12
+    ],
+    "n_iterations": 21,
+    "solve_time_avg_s": 0.004138858453370631,
+    "solve_time_std_s": 0.000211969725172637,
+    "n_timing_runs": 20,
+    "constraint_violation": 0.0,
+    "optimality_error": 2.0872106548294632e-14,
+    "status": 0,
+    "status_msg": "Algorithm terminated successfully at a locally optimal point, satisfying the convergence tolerances (can be specified by options)."
+  },
+  {
+    "problem": "hs071",
+    "n_vars": 4,
+    "n_constraints": 2,
+    "x_opt": [
+      0.9999999900092142,
+      4.7429996435777415,
+      3.821149978947625,
+      1.379408293215459
+    ],
+    "obj_opt": 17.014017140224134,
+    "mult_g": [
+      -0.5522936595011604,
+      0.1614685641786855
+    ],
+    "mult_x_L": [
+      1.087871210239477,
+      2.67160763024613e-12,
+      3.54491148949247e-12,
+      2.635449238165188e-11
+    ],
+    "mult_x_U": [
+      2.4999426998435727e-12,
+      3.896984124931159e-11,
+      8.482035758561869e-12,
+      2.7621630987924942e-12
+    ],
+    "n_iterations": 9,
+    "solve_time_avg_s": 0.0015718082489911468,
+    "solve_time_std_s": 8.252276082718848e-05,
+    "n_timing_runs": 20,
+    "constraint_violation": 2.499820013213139e-07,
+    "optimality_error": 2.100422789306826e-14,
+    "status": 0,
+    "status_msg": "Algorithm terminated successfully at a locally optimal point, satisfying the convergence tolerances (can be specified by options)."
+  },
+  {
+    "problem": "simple_qp",
+    "n_vars": 2,
+    "n_constraints": 1,
+    "x_opt": [
+      0.5,
+      0.5
+    ],
+    "obj_opt": 0.25,
+    "mult_g": [
+      -0.5
+    ],
+    "mult_x_L": [
+      0.0,
+      0.0
+    ],
+    "mult_x_U": [
+      0.0,
+      0.0
+    ],
+    "n_iterations": 2,
+    "solve_time_avg_s": 0.0002977062831632793,
+    "solve_time_std_s": 4.231789624313287e-05,
+    "n_timing_runs": 20,
+    "constraint_violation": 0.0,
+    "optimality_error": 0.0,
+    "status": 0,
+    "status_msg": "Algorithm terminated successfully at a locally optimal point, satisfying the convergence tolerances (can be specified by options)."
+  },
+  {
+    "problem": "hs035",
+    "n_vars": 3,
+    "n_constraints": 1,
+    "x_opt": [
+      1.3333333233461921,
+      0.7777777844355148,
+      0.4444444610866442
+    ],
+    "obj_opt": 0.11111110445444528,
+    "mult_g": [
+      0.2222222155784138
+    ],
+    "mult_x_L": [
+      7.500005925668196e-12,
+      1.285714101814659e-11,
+      2.2499998809339644e-11
+    ],
+    "mult_x_U": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "n_iterations": 8,
+    "solve_time_avg_s": 0.0012907833326607943,
+    "solve_time_std_s": 7.84583834628453e-05,
+    "n_timing_runs": 20,
+    "constraint_violation": 2.9954995373060456e-08,
+    "optimality_error": 4.1102851882045037e-16,
+    "status": 0,
+    "status_msg": "Algorithm terminated successfully at a locally optimal point, satisfying the convergence tolerances (can be specified by options)."
+  },
+  {
+    "problem": "bound_constrained_quadratic",
+    "n_vars": 4,
+    "n_constraints": 0,
+    "x_opt": [
+      1.0000000000025,
+      1.9999999999975,
+      2.999942152395929,
+      3.000000029995
+    ],
+    "obj_opt": 0.9999999433563466,
+    "mult_g": [],
+    "mult_x_L": [
+      9.999999899975001e-12,
+      4.9999999750062496e-12,
+      3.333397597338637e-12,
+      3.3333332888944453e-12
+    ],
+    "mult_x_U": [
+      4.999999925006252e-12,
+      9.999999699975011e-12,
+      0.00011569521147515676,
+      1.9999999400133337
+    ],
+    "n_iterations": 16,
+    "solve_time_avg_s": 0.0024985917611047626,
+    "solve_time_std_s": 0.00018388304762733033,
+    "n_timing_runs": 20,
+    "constraint_violation": 0.0,
+    "optimality_error": 4.9168568522217626e-17,
+    "status": 0,
+    "status_msg": "Algorithm terminated successfully at a locally optimal point, satisfying the convergence tolerances (can be specified by options)."
+  }
+]

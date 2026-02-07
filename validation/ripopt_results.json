@@ -1,0 +1,144 @@
+[
+  {
+    "problem": "Rosenbrock",
+    "n_vars": 2,
+    "n_constraints": 0,
+    "x_opt": [
+      0.9999999999400667,
+      0.9999999998789006
+    ],
+    "obj_opt": 3.743975643139474e-21,
+    "constraint_multipliers": [],
+    "bound_multipliers_z_l": [
+      0.0,
+      0.0
+    ],
+    "bound_multipliers_z_u": [
+      0.0,
+      0.0
+    ],
+    "iterations": 21,
+    "solve_time_avg_s": 0.00001259175,
+    "solve_time_std_s": 0.00001106787638110853,
+    "constraint_violation": 0.0,
+    "status": "Optimal"
+  },
+  {
+    "problem": "HS071",
+    "n_vars": 4,
+    "n_constraints": 2,
+    "x_opt": [
+      1.0000000001019942,
+      4.742999636765712,
+      3.821149984929119,
+      1.3794082929083518
+    ],
+    "obj_opt": 17.014017289197533,
+    "constraint_multipliers": [
+      -0.5522936599006267,
+      0.1614685663587164
+    ],
+    "bound_multipliers_z_l": [
+      1.0878712326148359,
+      0.0,
+      0.0,
+      2.172613700057724e-9
+    ],
+    "bound_multipliers_z_u": [
+      0.0,
+      3.336870335601816e-9,
+      8.865088663156939e-10,
+      0.0
+    ],
+    "iterations": 17,
+    "solve_time_avg_s": 0.0000171106,
+    "solve_time_std_s": 6.296371783813278e-6,
+    "constraint_violation": 4.318110313761281e-10,
+    "status": "Optimal"
+  },
+  {
+    "problem": "SimpleQP",
+    "n_vars": 2,
+    "n_constraints": 1,
+    "x_opt": [
+      0.5,
+      0.5
+    ],
+    "obj_opt": 0.25,
+    "constraint_multipliers": [
+      -0.5
+    ],
+    "bound_multipliers_z_l": [
+      0.0,
+      0.0
+    ],
+    "bound_multipliers_z_u": [
+      0.0,
+      0.0
+    ],
+    "iterations": 1,
+    "solve_time_avg_s": 1.275e-6,
+    "solve_time_std_s": 4.6311013808812265e-7,
+    "constraint_violation": 0.0,
+    "status": "Optimal"
+  },
+  {
+    "problem": "HS035",
+    "n_vars": 3,
+    "n_constraints": 1,
+    "x_opt": [
+      1.3333333287176226,
+      0.7777777800856172,
+      0.4444444455983801
+    ],
+    "obj_opt": 0.1111111111111096,
+    "constraint_multipliers": [
+      0.22222222224793642
+    ],
+    "bound_multipliers_z_l": [
+      0.0,
+      2.5650148671729767e-11,
+      0.0
+    ],
+    "bound_multipliers_z_u": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "iterations": 22,
+    "solve_time_avg_s": 0.0000356855,
+    "solve_time_std_s": 3.4055163999017836e-6,
+    "constraint_violation": 0.0,
+    "status": "Acceptable"
+  },
+  {
+    "problem": "PureBoundConstrained",
+    "n_vars": 4,
+    "n_constraints": 0,
+    "x_opt": [
+      1.0000000000735254,
+      1.9999999999264746,
+      2.9999637141269773,
+      2.999999999948312
+    ],
+    "obj_opt": 1.0000000014200405,
+    "constraint_multipliers": [],
+    "bound_multipliers_z_l": [
+      1.4705081596844138e-10,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "bound_multipliers_z_u": [
+      0.0,
+      1.4705081596844138e-10,
+      0.0000725717460454689,
+      2.000000000103376
+    ],
+    "iterations": 17,
+    "solve_time_avg_s": 0.00001059815,
+    "solve_time_std_s": 8.272280988336893e-7,
+    "constraint_violation": 0.0,
+    "status": "Optimal"
+  }
+]
