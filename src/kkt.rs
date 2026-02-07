@@ -209,8 +209,8 @@ pub fn compute_sigma(
 pub struct InertiaCorrectionParams {
     /// Initial primal regularization.
     pub delta_w_init: f64,
-    /// Initial constraint regularization.
-    pub delta_c: f64,
+    /// Base constraint regularization.
+    pub delta_c_base: f64,
     /// Growth factor for delta_w.
     pub delta_w_growth: f64,
     /// Maximum number of correction attempts.
@@ -223,7 +223,7 @@ impl Default for InertiaCorrectionParams {
     fn default() -> Self {
         Self {
             delta_w_init: 1e-4,
-            delta_c: 1e-8,
+            delta_c_base: 1e-8,
             delta_w_growth: 8.0,
             max_attempts: 10,
             delta_w_last: 0.0,
@@ -262,10 +262,11 @@ pub fn factor_with_inertia_correction(
     } else {
         (params.delta_w_last / params.delta_w_growth).max(params.delta_w_init)
     };
-    let delta_c = params.delta_c;
     let mut best_delta_w = delta_w;
 
     for attempt in 0..params.max_attempts {
+        let delta_c = params.delta_c_base;
+
         // Create perturbed matrix
         let mut perturbed = kkt.matrix.clone();
         perturbed.add_diagonal_range(0, n, delta_w);
@@ -290,18 +291,21 @@ pub fn factor_with_inertia_correction(
         delta_w *= params.delta_w_growth;
 
         log::debug!(
-            "Inertia correction attempt {}: delta_w = {:.2e}, inertia = {:?}",
+            "Inertia correction attempt {}: delta_w = {:.2e}, delta_c = {:.2e}, inertia = {:?}",
             attempt + 1,
             delta_w,
+            delta_c,
             inertia
         );
     }
 
     // Inertia correction failed — use last perturbed matrix and proceed.
     // The line search will reject bad steps, and restoration can recover.
+    let delta_c = params.delta_c_base;
+
     log::warn!(
-        "Inertia correction failed after {} attempts (delta_w={:.2e}), proceeding with approximate factorization",
-        params.max_attempts, best_delta_w
+        "Inertia correction failed after {} attempts (delta_w={:.2e}, delta_c={:.2e}), proceeding with approximate factorization",
+        params.max_attempts, best_delta_w, delta_c
     );
     let mut perturbed = kkt.matrix.clone();
     perturbed.add_diagonal_range(0, n, best_delta_w);

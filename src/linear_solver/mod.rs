@@ -152,6 +152,78 @@ impl SymmetricMatrix {
     }
 }
 
+impl SymmetricMatrix {
+    /// Compute eigenvalues using the Jacobi eigenvalue algorithm.
+    /// Only suitable for small matrices (n <= ~50).
+    /// Returns eigenvalues sorted in ascending order.
+    pub fn eigenvalues(&self) -> Vec<f64> {
+        let n = self.n;
+        if n == 0 {
+            return vec![];
+        }
+        // Work with full dense matrix
+        let mut m = self.to_full();
+
+        let max_sweeps = 100;
+        for _sweep in 0..max_sweeps {
+            // Find largest off-diagonal |m[p][q]|
+            let mut max_val = 0.0f64;
+            let mut p = 0;
+            let mut q = 1;
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    if m[i][j].abs() > max_val {
+                        max_val = m[i][j].abs();
+                        p = i;
+                        q = j;
+                    }
+                }
+            }
+
+            // Convergence check: off-diagonal is small relative to diagonal
+            let diag_max = (0..n)
+                .map(|i| m[i][i].abs())
+                .fold(1e-300, f64::max);
+            if max_val < 1e-12 * diag_max {
+                break;
+            }
+
+            // Apply Jacobi rotation to zero m[p][q]
+            let diff = m[q][q] - m[p][p];
+            let t = if diff.abs() < 1e-20 * max_val {
+                1.0
+            } else {
+                let phi = diff / (2.0 * m[p][q]);
+                phi.signum() / (phi.abs() + (1.0 + phi * phi).sqrt())
+            };
+            let c = 1.0 / (1.0 + t * t).sqrt();
+            let s = t * c;
+            let tau = s / (1.0 + c);
+
+            let apq = m[p][q];
+            m[p][q] = 0.0;
+            m[q][p] = 0.0;
+            m[p][p] -= t * apq;
+            m[q][q] += t * apq;
+
+            for r in 0..n {
+                if r != p && r != q {
+                    let rp = m[r][p];
+                    let rq = m[r][q];
+                    m[r][p] = rp - s * (rq + tau * rp);
+                    m[p][r] = m[r][p];
+                    m[r][q] = rq + s * (rp - tau * rq);
+                    m[q][r] = m[r][q];
+                }
+            }
+        }
+
+        let mut eigs: Vec<f64> = (0..n).map(|i| m[i][i]).collect();
+        eigs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        eigs
+    }
+}
+
 /// Trait for linear solvers used within the IPM.
 pub trait LinearSolver {
     /// Factor the symmetric matrix. Returns inertia if the solver can compute it.

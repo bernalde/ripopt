@@ -1,11 +1,13 @@
 use crate::convergence;
+use crate::linear_solver::dense::DenseLdl;
+use crate::linear_solver::{LinearSolver, SymmetricMatrix};
 use crate::options::SolverOptions;
 
 /// State for the restoration phase.
 ///
 /// When the filter line search fails completely, the restoration phase
 /// attempts to find a point that is acceptable to the filter by
-/// minimizing constraint violation via damped gradient descent on ||violation||^2.
+/// minimizing constraint violation using Gauss-Newton steps on ||violation||^2.
 pub struct RestorationPhase {
     /// Maximum iterations in restoration.
     max_iter: usize,
@@ -27,9 +29,10 @@ impl RestorationPhase {
 
     /// Attempt restoration: minimize constraint violation subject to bounds.
     ///
-    /// Uses iterative gradient descent on 0.5*||violation||^2 with re-evaluation
-    /// of constraints and Jacobian at each step. Includes a backtracking line
-    /// search to ensure the violation actually decreases.
+    /// Uses Gauss-Newton steps on 0.5*||violation||^2, which provides quadratic
+    /// convergence for nonlinear equality constraints (unlike gradient descent
+    /// which converges linearly). Falls back to gradient descent if the
+    /// Gauss-Newton system is singular.
     ///
     /// Returns (new_x, success) where success indicates whether a point
     /// with sufficiently small constraint violation was found.
@@ -78,31 +81,69 @@ impl RestorationPhase {
             // Evaluate Jacobian at current point
             eval_jacobian(&x_rest, &mut jac_vals);
 
-            // Compute gradient of 0.5*||violation||^2: step = -J^T * violation
-            let mut step = vec![0.0; n];
-            for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
-                let violation = if g_l[row].is_finite() && g[row] < g_l[row] {
-                    g[row] - g_l[row] // negative
-                } else if g_u[row].is_finite() && g[row] > g_u[row] {
-                    g[row] - g_u[row] // positive
-                } else if g_l[row].is_finite() && g_u[row].is_finite()
-                    && (g_l[row] - g_u[row]).abs() < 1e-15
-                {
-                    // Equality constraint: violation = g - target
-                    g[row] - g_l[row]
-                } else {
-                    0.0
-                };
-                step[col] -= jac_vals[idx] * violation;
+            // Compute violation vector for each constraint
+            let mut violation = vec![0.0; m];
+            let mut active = vec![false; m];
+            for i in 0..m {
+                let is_equality = g_l[i].is_finite()
+                    && g_u[i].is_finite()
+                    && (g_l[i] - g_u[i]).abs() < 1e-15;
+                if is_equality {
+                    violation[i] = g[i] - g_l[i];
+                    active[i] = true;
+                } else if g_l[i].is_finite() && g[i] < g_l[i] {
+                    violation[i] = g[i] - g_l[i];
+                    active[i] = true;
+                } else if g_u[i].is_finite() && g[i] > g_u[i] {
+                    violation[i] = g[i] - g_u[i];
+                    active[i] = true;
+                }
             }
+
+            // Collect active constraint indices
+            let active_indices: Vec<usize> = (0..m).filter(|&i| active[i]).collect();
+            let m_active = active_indices.len();
+
+            if m_active == 0 {
+                break;
+            }
+
+            // Try Gauss-Newton step: dx = -J_a^T * (J_a * J_a^T + eps*I)^{-1} * v_a
+            let step = self.gauss_newton_step(
+                &jac_rows,
+                &jac_cols,
+                &jac_vals,
+                &violation,
+                &active_indices,
+                n,
+            );
+
+            let step = match step {
+                Some(s) => s,
+                None => {
+                    // Fall back to gradient descent: step = -J^T * violation
+                    let mut grad_step = vec![0.0; n];
+                    for (idx, (&row, &col)) in
+                        jac_rows.iter().zip(jac_cols.iter()).enumerate()
+                    {
+                        if active[row] {
+                            grad_step[col] -= jac_vals[idx] * violation[row];
+                        }
+                    }
+                    grad_step
+                }
+            };
 
             // Normalize step if too large
             let step_norm: f64 = step.iter().map(|s| s * s).sum::<f64>().sqrt();
             if step_norm < 1e-20 {
-                // Zero gradient: can't make progress
                 break;
             }
-            let scale = if step_norm > 10.0 { 10.0 / step_norm } else { 1.0 };
+            let scale = if step_norm > 10.0 {
+                10.0 / step_norm
+            } else {
+                1.0
+            };
 
             // Backtracking line search on theta
             let mut alpha = scale;
@@ -110,7 +151,7 @@ impl RestorationPhase {
             let mut g_trial = vec![0.0; m];
             let mut found_decrease = false;
 
-            for _ls in 0..20 {
+            for _ls in 0..30 {
                 for i in 0..n {
                     x_trial[i] = x_rest[i] + alpha * step[i];
                     if x_l[i].is_finite() {
@@ -125,7 +166,6 @@ impl RestorationPhase {
                 let theta_trial = convergence::primal_infeasibility(&g_trial, g_l, g_u);
 
                 if theta_trial < (1.0 - 1e-4 * alpha) * theta {
-                    // Sufficient decrease
                     x_rest.copy_from_slice(&x_trial);
                     found_decrease = true;
                     break;
@@ -135,8 +175,55 @@ impl RestorationPhase {
             }
 
             if !found_decrease {
-                // Line search failed: can't reduce theta further
-                break;
+                // Gauss-Newton line search failed — try gradient descent as fallback
+                // step_gd = -J_a^T * violation_a (steepest descent on 0.5*||violation||^2)
+                let mut grad_step = vec![0.0; n];
+                for (idx, (&row, &col)) in
+                    jac_rows.iter().zip(jac_cols.iter()).enumerate()
+                {
+                    if active[row] {
+                        grad_step[col] -= jac_vals[idx] * violation[row];
+                    }
+                }
+
+                let gd_norm: f64 = grad_step.iter().map(|s| s * s).sum::<f64>().sqrt();
+                if gd_norm < 1e-20 {
+                    break;
+                }
+                let gd_scale = if gd_norm > 10.0 {
+                    10.0 / gd_norm
+                } else {
+                    1.0
+                };
+
+                let mut gd_alpha = gd_scale;
+                let mut gd_found = false;
+                for _ls in 0..30 {
+                    for i in 0..n {
+                        x_trial[i] = x_rest[i] + gd_alpha * grad_step[i];
+                        if x_l[i].is_finite() {
+                            x_trial[i] = x_trial[i].max(x_l[i] + 1e-8);
+                        }
+                        if x_u[i].is_finite() {
+                            x_trial[i] = x_trial[i].min(x_u[i] - 1e-8);
+                        }
+                    }
+
+                    eval_constraints(&x_trial, &mut g_trial);
+                    let theta_trial = convergence::primal_infeasibility(&g_trial, g_l, g_u);
+
+                    if theta_trial < (1.0 - 1e-4 * gd_alpha) * theta {
+                        x_rest.copy_from_slice(&x_trial);
+                        gd_found = true;
+                        break;
+                    }
+
+                    gd_alpha *= 0.5;
+                }
+
+                if !gd_found {
+                    break;
+                }
             }
         }
 
@@ -150,10 +237,87 @@ impl RestorationPhase {
         } else {
             // Return the improved point even if not fully feasible,
             // as long as it's different from the input
-            let moved: f64 = x_rest.iter().zip(x.iter())
+            let moved: f64 = x_rest
+                .iter()
+                .zip(x.iter())
                 .map(|(a, b)| (a - b).abs())
                 .fold(0.0f64, f64::max);
             (x_rest, moved > 1e-14)
         }
+    }
+
+    /// Compute Gauss-Newton step: dx = -J_a^T * (J_a * J_a^T + eps*I)^{-1} * v_a
+    ///
+    /// where J_a is the Jacobian restricted to active (violated) constraints
+    /// and v_a is the violation vector for active constraints.
+    fn gauss_newton_step(
+        &self,
+        jac_rows: &[usize],
+        jac_cols: &[usize],
+        jac_vals: &[f64],
+        violation: &[f64],
+        active_indices: &[usize],
+        n: usize,
+    ) -> Option<Vec<f64>> {
+        let m_active = active_indices.len();
+        if m_active == 0 {
+            return None;
+        }
+
+        // Map from original constraint index to active index
+        let mut active_map = vec![usize::MAX; violation.len()];
+        for (ai, &orig) in active_indices.iter().enumerate() {
+            active_map[orig] = ai;
+        }
+
+        // Form J_a * J_a^T (m_active x m_active)
+        // Group Jacobian entries by column for efficient J*J^T computation
+        let mut col_entries: Vec<Vec<(usize, f64)>> = vec![vec![]; n];
+        for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
+            if active_map[row] != usize::MAX {
+                col_entries[col].push((active_map[row], jac_vals[idx]));
+            }
+        }
+
+        let mut jjt = SymmetricMatrix::zeros(m_active);
+        for col_ents in &col_entries {
+            for &(ai, val_i) in col_ents {
+                for &(aj, val_j) in col_ents {
+                    if ai >= aj {
+                        jjt.add(ai, aj, val_i * val_j);
+                    }
+                }
+            }
+        }
+
+        // Add Levenberg-Marquardt regularization for numerical stability
+        let jjt_diag_max = (0..m_active)
+            .map(|i| jjt.get(i, i).abs())
+            .fold(0.0f64, f64::max);
+        let eps = 1e-8 * jjt_diag_max.max(1.0);
+        jjt.add_diagonal(eps);
+
+        // Solve (J_a * J_a^T + eps*I) * w = violation_a
+        let mut solver = DenseLdl::new();
+        if solver.factor(&jjt).is_err() {
+            return None;
+        }
+
+        let v_active: Vec<f64> = active_indices.iter().map(|&i| violation[i]).collect();
+        let mut w = vec![0.0; m_active];
+        if solver.solve(&v_active, &mut w).is_err() {
+            return None;
+        }
+
+        // step = -J_a^T * w
+        let mut step = vec![0.0; n];
+        for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
+            let ai = active_map[row];
+            if ai != usize::MAX {
+                step[col] -= jac_vals[idx] * w[ai];
+            }
+        }
+
+        Some(step)
     }
 }
