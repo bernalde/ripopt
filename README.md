@@ -24,7 +24,7 @@ It implements a primal-dual interior point method with a barrier formulation, si
 - Fraction-to-boundary rule for primal and dual step sizes
 - Support for equality constraints, inequality constraints, and variable bounds
 - Warm-start initialization
-- Simplified restoration phase (gradient projection)
+- Gauss-Newton restoration phase with Levenberg-Marquardt regularization
 
 ## Usage
 
@@ -151,17 +151,17 @@ cargo test
 
 ## Validation Against Ipopt (cyipopt)
 
-The `validation/` directory contains scripts that compare ripopt against cyipopt (Python wrapper for Ipopt with MUMPS). All 5 test problems match within tolerance:
+Validated against the **120-problem Hock-Schittkowski test suite**, comparing ripopt with cyipopt (Python wrapper for Ipopt with MUMPS):
 
-| Problem | ripopt obj | cyipopt obj | Difference |
-|---------|-----------|-------------|------------|
-| Rosenbrock | 3.74e-21 | 1.56e-24 | 3.74e-21 |
-| HS071 | 1.701e+01 | 1.701e+01 | 1.49e-07 |
-| SimpleQP | 2.500e-01 | 2.500e-01 | 0.00e+00 |
-| HS035 | 1.111e-01 | 1.111e-01 | 6.66e-09 |
-| PureBoundConstrained | 1.000e+00 | 1.000e+00 | 5.81e-08 |
+| Metric | ripopt | cyipopt |
+|--------|--------|---------|
+| Problems solved | **119/120 (99.2%)** | 118/120 (98.3%) |
+| Matching solutions (rel diff < 1e-4) | 107/117 | — |
+| Mean iterations (where both solve) | 14.5 | 14.5 |
 
-See `validation/VALIDATION_REPORT.md` for full details including multiplier comparisons and timing.
+ripopt solves one more problem than cyipopt (TP116, TP223) while failing only on TP374 (trigonometric Chebyshev problem with no variable bounds).
+
+See `hs_suite/HS_VALIDATION_REPORT.md` for the full comparison report.
 
 ## Architecture
 
@@ -178,7 +178,7 @@ src/
   linear_solver/
     mod.rs            LinearSolver trait, SymmetricMatrix
     dense.rs          Dense LDL^T (Bunch-Kaufman) factorization
-  restoration.rs      Simplified restoration phase (gradient projection)
+  restoration.rs      Gauss-Newton restoration phase
   warmstart.rs        Warm-start initialization
 
 tests/
@@ -196,28 +196,26 @@ validation/
 
 ## Implementation Status
 
-**Version: 0.1.0 (early development)**
+**Version: 0.1.0**
 
 ### What works
 
 - Unconstrained, equality-constrained, inequality-constrained, and bound-constrained NLP
-- Matches Ipopt solutions within 1e-4 on all tested problems
+- **119/120 Hock-Schittkowski problems solved** (99.2%), surpassing cyipopt (118/120)
+- Iterative refinement for KKT solves
+- Gauss-Newton restoration phase with gradient descent fallback
 - Dense problems up to a few hundred variables
 
 ### Known limitations
 
 - **Dense linear solver only** -- no sparse support, which limits practical problem size
-- **Simplified restoration phase** -- uses gradient projection, not Ipopt's full feasibility restoration NLP
 - **No NLP scaling** -- gradient-based or user-provided scaling not implemented
-- **No iterative refinement** for KKT solves
 - **No quasi-Newton** (L-BFGS) Hessian approximation -- user must supply exact Hessians
 
 ### Not yet implemented (present in Ipopt)
 
 - Sparse linear solvers (MA27, MA57, MUMPS, Pardiso)
 - NLP scaling
-- Iterative refinement for KKT solves
-- Full restoration phase (feasibility restoration NLP)
 - Mehrotra predictor-corrector
 - Quasi-Newton Hessian approximation (L-BFGS)
 
