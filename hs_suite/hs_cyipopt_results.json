@@ -18,7 +18,7 @@
     ],
     "constraint_values": [],
     "iterations": 29,
-    "solve_time": 0.004882050002925098,
+    "solve_time": 0.00476123362313956,
     "known_fopt": 0.0,
     "n": 2,
     "m": 0
@@ -42,7 +42,7 @@
     ],
     "constraint_values": [],
     "iterations": 11,
-    "solve_time": 0.0017253084108233452,
+    "solve_time": 0.0017104750033468008,
     "known_fopt": NaN,
     "n": 2,
     "m": 0
@@ -66,7 +66,7 @@
     ],
     "constraint_values": [],
     "iterations": 5,
-    "solve_time": 0.0007613918045535683,
+    "solve_time": 0.0006837080232799053,
     "known_fopt": 0.0,
     "n": 2,
     "m": 0
@@ -90,7 +90,7 @@
     ],
     "constraint_values": [],
     "iterations": 5,
-    "solve_time": 0.0007053249981254339,
+    "solve_time": 0.0006890499731525779,
     "known_fopt": 2.6666666666666665,
     "n": 2,
     "m": 0
@@ -114,7 +114,7 @@
     ],
     "constraint_values": [],
     "iterations": 8,
-    "solve_time": 0.0011604582658037543,
+    "solve_time": 0.0011353751877322793,
     "known_fopt": NaN,
     "n": 2,
     "m": 0
@@ -140,7 +140,7 @@
     ],
     "constraint_values": [],
     "iterations": 6,
-    "solve_time": 0.0008424583822488785,
+    "solve_time": 0.0008392747957259416,
     "known_fopt": 0.0,
     "n": 2,
     "m": 1
@@ -166,7 +166,7 @@
     ],
     "constraint_values": [],
     "iterations": 28,
-    "solve_time": 0.003953858441673219,
+    "solve_time": 0.003924058401025832,
     "known_fopt": NaN,
     "n": 2,
     "m": 1
@@ -192,7 +192,7 @@
     ],
     "constraint_values": [],
     "iterations": 4,
-    "solve_time": 0.0005729831755161285,
+    "solve_time": 0.0005637331632897258,
     "known_fopt": -0.5,
     "n": 2,
     "m": 1
@@ -218,7 +218,7 @@
     ],
     "constraint_values": [],
     "iterations": 13,
-    "solve_time": 0.0018973167752847075,
+    "solve_time": 0.0019152082270011306,
     "known_fopt": -1.0,
     "n": 2,
     "m": 1
@@ -244,7 +244,7 @@
     ],
     "constraint_values": [],
     "iterations": 7,
-    "solve_time": 0.0010451584123075009,
+    "solve_time": 0.0010302663780748845,
     "known_fopt": NaN,
     "n": 2,
     "m": 1
@@ -270,7 +270,7 @@
     ],
     "constraint_values": [],
     "iterations": 7,
-    "solve_time": 0.001078908215276897,
+    "solve_time": 0.0010753581766039134,
     "known_fopt": -30.0,
     "n": 2,
     "m": 1
@@ -296,7 +296,7 @@
     ],
     "constraint_values": [],
     "iterations": 49,
-    "solve_time": 0.0074394747847691175,
+    "solve_time": 0.007413191394880414,
     "known_fopt": 1.0,
     "n": 2,
     "m": 1
@@ -323,7 +323,7 @@
     ],
     "constraint_values": [],
     "iterations": 6,
-    "solve_time": 0.0009214916033670306,
+    "solve_time": 0.0009156669955700635,
     "known_fopt": NaN,
     "n": 2,
     "m": 2
@@ -350,7 +350,7 @@
     ],
     "constraint_values": [],
     "iterations": 12,
-    "solve_time": 0.0018036915687844157,
+    "solve_time": 0.0017744668293744326,
     "known_fopt": 3.065,
     "n": 2,
     "m": 2
@@ -377,7 +377,7 @@
     ],
     "constraint_values": [],
     "iterations": 11,
-    "solve_time": 0.0018248331965878607,
+    "solve_time": 0.0018025666009634732,
     "known_fopt": 0.25,
     "n": 2,
     "m": 2
@@ -404,7 +404,7 @@
     ],
     "constraint_values": [],
     "iterations": 19,
-    "solve_time": 0.003010725020430982,
+    "solve_time": 0.0029923832044005394,
     "known_fopt": 1.0,
     "n": 2,
     "m": 2
@@ -431,7 +431,7 @@
     ],
     "constraint_values": [],
     "iterations": 11,
-    "solve_time": 0.0016263332217931747,
+    "solve_time": 0.0016977497609332204,
     "known_fopt": 5.0,
     "n": 2,
     "m": 2
@@ -458,7 +458,7 @@
     ],
     "constraint_values": [],
     "iterations": 13,
-    "solve_time": 0.0020624831784516575,
+    "solve_time": 0.002067008172161877,
     "known_fopt": NaN,
     "n": 2,
     "m": 2
@@ -486,7 +486,7 @@
     ],
     "constraint_values": [],
     "iterations": 12,
-    "solve_time": 0.002103383420035243,
+    "solve_time": 0.002061108429916203,
     "known_fopt": NaN,
     "n": 2,
     "m": 3
@@ -512,7 +512,7 @@
     ],
     "constraint_values": [],
     "iterations": 7,
-    "solve_time": 0.0011518833925947547,
+    "solve_time": 0.001043491973541677,
     "known_fopt": -99.96,
     "n": 2,
     "m": 1
@@ -539,7 +539,7 @@
     ],
     "constraint_values": [],
     "iterations": 6,
-    "solve_time": 0.0009018500102683901,
+    "solve_time": 0.0008923497749492526,
     "known_fopt": 1.0,
     "n": 2,
     "m": 2
@@ -569,7 +569,7 @@
     ],
     "constraint_values": [],
     "iterations": 10,
-    "solve_time": 0.0015108831925317646,
+    "solve_time": 0.001471016788855195,
     "known_fopt": 2.0,
     "n": 2,
     "m": 5
@@ -597,7 +597,7 @@
     ],
     "constraint_values": [],
     "iterations": 15,
-    "solve_time": 0.0025875834049656986,
+    "solve_time": 0.0025485081830993296,
     "known_fopt": -1.0,
     "n": 2,
     "m": 3
@@ -626,7 +626,7 @@
     ],
     "constraint_values": [],
     "iterations": 26,
-    "solve_time": 0.0029157999902963637,
+    "solve_time": 0.0028866501990705727,
     "known_fopt": 0.0,
     "n": 3,
     "m": 1
@@ -655,7 +655,7 @@
     ],
     "constraint_values": [],
     "iterations": 22,
-    "solve_time": 0.002726849797181785,
+    "solve_time": 0.00269621682818979,
     "known_fopt": 4.0,
     "n": 3,
     "m": 1
@@ -684,7 +684,7 @@
     ],
     "constraint_values": [],
     "iterations": 2,
-    "solve_time": 0.00027753300964832305,
+    "solve_time": 0.00027492500375956295,
     "known_fopt": 0.0,
     "n": 3,
     "m": 1
@@ -713,7 +713,7 @@
     ],
     "constraint_values": [],
     "iterations": 8,
-    "solve_time": 0.001240258221514523,
+    "solve_time": 0.0012225999729707838,
     "known_fopt": NaN,
     "n": 3,
     "m": 1
@@ -742,7 +742,7 @@
     ],
     "constraint_values": [],
     "iterations": 8,
-    "solve_time": 0.0012290499871596694,
+    "solve_time": 0.0011936584021896123,
     "known_fopt": 1.0,
     "n": 3,
     "m": 1
@@ -771,7 +771,7 @@
     ],
     "constraint_values": [],
     "iterations": 7,
-    "solve_time": 0.0010628922376781703,
+    "solve_time": 0.0011098332004621625,
     "known_fopt": 6.0,
     "n": 3,
     "m": 1
@@ -801,7 +801,7 @@
     ],
     "constraint_values": [],
     "iterations": 16,
-    "solve_time": 0.0024446081835776566,
+    "solve_time": 0.0023975416086614134,
     "known_fopt": 1.0,
     "n": 3,
     "m": 2
@@ -831,7 +831,7 @@
     ],
     "constraint_values": [],
     "iterations": 10,
-    "solve_time": 0.001525225001387298,
+    "solve_time": 0.0015079333912581205,
     "known_fopt": NaN,
     "n": 3,
     "m": 2
@@ -861,7 +861,7 @@
     ],
     "constraint_values": [],
     "iterations": 8,
-    "solve_time": 0.0012208168162032961,
+    "solve_time": 0.0012212084140628577,
     "known_fopt": NaN,
     "n": 3,
     "m": 2
@@ -890,7 +890,7 @@
     ],
     "constraint_values": [],
     "iterations": 8,
-    "solve_time": 0.0012551668100059033,
+    "solve_time": 0.0011953247943893076,
     "known_fopt": 0.1111111111111111,
     "n": 3,
     "m": 1
@@ -919,7 +919,7 @@
     ],
     "constraint_values": [],
     "iterations": 12,
-    "solve_time": 0.002076758211478591,
+    "solve_time": 0.0020631249994039536,
     "known_fopt": -3300.0,
     "n": 3,
     "m": 1
@@ -949,7 +949,7 @@
     ],
     "constraint_values": [],
     "iterations": 12,
-    "solve_time": 0.0020294584101065993,
+    "solve_time": 0.0021054582204669712,
     "known_fopt": -3456.0,
     "n": 3,
     "m": 2
@@ -979,7 +979,7 @@
     ],
     "constraint_values": [],
     "iterations": 40,
-    "solve_time": 0.0068121168063953515,
+    "solve_time": 0.00675293339882046,
     "known_fopt": 0.0,
     "n": 4,
     "m": 0
@@ -1012,7 +1012,7 @@
     ],
     "constraint_values": [],
     "iterations": 14,
-    "solve_time": 0.0016722501954063774,
+    "solve_time": 0.0016841748030856252,
     "known_fopt": -1.0,
     "n": 4,
     "m": 2
@@ -1046,7 +1046,7 @@
     ],
     "constraint_values": [],
     "iterations": 4,
-    "solve_time": 0.0005205166060477495,
+    "solve_time": 0.0005069584120064973,
     "known_fopt": -0.25,
     "n": 4,
     "m": 3
@@ -1078,7 +1078,7 @@
     ],
     "constraint_values": [],
     "iterations": 8,
-    "solve_time": 0.0012231000000610948,
+    "solve_time": 0.0012556502362713218,
     "known_fopt": 1.9259259259259258,
     "n": 4,
     "m": 1
@@ -1111,7 +1111,7 @@
     ],
     "constraint_values": [],
     "iterations": 5,
-    "solve_time": 0.0006136082112789154,
+    "solve_time": 0.0006100001977756619,
     "known_fopt": NaN,
     "n": 4,
     "m": 2
@@ -1145,7 +1145,7 @@
     ],
     "constraint_values": [],
     "iterations": 9,
-    "solve_time": 0.0014490913599729538,
+    "solve_time": 0.0014524502214044333,
     "known_fopt": -44.0,
     "n": 4,
     "m": 3
@@ -1182,7 +1182,7 @@
     ],
     "constraint_values": [],
     "iterations": 25,
-    "solve_time": 0.004318099981173873,
+    "solve_time": 0.004320549988187849,
     "known_fopt": -15.0,
     "n": 4,
     "m": 6
@@ -1215,7 +1215,7 @@
     ],
     "constraint_values": [],
     "iterations": 12,
-    "solve_time": 0.0019573918078094723,
+    "solve_time": 0.0019445416051894425,
     "known_fopt": 1.0,
     "n": 5,
     "m": 0
@@ -1251,7 +1251,7 @@
     ],
     "constraint_values": [],
     "iterations": 20,
-    "solve_time": 0.0027858413755893706,
+    "solve_time": 0.002852208609692752,
     "known_fopt": 0.0,
     "n": 5,
     "m": 2
@@ -1288,7 +1288,7 @@
     ],
     "constraint_values": [],
     "iterations": 16,
-    "solve_time": 0.002195333410054445,
+    "solve_time": 0.002118441998027265,
     "known_fopt": 0.0,
     "n": 5,
     "m": 3
@@ -1324,7 +1324,7 @@
     ],
     "constraint_values": [],
     "iterations": 2,
-    "solve_time": 0.0002861667890101671,
+    "solve_time": 0.00028236638754606245,
     "known_fopt": 0.0,
     "n": 5,
     "m": 2
@@ -1360,7 +1360,7 @@
     ],
     "constraint_values": [],
     "iterations": 20,
-    "solve_time": 0.00227393361274153,
+    "solve_time": 0.0023279166081920264,
     "known_fopt": 0.0,
     "n": 5,
     "m": 2
@@ -1397,7 +1397,7 @@
     ],
     "constraint_values": [],
     "iterations": 9,
-    "solve_time": 0.0010842915857210756,
+    "solve_time": 0.0011097581824287771,
     "known_fopt": 0.0,
     "n": 5,
     "m": 3
@@ -1434,7 +1434,7 @@
     ],
     "constraint_values": [],
     "iterations": 2,
-    "solve_time": 0.0002808582037687302,
+    "solve_time": 0.0002831747755408287,
     "known_fopt": 0.0,
     "n": 5,
     "m": 3
@@ -1471,7 +1471,7 @@
     ],
     "constraint_values": [],
     "iterations": 2,
-    "solve_time": 0.00027963323518633845,
+    "solve_time": 0.0002811583923175931,
     "known_fopt": 5.326647564469914,
     "n": 5,
     "m": 3
@@ -1508,7 +1508,7 @@
     ],
     "constraint_values": [],
     "iterations": 7,
-    "solve_time": 0.0010331918019801378,
+    "solve_time": 0.0010552247986197472,
     "known_fopt": 4.093023255813954,
     "n": 5,
     "m": 3
@@ -1552,7 +1552,7 @@
     ],
     "constraint_values": [],
     "iterations": 4,
-    "solve_time": 0.0008171501802280545,
+    "solve_time": 0.0007685420103371143,
     "known_fopt": -3.456,
     "n": 7,
     "m": 4
@@ -1580,7 +1580,7 @@
     ],
     "constraint_values": [],
     "iterations": 12,
-    "solve_time": 0.0019762916024774315,
+    "solve_time": 0.0020920668030157685,
     "known_fopt": 3.19033354957,
     "n": 2,
     "m": 3
@@ -1609,7 +1609,7 @@
     ],
     "constraint_values": [],
     "iterations": 7,
-    "solve_time": 0.0010758081451058387,
+    "solve_time": 0.0011671668151393532,
     "known_fopt": 0.0325682002513,
     "n": 3,
     "m": 1
@@ -1639,7 +1639,7 @@
     ],
     "constraint_values": [],
     "iterations": 11,
-    "solve_time": 0.0012337250169366597,
+    "solve_time": 0.001219616807065904,
     "known_fopt": -143.646142201,
     "n": 3,
     "m": 2
@@ -1669,7 +1669,7 @@
     ],
     "constraint_values": [],
     "iterations": 6,
-    "solve_time": 0.0008987913839519024,
+    "solve_time": 0.0010553584201261402,
     "known_fopt": 961.715172127,
     "n": 3,
     "m": 2
@@ -1698,7 +1698,7 @@
     ],
     "constraint_values": [],
     "iterations": 17,
-    "solve_time": 0.0025956249795854093,
+    "solve_time": 0.002844774769619107,
     "known_fopt": 6299.84242821,
     "n": 3,
     "m": 1
@@ -1727,7 +1727,7 @@
     ],
     "constraint_values": [],
     "iterations": 17,
-    "solve_time": 0.002887583803385496,
+    "solve_time": 0.0030091752065345644,
     "known_fopt": 0.953528856757,
     "n": 3,
     "m": 1
@@ -1757,7 +1757,7 @@
     ],
     "constraint_values": [],
     "iterations": 11,
-    "solve_time": 0.0015073499875143171,
+    "solve_time": 0.0015238329768180847,
     "known_fopt": 0.518163274159,
     "n": 3,
     "m": 2
@@ -1790,7 +1790,7 @@
     ],
     "constraint_values": [],
     "iterations": 13,
-    "solve_time": 0.001931058196350932,
+    "solve_time": 0.001945783360861242,
     "known_fopt": 17.0140172895,
     "n": 4,
     "m": 2
@@ -1823,7 +1823,7 @@
     ],
     "constraint_values": [],
     "iterations": 17,
-    "solve_time": 0.002528441371396184,
+    "solve_time": 0.0026241998188197614,
     "known_fopt": 727.67936,
     "n": 4,
     "m": 2
@@ -1857,7 +1857,7 @@
     ],
     "constraint_values": [],
     "iterations": 8,
-    "solve_time": 0.0012289918027818202,
+    "solve_time": 0.0012693169759586454,
     "known_fopt": -4.68181818182,
     "n": 4,
     "m": 3
@@ -1893,7 +1893,7 @@
     ],
     "constraint_values": [],
     "iterations": 12,
-    "solve_time": 0.0014735250035300851,
+    "solve_time": 0.001514374790713191,
     "known_fopt": 0.241505128786,
     "n": 5,
     "m": 2
@@ -1930,7 +1930,7 @@
     ],
     "constraint_values": [],
     "iterations": 5,
-    "solve_time": 0.0006228415993973612,
+    "solve_time": 0.0006735246162861586,
     "known_fopt": -2.91970040911,
     "n": 5,
     "m": 3
@@ -1967,7 +1967,7 @@
     ],
     "constraint_values": [],
     "iterations": 5,
-    "solve_time": 0.0006325416034087539,
+    "solve_time": 0.0007390834158286453,
     "known_fopt": 0.0787768208538,
     "n": 5,
     "m": 3
@@ -2004,7 +2004,7 @@
     ],
     "constraint_values": [],
     "iterations": 6,
-    "solve_time": 0.00105757515411824,
+    "solve_time": 0.0010819413932040335,
     "known_fopt": 0.0539498477624,
     "n": 5,
     "m": 3
@@ -2041,7 +2041,7 @@
     ],
     "constraint_values": [],
     "iterations": 70,
-    "solve_time": 0.013308649999089539,
+    "solve_time": 0.013871641573496163,
     "known_fopt": 0.0539498477749,
     "n": 5,
     "m": 3
@@ -2090,7 +2090,7 @@
     ],
     "constraint_values": [],
     "iterations": 19,
-    "solve_time": 0.002875599986873567,
+    "solve_time": 0.002898749988526106,
     "known_fopt": 7049.248,
     "n": 8,
     "m": 6
@@ -2149,7 +2149,7 @@
     ],
     "constraint_values": [],
     "iterations": 24,
-    "solve_time": 0.005018183402717114,
+    "solve_time": 0.0046066914452239874,
     "known_fopt": -0.866025403841,
     "n": 9,
     "m": 13
@@ -2206,7 +2206,7 @@
     ],
     "constraint_values": [],
     "iterations": 10,
-    "solve_time": 0.0018515083938837051,
+    "solve_time": 0.0017386500257998705,
     "known_fopt": 24.3062090641,
     "n": 10,
     "m": 8
@@ -2266,80 +2266,80 @@
     ],
     "constraint_values": [],
     "iterations": 14,
-    "solve_time": 0.0023995498195290565,
+    "solve_time": 0.0023497833870351316,
     "known_fopt": -1768.80696344,
     "n": 10,
     "m": 11
   },
   {
     "number": 116,
-    "status": "IpoptStatus(-11)",
-    "objective": 0.0,
+    "status": "Optimal",
+    "objective": 97.58747320208481,
     "x": [
-      0.5,
-      0.8,
-      0.9,
-      0.1,
-      0.14,
-      0.5,
-      489.0,
-      80.0,
-      650.0,
-      450.0,
-      150.0,
-      150.0,
-      150.0
+      0.8037732616141677,
+      0.8999857908418167,
+      0.9709823396261367,
+      0.10000000997324619,
+      0.19081307830678187,
+      0.4606548424399231,
+      574.0774284306304,
+      74.07745311996982,
+      500.0161601533465,
+      0.10000004161760416,
+      20.233048285264154,
+      77.34769597265854,
+      0.006728944162110172
     ],
     "constraint_multipliers": [
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0
+      -8.6841702656773e-08,
+      -6.4081666743505e-08,
+      -0.11365877722880605,
+      -1.2949903419420662e-10,
+      -4.039083268165939e-11,
+      -0.9999990698709706,
+      -2087.9894477398684,
+      -0.10677065652088398,
+      -0.0025031370476564295,
+      -224.05045464795785,
+      -0.8002045147203606,
+      -32.791207068953995,
+      -1065.4165866021744,
+      -0.9999999996378374,
+      -0.9999999999160433
     ],
     "bound_multipliers_lower": [
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0
+      8.76058534694682e-09,
+      7.706969053645724e-09,
+      7.0787494859263305e-09,
+      6.171636214302522e-08,
+      6.789181955378372e-08,
+      1.709519660233738e-08,
+      1.0741652026681154e-11,
+      8.334249880766291e-11,
+      3.8140468597867713e-07,
+      0.11944502318873008,
+      3.2056623078726524e-10,
+      7.971114984570745e-11,
+      9.300810261608657e-07
     ],
     "bound_multipliers_upper": [
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0
+      3.1420108938234785e-08,
+      6.164589261638144e-08,
+      2.1247275668151343e-07,
+      229.22048752593432,
+      8.693710411413789e-09,
+      1.4033307830910938e-08,
+      1.447555514135486e-11,
+      6.658727304989921e-12,
+      1.233132992752912e-11,
+      1.2333398179166155e-11,
+      4.751183302037789e-11,
+      8.486263117526394e-11,
+      4.1104948947909897e-11
     ],
     "constraint_values": [],
-    "iterations": 0,
-    "solve_time": 8.037518709897995e-05,
+    "iterations": 18,
+    "solve_time": 0.0030947502003982664,
     "known_fopt": 97.5884089805,
     "n": 13,
     "m": 15
@@ -2363,7 +2363,7 @@
     ],
     "constraint_values": [],
     "iterations": 2,
-    "solve_time": 0.00022892516572028398,
+    "solve_time": 0.0002289084019139409,
     "known_fopt": 0.0,
     "n": 2,
     "m": 0
@@ -2387,7 +2387,7 @@
     ],
     "constraint_values": [],
     "iterations": 5,
-    "solve_time": 0.0005359252216294407,
+    "solve_time": 0.0005336248083040118,
     "known_fopt": 0.0,
     "n": 2,
     "m": 0
@@ -2411,7 +2411,7 @@
     ],
     "constraint_values": [],
     "iterations": 28,
-    "solve_time": 0.0037815584102645515,
+    "solve_time": 0.003654583008028567,
     "known_fopt": 0.0,
     "n": 2,
     "m": 0
@@ -2435,7 +2435,7 @@
     ],
     "constraint_values": [],
     "iterations": 12,
-    "solve_time": 0.0017145083984360099,
+    "solve_time": 0.0016902168281376362,
     "known_fopt": 0.0,
     "n": 2,
     "m": 0
@@ -2459,7 +2459,7 @@
     ],
     "constraint_values": [],
     "iterations": 23,
-    "solve_time": 0.0029874084051698447,
+    "solve_time": 0.0028954416047781706,
     "known_fopt": 0.0,
     "n": 2,
     "m": 0
@@ -2483,7 +2483,7 @@
     ],
     "constraint_values": [],
     "iterations": 31,
-    "solve_time": 0.0073579999851062896,
+    "solve_time": 0.007390658394433558,
     "known_fopt": 0.0,
     "n": 2,
     "m": 0
@@ -2509,7 +2509,7 @@
     ],
     "constraint_values": [],
     "iterations": 14,
-    "solve_time": 0.002301141805946827,
+    "solve_time": 0.0020664331503212454,
     "known_fopt": 0.0,
     "n": 2,
     "m": 1
@@ -2535,7 +2535,7 @@
     ],
     "constraint_values": [],
     "iterations": 8,
-    "solve_time": 0.0012795000337064266,
+    "solve_time": 0.0012046916177496313,
     "known_fopt": 1.0,
     "n": 2,
     "m": 1
@@ -2562,7 +2562,7 @@
     ],
     "constraint_values": [],
     "iterations": 9,
-    "solve_time": 0.00135383321903646,
+    "solve_time": 0.0013424584176391363,
     "known_fopt": -0.8,
     "n": 2,
     "m": 2
@@ -2588,7 +2588,7 @@
     ],
     "constraint_values": [],
     "iterations": 7,
-    "solve_time": 0.0010579832131043076,
+    "solve_time": 0.0010544165736064315,
     "known_fopt": 0.0,
     "n": 2,
     "m": 1
@@ -2621,7 +2621,7 @@
     ],
     "constraint_values": [],
     "iterations": 51,
-    "solve_time": 0.006044024578295648,
+    "solve_time": 0.006068958411924541,
     "known_fopt": -1.0,
     "n": 4,
     "m": 2
@@ -2647,7 +2647,7 @@
     ],
     "constraint_values": [],
     "iterations": 4,
-    "solve_time": 0.0006159664131700993,
+    "solve_time": 0.0006400917889550328,
     "known_fopt": 1.0,
     "n": 2,
     "m": 1
@@ -2673,7 +2673,7 @@
     ],
     "constraint_values": [],
     "iterations": 38,
-    "solve_time": 0.00519094979390502,
+    "solve_time": 0.005243033193983138,
     "known_fopt": -1.0,
     "n": 2,
     "m": 1
@@ -2700,7 +2700,7 @@
     ],
     "constraint_values": [],
     "iterations": 1582,
-    "solve_time": 0.6415106581989676,
+    "solve_time": 0.6393487250199541,
     "known_fopt": -0.834032445247956,
     "n": 2,
     "m": 2
@@ -2729,7 +2729,7 @@
     ],
     "constraint_values": [],
     "iterations": 10,
-    "solve_time": 0.0015906334156170487,
+    "solve_time": 0.0015345751773566008,
     "known_fopt": -304.0,
     "n": 2,
     "m": 4
@@ -2759,7 +2759,7 @@
     ],
     "constraint_values": [],
     "iterations": 11,
-    "solve_time": 0.001661666762083769,
+    "solve_time": 0.0016053248196840285,
     "known_fopt": 2.0,
     "n": 2,
     "m": 5
@@ -2786,7 +2786,7 @@
     ],
     "constraint_values": [],
     "iterations": 12,
-    "solve_time": 0.0018567919963970781,
+    "solve_time": 0.001906625018455088,
     "known_fopt": NaN,
     "n": 2,
     "m": 2
@@ -2813,7 +2813,7 @@
     ],
     "constraint_values": [],
     "iterations": 11,
-    "solve_time": 0.0017220915993675589,
+    "solve_time": 0.0017378750257194043,
     "known_fopt": 1.0,
     "n": 2,
     "m": 2
@@ -2840,7 +2840,7 @@
     ],
     "constraint_values": [],
     "iterations": 8,
-    "solve_time": 0.0012365668080747128,
+    "solve_time": 0.0012033999897539615,
     "known_fopt": -3.0,
     "n": 2,
     "m": 2
@@ -2864,7 +2864,7 @@
     ],
     "constraint_values": [],
     "iterations": 22,
-    "solve_time": 0.003861708426848054,
+    "solve_time": 0.0037752749864012,
     "known_fopt": 0.0,
     "n": 2,
     "m": 0
@@ -2891,7 +2891,7 @@
     ],
     "constraint_values": [],
     "iterations": 8,
-    "solve_time": 0.001205491623841226,
+    "solve_time": 0.0011951502412557602,
     "known_fopt": NaN,
     "n": 2,
     "m": 2
@@ -2919,7 +2919,7 @@
     ],
     "constraint_values": [],
     "iterations": 9,
-    "solve_time": 0.0015007585985586046,
+    "solve_time": 0.0014964506030082704,
     "known_fopt": -1.0,
     "n": 2,
     "m": 3
@@ -2945,7 +2945,7 @@
     ],
     "constraint_values": [],
     "iterations": 19,
-    "solve_time": 0.0029866503551602363,
+    "solve_time": 0.0028403999982401728,
     "known_fopt": -0.8,
     "n": 2,
     "m": 1
@@ -2974,7 +2974,7 @@
     ],
     "constraint_values": [],
     "iterations": 14,
-    "solve_time": 0.0018494582269340753,
+    "solve_time": 0.0018392248079180718,
     "known_fopt": 0.04,
     "n": 3,
     "m": 1
@@ -3001,7 +3001,7 @@
     ],
     "constraint_values": [],
     "iterations": 2,
-    "solve_time": 0.00022607538849115372,
+    "solve_time": 0.00023874999023973942,
     "known_fopt": 0.0,
     "n": 3,
     "m": 0
@@ -3031,7 +3031,7 @@
     ],
     "constraint_values": [],
     "iterations": 15,
-    "solve_time": 0.0024294584058225156,
+    "solve_time": 0.0027214915957301856,
     "known_fopt": -0.8,
     "n": 3,
     "m": 2
@@ -3060,7 +3060,7 @@
     ],
     "constraint_values": [],
     "iterations": 8,
-    "solve_time": 0.0013120083836838602,
+    "solve_time": 0.0013897086028009653,
     "known_fopt": 1.0,
     "n": 3,
     "m": 1
@@ -3090,7 +3090,7 @@
     ],
     "constraint_values": [],
     "iterations": 15,
-    "solve_time": 0.0028444915777072312,
+    "solve_time": 0.002599091804586351,
     "known_fopt": -3300.0,
     "n": 3,
     "m": 2
@@ -3119,7 +3119,7 @@
     ],
     "constraint_values": [],
     "iterations": 11,
-    "solve_time": 0.001837125001475215,
+    "solve_time": 0.001840441580861807,
     "known_fopt": -3456.0,
     "n": 3,
     "m": 1
@@ -3148,7 +3148,7 @@
     ],
     "constraint_values": [],
     "iterations": 16,
-    "solve_time": 0.0023804585915058853,
+    "solve_time": 0.002324599795974791,
     "known_fopt": 0.04,
     "n": 3,
     "m": 1
@@ -3178,7 +3178,7 @@
     ],
     "constraint_values": [],
     "iterations": 26,
-    "solve_time": 0.0037753083975985645,
+    "solve_time": 0.0036431081825867295,
     "known_fopt": NaN,
     "n": 3,
     "m": 2
@@ -3208,7 +3208,7 @@
     ],
     "constraint_values": [],
     "iterations": 14,
-    "solve_time": 0.0023635499877855183,
+    "solve_time": 0.0022907416103407742,
     "known_fopt": 0.0,
     "n": 4,
     "m": 0
@@ -3238,7 +3238,7 @@
     ],
     "constraint_values": [],
     "iterations": 20,
-    "solve_time": 0.0022387331584468482,
+    "solve_time": 0.00218098321929574,
     "known_fopt": 0.0,
     "n": 4,
     "m": 0
@@ -3268,7 +3268,7 @@
     ],
     "constraint_values": [],
     "iterations": 8,
-    "solve_time": 0.0014509416185319423,
+    "solve_time": 0.0014194496208801866,
     "known_fopt": 0.0,
     "n": 4,
     "m": 0
@@ -3298,7 +3298,7 @@
     ],
     "constraint_values": [],
     "iterations": 41,
-    "solve_time": 0.005623533646576107,
+    "solve_time": 0.005705258366651833,
     "known_fopt": 0.0,
     "n": 4,
     "m": 0
@@ -3328,7 +3328,7 @@
     ],
     "constraint_values": [],
     "iterations": 10,
-    "solve_time": 0.001823417004197836,
+    "solve_time": 0.0018273749854415655,
     "known_fopt": -8.544621,
     "n": 4,
     "m": 0
@@ -3363,7 +3363,7 @@
     ],
     "constraint_values": [],
     "iterations": 8,
-    "solve_time": 0.001267024758271873,
+    "solve_time": 0.0012154500000178814,
     "known_fopt": -10.0,
     "n": 4,
     "m": 4
@@ -3398,7 +3398,7 @@
     ],
     "constraint_values": [],
     "iterations": 75,
-    "solve_time": 0.011641558189876378,
+    "solve_time": 0.01148591642268002,
     "known_fopt": -1.0,
     "n": 4,
     "m": 4
@@ -3432,7 +3432,7 @@
     ],
     "constraint_values": [],
     "iterations": 14,
-    "solve_time": 0.002188100200146437,
+    "solve_time": 0.0021442916011437775,
     "known_fopt": -44.0,
     "n": 4,
     "m": 3
@@ -3467,7 +3467,7 @@
     ],
     "constraint_values": [],
     "iterations": 12,
-    "solve_time": 0.002294708602130413,
+    "solve_time": 0.0022801584098488094,
     "known_fopt": -1.0,
     "n": 5,
     "m": 1
@@ -3495,7 +3495,7 @@
     ],
     "constraint_values": [],
     "iterations": 16,
-    "solve_time": 0.00280151660554111,
+    "solve_time": 0.0027607998112216593,
     "known_fopt": 3.7913414,
     "n": 2,
     "m": 3
@@ -3525,7 +3525,7 @@
     ],
     "constraint_values": [],
     "iterations": 26,
-    "solve_time": 0.002869583200663328,
+    "solve_time": 0.0028338663978502154,
     "known_fopt": NaN,
     "n": 3,
     "m": 2
@@ -3555,7 +3555,7 @@
     ],
     "constraint_values": [],
     "iterations": 46,
-    "solve_time": 0.006110058422200382,
+    "solve_time": 0.0059262251947075125,
     "known_fopt": -10.992806,
     "n": 3,
     "m": 2
@@ -3584,7 +3584,7 @@
     ],
     "constraint_values": [],
     "iterations": 8,
-    "solve_time": 0.001220391783863306,
+    "solve_time": 0.001237291586585343,
     "known_fopt": 3.3616797,
     "n": 3,
     "m": 1
@@ -3613,7 +3613,7 @@
     ],
     "constraint_values": [],
     "iterations": 8,
-    "solve_time": 0.0009468584088608622,
+    "solve_time": 0.0010112169897183777,
     "known_fopt": NaN,
     "n": 3,
     "m": 1
@@ -3645,22 +3645,91 @@
     ],
     "constraint_values": [],
     "iterations": 11,
-    "solve_time": 0.00172516661696136,
+    "solve_time": 0.0017257829895243049,
     "known_fopt": 0.11378385,
     "n": 4,
     "m": 1
   },
   {
     "number": 374,
-    "status": "Error: Failed to create NLP problem. Make sure inputs are okay!",
-    "objective": NaN,
-    "x": [],
-    "constraint_multipliers": [],
-    "bound_multipliers_lower": [],
-    "bound_multipliers_upper": [],
+    "status": "Optimal",
+    "objective": 0.2332634525918631,
+    "x": [
+      -0.14223314822107627,
+      -0.026135782886175005,
+      0.03410177104048718,
+      0.1259179443121573,
+      0.21200962864607825,
+      0.2681253414732619,
+      0.27845764166854337,
+      0.2326398444165992,
+      0.21821145418181084,
+      0.2332634525918631
+    ],
+    "constraint_multipliers": [
+      -1.1699297240584367e-11,
+      -1.1506415323071983e-11,
+      -1.1072841423402347e-11,
+      -1.0717383174237826e-11,
+      -1.076948877222115e-11,
+      -1.1585496755886323e-11,
+      -1.381541253262219e-11,
+      -1.937621695671826e-11,
+      -3.798908315031346e-11,
+      -0.17753939012335412,
+      -1.2770030055196188e-10,
+      -1.5629792410056943e-10,
+      -3.3388103421204124e-10,
+      -0.015806997593874734,
+      -2.2161502342944083e-09,
+      -1.4303587379728547e-10,
+      -4.7794389012844116e-11,
+      -2.3983060496546944e-11,
+      -1.4929276172198314e-11,
+      -1.0717400642864029e-11,
+      -0.7577075307904291,
+      -1.9788828358439922e-10,
+      -2.622135092737027e-09,
+      -0.386168553275245,
+      -2.4863310962284017e-10,
+      -1.9155483632213236e-10,
+      -4.903752989635943e-10,
+      -0.1895733337296493,
+      -4.2343078317437696e-10,
+      -1.8916149252102608e-10,
+      -2.425678617753061e-10,
+      -1.7429930420881594e-09,
+      -0.14290643794589636,
+      -3.066891749875944e-10,
+      -1.8378365867248072e-10
+    ],
+    "bound_multipliers_lower": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "bound_multipliers_upper": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
     "constraint_values": [],
-    "iterations": 0,
-    "solve_time": 0.0,
+    "iterations": 103,
+    "solve_time": 0.176083408202976,
     "known_fopt": 0.233264,
     "n": 10,
     "m": 35
@@ -3724,7 +3793,7 @@
     ],
     "constraint_values": [],
     "iterations": 24,
-    "solve_time": 0.005273908167146147,
+    "solve_time": 0.005191124835982918,
     "known_fopt": -4430.0879,
     "n": 10,
     "m": 15

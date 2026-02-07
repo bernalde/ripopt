@@ -3365,7 +3365,7 @@ def tp116_factory(intermediate_cb=None):
             intermediate_cb,
         ),
         lb=np.array([0.1, 0.1, 0.1, 0.0001, 0.1, 0.1, 0.1, 0.1, 500.0, 0.1, 1.0, 0.0001, 0.0001]),
-        ub=np.array([1.0, 1.0, 1.0, 0.1, 0.9, 0.9, 0.0, 0.0, 0.0, 500.0, 0.0, 0.0, 0.0]),
+        ub=np.array([1.0, 1.0, 1.0, 0.1, 0.9, 0.9, 1000.0, 1000.0, 1000.0, 500.0, 150.0, 150.0, 150.0]),
         cl=np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
         cu=np.array([2.0e19, 2.0e19, 2.0e19, 2.0e19, 2.0e19, 2.0e19, 2.0e19, 2.0e19, 2.0e19, 2.0e19, 2.0e19, 2.0e19, 2.0e19, 2.0e19, 2.0e19]),
     )
@@ -5428,31 +5428,112 @@ def _tp374_objective(x):
 def _tp374_gradient(x):
     return np.array([0, 0, 0, 0, 0, 0, 0, 0, 0, 1])
 
+def _tp374_afn(z, x):
+    return sum(x[k-1] * np.cos(k * z) for k in range(1, 10))
+
+def _tp374_bfn(z, x):
+    return sum(x[k-1] * np.sin(k * z) for k in range(1, 10))
+
+def _tp374_gfn(z, x):
+    a = _tp374_afn(z, x)
+    b = _tp374_bfn(z, x)
+    return a*a + b*b
+
 def _tp374_constraints(x):
-    return np.array([])
+    g = np.zeros(35)
+    for i in range(10):
+        z = np.pi / 4.0 * (i * 0.1)
+        g[i] = _tp374_gfn(z, x) - (1.0 - x[9])**2
+    for i in range(10, 20):
+        z = np.pi / 4.0 * ((i - 10) * 0.1)
+        g[i] = (1.0 + x[9])**2 - _tp374_gfn(z, x)
+    for i in range(20, 35):
+        z = np.pi / 4.0 * (1.2 + (i - 20) * 0.2)
+        g[i] = x[9]**2 - _tp374_gfn(z, x)
+    return g
 
 def _tp374_jacobian(x):
-    return np.array([])
+    vals = np.zeros(350)
+    idx = 0
+    for i in range(10):
+        z = np.pi / 4.0 * (i * 0.1)
+        a = _tp374_afn(z, x)
+        b = _tp374_bfn(z, x)
+        for k in range(1, 10):
+            vals[idx] = 2.0 * (a * np.cos(k * z) + b * np.sin(k * z))
+            idx += 1
+        vals[idx] = 2.0 * (1.0 - x[9])
+        idx += 1
+    for i in range(10, 20):
+        z = np.pi / 4.0 * ((i - 10) * 0.1)
+        a = _tp374_afn(z, x)
+        b = _tp374_bfn(z, x)
+        for k in range(1, 10):
+            vals[idx] = -2.0 * (a * np.cos(k * z) + b * np.sin(k * z))
+            idx += 1
+        vals[idx] = 2.0 * (1.0 + x[9])
+        idx += 1
+    for i in range(20, 35):
+        z = np.pi / 4.0 * (1.2 + (i - 20) * 0.2)
+        a = _tp374_afn(z, x)
+        b = _tp374_bfn(z, x)
+        for k in range(1, 10):
+            vals[idx] = -2.0 * (a * np.cos(k * z) + b * np.sin(k * z))
+            idx += 1
+        vals[idx] = 2.0 * x[9]
+        idx += 1
+    return vals
 
 def _tp374_jacobianstructure():
-    return (np.array([], dtype=int), np.array([], dtype=int))
+    rows = []
+    cols = []
+    for i in range(35):
+        for j in range(10):
+            rows.append(i)
+            cols.append(j)
+    return (np.array(rows, dtype=int), np.array(cols, dtype=int))
 
 def _tp374_hessian(x, lagrange, obj_factor):
-    h = np.zeros(10)
-    h[0] = 0.0
-    h[1] = 0.0
-    h[2] = 0.0
-    h[3] = 0.0
-    h[4] = 0.0
-    h[5] = 0.0
-    h[6] = 0.0
-    h[7] = 0.0
-    h[8] = 0.0
-    h[9] = 0.0
+    # 10x10 lower triangle = 55 entries
+    h = np.zeros(55)
+    lt = lambda i, j: i * (i + 1) // 2 + j
+    # Group 1 (constraints 0..9): g = A^2 + B^2 - (1-x9)^2
+    for ci in range(10):
+        lam = lagrange[ci]
+        if lam == 0.0: continue
+        z = np.pi / 4.0 * (ci * 0.1)
+        for j in range(1, 10):
+            for k in range(1, j + 1):
+                h[lt(j-1, k-1)] += lam * 2.0 * np.cos((j - k) * z)
+        h[lt(9, 9)] += lam * 2.0
+    # Group 2 (constraints 10..19): g = (1+x9)^2 - A^2 - B^2
+    for ci in range(10, 20):
+        lam = lagrange[ci]
+        if lam == 0.0: continue
+        z = np.pi / 4.0 * ((ci - 10) * 0.1)
+        for j in range(1, 10):
+            for k in range(1, j + 1):
+                h[lt(j-1, k-1)] += lam * (-2.0) * np.cos((j - k) * z)
+        h[lt(9, 9)] += lam * 2.0
+    # Group 3 (constraints 20..34): g = x9^2 - A^2 - B^2
+    for ci in range(20, 35):
+        lam = lagrange[ci]
+        if lam == 0.0: continue
+        z = np.pi / 4.0 * (1.2 + (ci - 20) * 0.2)
+        for j in range(1, 10):
+            for k in range(1, j + 1):
+                h[lt(j-1, k-1)] += lam * (-2.0) * np.cos((j - k) * z)
+        h[lt(9, 9)] += lam * 2.0
     return h
 
 def _tp374_hessianstructure():
-    return (np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], dtype=int), np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], dtype=int))
+    rows = []
+    cols = []
+    for i in range(10):
+        for j in range(i + 1):
+            rows.append(i)
+            cols.append(j)
+    return (np.array(rows, dtype=int), np.array(cols, dtype=int))
 
 def tp374_factory(intermediate_cb=None):
     prob = cyipopt.Problem(

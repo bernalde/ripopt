@@ -5,16 +5,16 @@ Comparison of ripopt vs cyipopt (C++ Ipopt) on the Hock-Schittkowski test suite.
 ## Executive Summary
 
 - **Total problems**: 120
-- **ripopt solved**: 118/120 (98.3%)
-- **cyipopt solved**: 116/120 (96.7%)
-- **Both solved**: 116/120 (96.7%)
-- **Matching solutions** (rel obj diff < 1e-4): 106/116 (91.4%)
+- **ripopt solved**: 119/120 (99.2%)
+- **cyipopt solved**: 118/120 (98.3%)
+- **Both solved**: 117/120 (97.5%)
+- **Matching solutions** (rel obj diff < 1e-4): 107/117 (91.5%)
 
 ## Accuracy Statistics (where both solve)
 
 | Metric | Objective Rel Diff | Solution Max Diff |
 |--------|-------------------|-------------------|
-| Mean   | 5.04e-02 | 1.84e+00 |
+| Mean   | 5.00e-02 | 1.82e+00 |
 | Median | 3.18e-09 | 1.13e-08 |
 | Max    | 1.00e+00 | 2.02e+02 |
 
@@ -22,7 +22,7 @@ Comparison of ripopt vs cyipopt (C++ Ipopt) on the Hock-Schittkowski test suite.
 
 | Category | Total | ripopt | cyipopt | Both | Match |
 |----------|-------|--------|---------|------|-------|
-| constrained | 100 | 98 | 97 | 97 | 89 |
+| constrained | 100 | 99 | 99 | 98 | 90 |
 | unconstrained | 20 | 20 | 19 | 19 | 17 |
 
 ## Detailed Results
@@ -100,7 +100,7 @@ Comparison of ripopt vs cyipopt (C++ Ipopt) on the Hock-Schittkowski test suite.
 | 108 | 9 | 13 | Optimal | Optimal | 5.70e-09 | 6.15e-02 | PASS |
 | 113 | 10 | 8 | Optimal | Optimal | 1.63e-09 | 1.39e-09 | PASS |
 | 114 | 10 | 11 | Optimal | Optimal | 1.06e-07 | 1.73e-03 | PASS |
-| 116 | 13 | 15 | RestorationF | IpoptStatus( | N/A | N/A | BOTH_FAIL |
+| 116 | 13 | 15 | Optimal | Optimal | 3.69e-07 | 1.43e-04 | PASS |
 | 201 | 2 | 0 | Optimal | Optimal | 0.00e+00 | 0.00e+00 | PASS |
 | 206 | 2 | 0 | Optimal | Optimal | 3.77e-15 | 2.22e-16 | PASS |
 | 211 | 2 | 0 | Optimal | Optimal | 9.77e-15 | 1.93e-14 | PASS |
@@ -147,18 +147,24 @@ Comparison of ripopt vs cyipopt (C++ Ipopt) on the Hock-Schittkowski test suite.
 | 339 | 3 | 1 | Optimal | Optimal | 3.35e-09 | 1.24e-07 | PASS |
 | 344 | 3 | 1 | Optimal | Optimal | 6.22e-14 | 4.11e-12 | PASS |
 | 354 | 4 | 1 | Optimal | Optimal | 4.87e-09 | 6.58e-09 | PASS |
-| 374 | 10 | 35 | MaxIteration | Error: Faile | N/A | N/A | BOTH_FAIL |
+| 374 | 10 | 35 | NumericalErr | Optimal | N/A | N/A | ripopt_FAIL |
 | 376 | 10 | 15 | Optimal | Optimal | 9.62e-01 | 2.02e+02 | MISMATCH |
 
 ## Performance Comparison (where both solve)
 
 | Metric | ripopt iters | cyipopt iters |
 |--------|-------------|---------------|
-| Mean   | 14.1 | 14.4 |
+| Mean   | 14.5 | 14.5 |
 | Median | 11 | 11 |
 | Max    | 73 | 75 |
 
 ## Failure Analysis
+
+### Problems where only ripopt fails (1)
+
+| TP# | n | m | ripopt status | cyipopt obj |
+|-----|---|---|---------------|-------------|
+| 374 | 10 | 35 | NumericalError | 2.332635e-01 |
 
 ### Problems where only cyipopt fails (2)
 
@@ -166,13 +172,6 @@ Comparison of ripopt vs cyipopt (C++ Ipopt) on the Hock-Schittkowski test suite.
 |-----|---|---|----------------|------------|
 | 214 | 2 | 0 | IpoptStatus(-13) | 0.000000e+00 |
 | 223 | 2 | 2 | Infeasible | N/A |
-
-### Problems where both fail (2)
-
-| TP# | n | m | ripopt status | cyipopt status |
-|-----|---|---|---------------|----------------|
-| 116 | 13 | 15 | RestorationFailed | IpoptStatus(-11) |
-| 374 | 10 | 35 | MaxIterations | Error: Failed to create NLP problem. Make sure inputs are okay! |
 
 ### Objective mismatches (both solve but differ > 1e-4) (10)
 

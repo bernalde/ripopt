@@ -5653,19 +5653,19 @@ impl NlpProblem for HsTp116 {
         x_l[5] = 0.1;
         x_u[5] = 0.9;
         x_l[6] = 0.1;
-        x_u[6] = 0.0;
+        x_u[6] = 1000.0;
         x_l[7] = 0.1;
-        x_u[7] = 0.0;
+        x_u[7] = 1000.0;
         x_l[8] = 500.0;
-        x_u[8] = 0.0;
+        x_u[8] = 1000.0;
         x_l[9] = 0.1;
         x_u[9] = 500.0;
         x_l[10] = 1.0;
-        x_u[10] = 0.0;
+        x_u[10] = 150.0;
         x_l[11] = 0.0001;
-        x_u[11] = 0.0;
+        x_u[11] = 150.0;
         x_l[12] = 0.0001;
-        x_u[12] = 0.0;
+        x_u[12] = 150.0;
     }
 
     fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
@@ -9011,6 +9011,29 @@ impl NlpProblem for HsTp354 {
 
 pub struct HsTp374;
 
+// Helper functions for TP374 trigonometric constraints (from Fortran TP374A, TP374B, TP374G)
+fn tp374_a(z: f64, x: &[f64]) -> f64 {
+    let mut val = 0.0;
+    for k in 1..=9 {
+        val += x[k - 1] * (k as f64 * z).cos();
+    }
+    val
+}
+
+fn tp374_b(z: f64, x: &[f64]) -> f64 {
+    let mut val = 0.0;
+    for k in 1..=9 {
+        val += x[k - 1] * (k as f64 * z).sin();
+    }
+    val
+}
+
+fn tp374_gfn(z: f64, x: &[f64]) -> f64 {
+    let a = tp374_a(z, x);
+    let b = tp374_b(z, x);
+    a * a + b * b
+}
+
 impl NlpProblem for HsTp374 {
     fn num_variables(&self) -> usize {
         10
@@ -9021,158 +9044,178 @@ impl NlpProblem for HsTp374 {
     }
 
     fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
-        x_l[0] = f64::NEG_INFINITY;
-        x_u[0] = f64::INFINITY;
-        x_l[1] = f64::NEG_INFINITY;
-        x_u[1] = f64::INFINITY;
-        x_l[2] = f64::NEG_INFINITY;
-        x_u[2] = f64::INFINITY;
-        x_l[3] = f64::NEG_INFINITY;
-        x_u[3] = f64::INFINITY;
-        x_l[4] = f64::NEG_INFINITY;
-        x_u[4] = f64::INFINITY;
-        x_l[5] = f64::NEG_INFINITY;
-        x_u[5] = f64::INFINITY;
-        x_l[6] = f64::NEG_INFINITY;
-        x_u[6] = f64::INFINITY;
-        x_l[7] = f64::NEG_INFINITY;
-        x_u[7] = f64::INFINITY;
-        x_l[8] = f64::NEG_INFINITY;
-        x_u[8] = f64::INFINITY;
-        x_l[9] = f64::NEG_INFINITY;
-        x_u[9] = f64::INFINITY;
+        for i in 0..10 {
+            x_l[i] = f64::NEG_INFINITY;
+            x_u[i] = f64::INFINITY;
+        }
     }
 
     fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
-        g_l[0] = 0.0;
-        g_u[0] = f64::INFINITY;
-        g_l[1] = 0.0;
-        g_u[1] = f64::INFINITY;
-        g_l[2] = 0.0;
-        g_u[2] = f64::INFINITY;
-        g_l[3] = 0.0;
-        g_u[3] = f64::INFINITY;
-        g_l[4] = 0.0;
-        g_u[4] = f64::INFINITY;
-        g_l[5] = 0.0;
-        g_u[5] = f64::INFINITY;
-        g_l[6] = 0.0;
-        g_u[6] = f64::INFINITY;
-        g_l[7] = 0.0;
-        g_u[7] = f64::INFINITY;
-        g_l[8] = 0.0;
-        g_u[8] = f64::INFINITY;
-        g_l[9] = 0.0;
-        g_u[9] = f64::INFINITY;
-        g_l[10] = 0.0;
-        g_u[10] = f64::INFINITY;
-        g_l[11] = 0.0;
-        g_u[11] = f64::INFINITY;
-        g_l[12] = 0.0;
-        g_u[12] = f64::INFINITY;
-        g_l[13] = 0.0;
-        g_u[13] = f64::INFINITY;
-        g_l[14] = 0.0;
-        g_u[14] = f64::INFINITY;
-        g_l[15] = 0.0;
-        g_u[15] = f64::INFINITY;
-        g_l[16] = 0.0;
-        g_u[16] = f64::INFINITY;
-        g_l[17] = 0.0;
-        g_u[17] = f64::INFINITY;
-        g_l[18] = 0.0;
-        g_u[18] = f64::INFINITY;
-        g_l[19] = 0.0;
-        g_u[19] = f64::INFINITY;
-        g_l[20] = 0.0;
-        g_u[20] = f64::INFINITY;
-        g_l[21] = 0.0;
-        g_u[21] = f64::INFINITY;
-        g_l[22] = 0.0;
-        g_u[22] = f64::INFINITY;
-        g_l[23] = 0.0;
-        g_u[23] = f64::INFINITY;
-        g_l[24] = 0.0;
-        g_u[24] = f64::INFINITY;
-        g_l[25] = 0.0;
-        g_u[25] = f64::INFINITY;
-        g_l[26] = 0.0;
-        g_u[26] = f64::INFINITY;
-        g_l[27] = 0.0;
-        g_u[27] = f64::INFINITY;
-        g_l[28] = 0.0;
-        g_u[28] = f64::INFINITY;
-        g_l[29] = 0.0;
-        g_u[29] = f64::INFINITY;
-        g_l[30] = 0.0;
-        g_u[30] = f64::INFINITY;
-        g_l[31] = 0.0;
-        g_u[31] = f64::INFINITY;
-        g_l[32] = 0.0;
-        g_u[32] = f64::INFINITY;
-        g_l[33] = 0.0;
-        g_u[33] = f64::INFINITY;
-        g_l[34] = 0.0;
-        g_u[34] = f64::INFINITY;
+        for i in 0..35 {
+            g_l[i] = 0.0;
+            g_u[i] = f64::INFINITY;
+        }
     }
 
     fn initial_point(&self, x0: &mut [f64]) {
-        x0[0] = 0.1;
-        x0[1] = 0.1;
-        x0[2] = 0.1;
-        x0[3] = 0.1;
-        x0[4] = 0.1;
-        x0[5] = 0.1;
-        x0[6] = 0.1;
-        x0[7] = 0.1;
-        x0[8] = 0.1;
-        x0[9] = 0.1;
+        for i in 0..10 {
+            x0[i] = 0.1;
+        }
     }
 
     fn objective(&self, x: &[f64]) -> f64 {
         x[9]
     }
 
-    fn gradient(&self, x: &[f64], grad: &mut [f64]) {
-        grad[0] = 0.0;
-        grad[1] = 0.0;
-        grad[2] = 0.0;
-        grad[3] = 0.0;
-        grad[4] = 0.0;
-        grad[5] = 0.0;
-        grad[6] = 0.0;
-        grad[7] = 0.0;
-        grad[8] = 0.0;
+    fn gradient(&self, _x: &[f64], grad: &mut [f64]) {
+        for i in 0..9 { grad[i] = 0.0; }
         grad[9] = 1.0;
     }
 
     fn constraints(&self, x: &[f64], g: &mut [f64]) {
-        let _ = (x, g);
+        use std::f64::consts::PI;
+        // Constraints 0..9: G(z_i, x) - (1 - x[9])^2 >= 0
+        for i in 0..10 {
+            let z = PI / 4.0 * (i as f64 * 0.1);
+            g[i] = tp374_gfn(z, x) - (1.0 - x[9]).powi(2);
+        }
+        // Constraints 10..19: (1 + x[9])^2 - G(z_i, x) >= 0
+        for i in 10..20 {
+            let z = PI / 4.0 * ((i - 10) as f64 * 0.1);
+            g[i] = (1.0 + x[9]).powi(2) - tp374_gfn(z, x);
+        }
+        // Constraints 20..34: x[9]^2 - G(z_i, x) >= 0
+        for i in 20..35 {
+            let z = PI / 4.0 * (1.2 + (i - 20) as f64 * 0.2);
+            g[i] = x[9].powi(2) - tp374_gfn(z, x);
+        }
     }
 
     fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
-        (vec![], vec![])
+        // Each of the 35 constraints depends on all 10 variables (dense)
+        let mut rows = Vec::with_capacity(350);
+        let mut cols = Vec::with_capacity(350);
+        for i in 0..35 {
+            for j in 0..10 {
+                rows.push(i);
+                cols.push(j);
+            }
+        }
+        (rows, cols)
     }
 
     fn jacobian_values(&self, x: &[f64], vals: &mut [f64]) {
-        let _ = (x, vals);
+        use std::f64::consts::PI;
+        let mut idx = 0;
+
+        // Constraints 0..9: g_i = G(z, x) - (1 - x[9])^2
+        for i in 0..10 {
+            let z = PI / 4.0 * (i as f64 * 0.1);
+            let a = tp374_a(z, x);
+            let b = tp374_b(z, x);
+            for k in 1..=9 {
+                vals[idx] = 2.0 * (a * (k as f64 * z).cos() + b * (k as f64 * z).sin());
+                idx += 1;
+            }
+            vals[idx] = 2.0 * (1.0 - x[9]);
+            idx += 1;
+        }
+
+        // Constraints 10..19: g_i = (1 + x[9])^2 - G(z, x)
+        for i in 10..20 {
+            let z = PI / 4.0 * ((i - 10) as f64 * 0.1);
+            let a = tp374_a(z, x);
+            let b = tp374_b(z, x);
+            for k in 1..=9 {
+                vals[idx] = -2.0 * (a * (k as f64 * z).cos() + b * (k as f64 * z).sin());
+                idx += 1;
+            }
+            vals[idx] = 2.0 * (1.0 + x[9]);
+            idx += 1;
+        }
+
+        // Constraints 20..34: g_i = x[9]^2 - G(z, x)
+        for i in 20..35 {
+            let z = PI / 4.0 * (1.2 + (i - 20) as f64 * 0.2);
+            let a = tp374_a(z, x);
+            let b = tp374_b(z, x);
+            for k in 1..=9 {
+                vals[idx] = -2.0 * (a * (k as f64 * z).cos() + b * (k as f64 * z).sin());
+                idx += 1;
+            }
+            vals[idx] = 2.0 * x[9];
+            idx += 1;
+        }
     }
 
     fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
-        (vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9], vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+        // 10x10 lower triangle
+        let mut rows = Vec::new();
+        let mut cols = Vec::new();
+        for i in 0..10 {
+            for j in 0..=i {
+                rows.push(i);
+                cols.push(j);
+            }
+        }
+        (rows, cols)
     }
 
-    fn hessian_values(&self, x: &[f64], obj_factor: f64, lambda: &[f64], vals: &mut [f64]) {
-        vals[0] = 0.0;
-        vals[1] = 0.0;
-        vals[2] = 0.0;
-        vals[3] = 0.0;
-        vals[4] = 0.0;
-        vals[5] = 0.0;
-        vals[6] = 0.0;
-        vals[7] = 0.0;
-        vals[8] = 0.0;
-        vals[9] = 0.0;
+    fn hessian_values(&self, _x: &[f64], _obj_factor: f64, lambda: &[f64], vals: &mut [f64]) {
+        use std::f64::consts::PI;
+        // Objective Hessian is zero (f = x[9] is linear).
+        for v in vals.iter_mut() { *v = 0.0; }
+
+        // Lower-triangle index: (i,j) -> i*(i+1)/2 + j
+        let lt = |i: usize, j: usize| -> usize { i * (i + 1) / 2 + j };
+
+        // Group 1 (constraints 0..9): g = A^2 + B^2 - (1-x9)^2
+        //   d2g/dx[j-1]dx[k-1] = 2*cos((j-k)*z) for j,k in 1..9
+        //   d2g/dx9^2 = 2
+        for ci in 0..10 {
+            let lam = lambda[ci];
+            if lam == 0.0 { continue; }
+            let z = PI / 4.0 * (ci as f64 * 0.1);
+            for j in 1..=9usize {
+                for k in 1..=j {
+                    let h = 2.0 * ((j as f64 - k as f64) * z).cos();
+                    vals[lt(j - 1, k - 1)] += lam * h;
+                }
+            }
+            vals[lt(9, 9)] += lam * 2.0;
+        }
+
+        // Group 2 (constraints 10..19): g = (1+x9)^2 - A^2 - B^2
+        //   d2g/dx[j-1]dx[k-1] = -2*cos((j-k)*z)
+        //   d2g/dx9^2 = 2
+        for ci in 10..20 {
+            let lam = lambda[ci];
+            if lam == 0.0 { continue; }
+            let z = PI / 4.0 * ((ci - 10) as f64 * 0.1);
+            for j in 1..=9usize {
+                for k in 1..=j {
+                    let h = -2.0 * ((j as f64 - k as f64) * z).cos();
+                    vals[lt(j - 1, k - 1)] += lam * h;
+                }
+            }
+            vals[lt(9, 9)] += lam * 2.0;
+        }
+
+        // Group 3 (constraints 20..34): g = x9^2 - A^2 - B^2
+        //   d2g/dx[j-1]dx[k-1] = -2*cos((j-k)*z)
+        //   d2g/dx9^2 = 2
+        for ci in 20..35 {
+            let lam = lambda[ci];
+            if lam == 0.0 { continue; }
+            let z = PI / 4.0 * (1.2 + (ci - 20) as f64 * 0.2);
+            for j in 1..=9usize {
+                for k in 1..=j {
+                    let h = -2.0 * ((j as f64 - k as f64) * z).cos();
+                    vals[lt(j - 1, k - 1)] += lam * h;
+                }
+            }
+            vals[lt(9, 9)] += lam * 2.0;
+        }
     }
 }
 
