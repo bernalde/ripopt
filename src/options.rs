@@ -47,6 +47,12 @@ pub struct SolverOptions {
     pub warm_start_bound_frac: f64,
     /// Warm-start multiplier initial value.
     pub warm_start_mult_bound_push: f64,
+    /// Any bound less than this value is treated as -infinity (no bound).
+    /// Set to a finite value to add artificial lower bounds on unbounded variables.
+    pub nlp_lower_bound_inf: f64,
+    /// Any bound greater than this value is treated as +infinity (no bound).
+    /// Set to a finite value to add artificial upper bounds on unbounded variables.
+    pub nlp_upper_bound_inf: f64,
 }
 
 impl Default for SolverOptions {
@@ -75,6 +81,8 @@ impl Default for SolverOptions {
             warm_start_bound_push: 1e-3,
             warm_start_bound_frac: 1e-3,
             warm_start_mult_bound_push: 1e-3,
+            nlp_lower_bound_inf: -1e19,
+            nlp_upper_bound_inf: 1e19,
         }
     }
 }

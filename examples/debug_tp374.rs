@@ -266,7 +266,7 @@ fn main() {
 
     let options = SolverOptions {
         print_level: 10,
-        max_iter: 200,
+        max_iter: 3000,
         mu_strategy_adaptive: true,
         tol: 1e-8,
         ..SolverOptions::default()

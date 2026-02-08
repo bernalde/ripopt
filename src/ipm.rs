@@ -403,6 +403,20 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
         if let Err(e) = inertia_result {
             log::warn!("KKT factorization failed: {}", e);
+            // Try restoration instead of giving up
+            let (x_rest, success) = restoration.restore(
+                &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
+                &state.jac_rows, &state.jac_cols, n, m, options,
+                &|theta, phi| filter.is_acceptable(theta, phi),
+                &|x_eval, g_out| problem.constraints(x_eval, g_out),
+                &|x_eval, jac_out| problem.jacobian_values(x_eval, jac_out),
+            );
+            if success {
+                state.x = x_rest;
+                state.alpha_primal = 0.0;
+                state.evaluate(problem, 1.0);
+                continue;
+            }
             return make_result(&state, SolveStatus::NumericalError);
         }
 
@@ -412,6 +426,20 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             Ok(d) => d,
             Err(e) => {
                 log::warn!("KKT solve failed: {}", e);
+                // Try restoration instead of giving up
+                let (x_rest, success) = restoration.restore(
+                    &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
+                    &state.jac_rows, &state.jac_cols, n, m, options,
+                    &|theta, phi| filter.is_acceptable(theta, phi),
+                    &|x_eval, g_out| problem.constraints(x_eval, g_out),
+                    &|x_eval, jac_out| problem.jacobian_values(x_eval, jac_out),
+                );
+                if success {
+                    state.x = x_rest;
+                    state.alpha_primal = 0.0;
+                    state.evaluate(problem, 1.0);
+                    continue;
+                }
                 return make_result(&state, SolveStatus::NumericalError);
             }
         };

@@ -51,6 +51,16 @@ def x_diff(ripopt_r, cyipopt_r):
         return float('nan')
 
 
+def fmt_time(t):
+    """Format a time value in seconds to a human-readable string."""
+    if t >= 1.0:
+        return f"{t:.2f}s"
+    elif t >= 0.001:
+        return f"{t*1000:.1f}ms"
+    else:
+        return f"{t*1e6:.0f}us"
+
+
 def classify_problem(r):
     """Classify by constraint type."""
     n = r.get('n', 0)
@@ -192,8 +202,8 @@ def main():
 
     lines.append("## Detailed Results")
     lines.append("")
-    lines.append("| TP# | n | m | ripopt | cyipopt | Obj Diff | x Diff | Status |")
-    lines.append("|-----|---|---|--------|---------|----------|--------|--------|")
+    lines.append("| TP# | n | m | ripopt | cyipopt | Obj Diff | r_iter | c_iter | r_time | c_time | Speedup | Status |")
+    lines.append("|-----|---|---|--------|---------|----------|--------|--------|--------|--------|---------|--------|")
     for c in comparisons:
         num = c['number']
         n = c['n']
@@ -201,22 +211,78 @@ def main():
         rs = c['ripopt_status'][:12]
         cs = c['cyipopt_status'][:12]
         od = f"{c['obj_diff']:.2e}" if not math.isnan(c['obj_diff']) else "N/A"
-        xd = f"{c['x_diff']:.2e}" if not math.isnan(c['x_diff']) else "N/A"
+        ri = c['ripopt_iters']
+        ci = c['cyipopt_iters']
+        rt = c['ripopt_time']
+        ct = c['cyipopt_time']
+        rt_str = fmt_time(rt) if rt > 0 else "N/A"
+        ct_str = fmt_time(ct) if ct > 0 else "N/A"
+        if rt > 0 and ct > 0:
+            speedup = ct / rt
+            sp_str = f"{speedup:.1f}x"
+        else:
+            sp_str = "N/A"
         status = "PASS" if c['passed'] else ("BOTH_FAIL" if not c['ripopt_solved'] and not c['cyipopt_solved'] else ("ripopt_FAIL" if not c['ripopt_solved'] else "MISMATCH"))
-        lines.append(f"| {num:03d} | {n} | {m} | {rs} | {cs} | {od} | {xd} | {status} |")
+        lines.append(f"| {num:03d} | {n} | {m} | {rs} | {cs} | {od} | {ri} | {ci} | {rt_str} | {ct_str} | {sp_str} | {status} |")
     lines.append("")
 
     lines.append("## Performance Comparison (where both solve)")
     lines.append("")
-    # Iteration comparison
+
     if both_solved > 0:
-        r_iters = [c['ripopt_iters'] for c in comparisons if c['both_solved']]
-        c_iters = [c['cyipopt_iters'] for c in comparisons if c['both_solved']]
-        lines.append(f"| Metric | ripopt iters | cyipopt iters |")
-        lines.append(f"|--------|-------------|---------------|")
+        both_data = [c for c in comparisons if c['both_solved']]
+        r_iters = [c['ripopt_iters'] for c in both_data]
+        c_iters = [c['cyipopt_iters'] for c in both_data]
+        r_times = [c['ripopt_time'] for c in both_data if c['ripopt_time'] > 0]
+        c_times = [c['cyipopt_time'] for c in both_data if c['cyipopt_time'] > 0]
+
+        lines.append("### Iteration Comparison")
+        lines.append("")
+        lines.append(f"| Metric | ripopt | cyipopt |")
+        lines.append(f"|--------|--------|---------|")
         lines.append(f"| Mean   | {sum(r_iters)/len(r_iters):.1f} | {sum(c_iters)/len(c_iters):.1f} |")
         lines.append(f"| Median | {sorted(r_iters)[len(r_iters)//2]} | {sorted(c_iters)[len(c_iters)//2]} |")
         lines.append(f"| Max    | {max(r_iters)} | {max(c_iters)} |")
+        lines.append(f"| Total  | {sum(r_iters)} | {sum(c_iters)} |")
+        lines.append("")
+
+        # Count how often each solver uses fewer iterations
+        r_fewer = sum(1 for r, c in zip(r_iters, c_iters) if r < c)
+        c_fewer = sum(1 for r, c in zip(r_iters, c_iters) if c < r)
+        tied = sum(1 for r, c in zip(r_iters, c_iters) if r == c)
+        lines.append(f"- ripopt uses fewer iterations: {r_fewer}/{len(r_iters)} problems")
+        lines.append(f"- cyipopt uses fewer iterations: {c_fewer}/{len(c_iters)} problems")
+        lines.append(f"- Same iteration count: {tied}/{len(r_iters)} problems")
+        lines.append("")
+
+        if r_times and c_times:
+            lines.append("### Timing Comparison")
+            lines.append("")
+            r_total = sum(r_times)
+            c_total = sum(c_times)
+            lines.append(f"| Metric | ripopt | cyipopt |")
+            lines.append(f"|--------|--------|---------|")
+            lines.append(f"| Mean   | {fmt_time(sum(r_times)/len(r_times))} | {fmt_time(sum(c_times)/len(c_times))} |")
+            lines.append(f"| Median | {fmt_time(sorted(r_times)[len(r_times)//2])} | {fmt_time(sorted(c_times)[len(c_times)//2])} |")
+            lines.append(f"| Max    | {fmt_time(max(r_times))} | {fmt_time(max(c_times))} |")
+            lines.append(f"| Total  | {fmt_time(r_total)} | {fmt_time(c_total)} |")
+            lines.append("")
+
+            # Geometric mean speedup (cyipopt_time / ripopt_time)
+            speedups = [c['cyipopt_time'] / c['ripopt_time']
+                        for c in both_data
+                        if c['ripopt_time'] > 0 and c['cyipopt_time'] > 0]
+            if speedups:
+                geo_mean = math.exp(sum(math.log(s) for s in speedups) / len(speedups))
+                r_faster = sum(1 for s in speedups if s > 1.0)
+                c_faster = sum(1 for s in speedups if s < 1.0)
+                lines.append(f"- Geometric mean speedup (cyipopt_time/ripopt_time): **{geo_mean:.2f}x**")
+                lines.append(f"  - \\>1 means ripopt is faster, <1 means cyipopt is faster")
+                lines.append(f"- ripopt faster: {r_faster}/{len(speedups)} problems")
+                lines.append(f"- cyipopt faster: {c_faster}/{len(speedups)} problems")
+                lines.append(f"- Overall speedup (total time): {c_total/r_total:.2f}x")
+                lines.append("")
+
     lines.append("")
 
     lines.append("## Failure Analysis")

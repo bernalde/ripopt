@@ -75,7 +75,7 @@ def solve_problem(pdef, n_timing_runs=5):
             p.solve(x0_t)
             t1 = time.perf_counter()
             times.append(t1 - t0)
-        avg_time = float(np.mean(times))
+        avg_time = float(np.min(times))
 
         # Constraint values
         try:
