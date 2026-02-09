@@ -1,5 +1,9 @@
 # ripopt
 
+[![Tests](https://github.com/jkitchin/ripopt/actions/workflows/test.yml/badge.svg)](https://github.com/jkitchin/ripopt/actions/workflows/test.yml)
+
+![img](./ipopt-rust.png)
+
 A memory-safe interior point optimizer written in Rust, inspired by [Ipopt](https://github.com/coin-or/Ipopt).
 
 ## What is this?
