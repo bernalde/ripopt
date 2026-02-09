@@ -53,6 +53,18 @@ pub struct SolverOptions {
     /// Any bound greater than this value is treated as +infinity (no bound).
     /// Set to a finite value to add artificial upper bounds on unbounded variables.
     pub nlp_upper_bound_inf: f64,
+    /// Adaptive barrier parameter divisor (kappa in mu = avg_compl / kappa).
+    /// Higher values reduce mu faster. Default: 10.0.
+    pub kappa: f64,
+    /// Allow the adaptive barrier rule to increase mu when complementarity is large
+    /// (e.g., after restoration or stall recovery). Default: true.
+    pub mu_allow_increase: bool,
+    /// Use least-squares estimate for initial constraint multipliers. Default: true.
+    pub least_squares_mult_init: bool,
+    /// Maximum absolute value for LS multiplier init; if exceeded, fall back to zero. Default: 1000.0.
+    pub constr_mult_init_max: f64,
+    /// Include constraint slack log-barriers in the filter merit function. Default: true.
+    pub constraint_slack_barrier: bool,
 }
 
 impl Default for SolverOptions {
@@ -83,6 +95,11 @@ impl Default for SolverOptions {
             warm_start_mult_bound_push: 1e-3,
             nlp_lower_bound_inf: -1e19,
             nlp_upper_bound_inf: 1e19,
+            kappa: 10.0,
+            mu_allow_increase: false,
+            least_squares_mult_init: false,
+            constr_mult_init_max: 1000.0,
+            constraint_slack_barrier: false,
         }
     }
 }

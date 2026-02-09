@@ -4,7 +4,7 @@ use crate::convergence::{
 use crate::filter::{self, Filter};
 use crate::kkt::{self, InertiaCorrectionParams};
 use crate::linear_solver::dense::DenseLdl;
-use crate::linear_solver::LinearSolver;
+use crate::linear_solver::{LinearSolver, SymmetricMatrix};
 use crate::options::SolverOptions;
 use crate::problem::NlpProblem;
 use crate::restoration::RestorationPhase;
@@ -111,14 +111,62 @@ impl SolverState {
             }
         }
 
-        // Initialize constraint multipliers to zero.
-        // The Newton system will determine appropriate values.
-        let y = vec![0.0; m];
-
         let (jac_rows, jac_cols) = problem.jacobian_structure();
         let jac_nnz = jac_rows.len();
         let (hess_rows, hess_cols) = problem.hessian_structure();
         let hess_nnz = hess_rows.len();
+
+        // Initialize constraint multipliers via least-squares estimate if enabled.
+        // Solves min ||∇f + J^T y||^2  ⟹  (J J^T) y = -J ∇f
+        let y = if options.least_squares_mult_init && m > 0 {
+            let mut grad_f_init = vec![0.0; n];
+            problem.gradient(&x, &mut grad_f_init);
+
+            let mut jac_vals_init = vec![0.0; jac_nnz];
+            problem.jacobian_values(&x, &mut jac_vals_init);
+
+            // Compute b = -J * grad_f  (m-vector)
+            let mut b = vec![0.0; m];
+            for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
+                b[row] -= jac_vals_init[idx] * grad_f_init[col];
+            }
+
+            // Compute A = J * J^T  (m x m dense symmetric matrix)
+            // Build dense J (m x n) first for small m
+            let mut j_dense = vec![0.0; m * n];
+            for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
+                j_dense[row * n + col] = jac_vals_init[idx];
+            }
+            let mut a_mat = SymmetricMatrix::zeros(m);
+            for i in 0..m {
+                for j in 0..=i {
+                    let mut dot = 0.0;
+                    for k in 0..n {
+                        dot += j_dense[i * n + k] * j_dense[j * n + k];
+                    }
+                    a_mat.set(i, j, dot);
+                }
+            }
+
+            // Solve (J J^T) y = b using DenseLdl
+            let mut ls_solver = DenseLdl::new();
+            let mut y_ls = vec![0.0; m];
+            let factored = ls_solver.factor(&a_mat);
+            let solved = factored.is_ok() && ls_solver.solve(&b, &mut y_ls).is_ok();
+
+            if solved {
+                let max_abs = y_ls.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+                if max_abs <= options.constr_mult_init_max {
+                    y_ls
+                } else {
+                    vec![0.0; m]
+                }
+            } else {
+                vec![0.0; m]
+            }
+        } else {
+            vec![0.0; m]
+        };
 
         Self {
             x,
@@ -164,13 +212,9 @@ impl SolverState {
     }
 
     /// Compute the barrier objective:
-    /// f(x) - mu * sum(ln(x_i - x_l_i) + ln(x_u_i - x_i))  [variable bounds only]
-    ///
-    /// Note: constraint slack barriers are NOT included because with implicit slacks
-    /// (no explicit slack variables), the nonlinear constraint evaluation g(x) can
-    /// cause large jumps in the barrier objective for tight constraints, breaking
-    /// the filter line search. Constraint feasibility is handled by theta in the filter.
-    fn barrier_objective(&self) -> f64 {
+    /// f(x) - mu * sum(ln(x_i - x_l_i) + ln(x_u_i - x_i))
+    /// Optionally includes constraint slack log-barriers when enabled.
+    fn barrier_objective(&self, options: &SolverOptions) -> f64 {
         let mut phi = self.obj;
         for i in 0..self.n {
             if self.x_l[i].is_finite() {
@@ -180,6 +224,28 @@ impl SolverState {
             if self.x_u[i].is_finite() {
                 let slack = (self.x_u[i] - self.x[i]).max(1e-20);
                 phi -= self.mu * slack.ln();
+            }
+        }
+        if options.constraint_slack_barrier {
+            for i in 0..self.m {
+                // Skip equality constraints (g_l == g_u): slack is zero by definition
+                let is_eq = self.g_l[i].is_finite() && self.g_u[i].is_finite()
+                    && (self.g_l[i] - self.g_u[i]).abs() < 1e-15;
+                if is_eq {
+                    continue;
+                }
+                if self.g_l[i].is_finite() {
+                    let slack = self.g[i] - self.g_l[i];
+                    if slack > self.mu * 1e-2 {
+                        phi -= self.mu * slack.ln();
+                    }
+                }
+                if self.g_u[i].is_finite() {
+                    let slack = self.g_u[i] - self.g[i];
+                    if slack > self.mu * 1e-2 {
+                        phi -= self.mu * slack.ln();
+                    }
+                }
             }
         }
         phi
@@ -192,8 +258,9 @@ impl SolverState {
 
     /// Compute the directional derivative of the barrier objective along the search direction.
     ///
-    /// ∇φ·dx = (∇f - μ/(x-x_l) + μ/(x_u-x))·dx  [variable bounds only]
-    fn barrier_directional_derivative(&self) -> f64 {
+    /// ∇φ·dx = (∇f - μ/(x-x_l) + μ/(x_u-x))·dx
+    /// Optionally includes constraint slack derivative terms when enabled.
+    fn barrier_directional_derivative(&self, options: &SolverOptions) -> f64 {
         let mut grad_phi_dx = 0.0;
         for i in 0..self.n {
             let mut grad_phi_i = self.grad_f[i];
@@ -206,6 +273,34 @@ impl SolverState {
                 grad_phi_i += self.mu / slack;
             }
             grad_phi_dx += grad_phi_i * self.dx[i];
+        }
+        if options.constraint_slack_barrier && self.m > 0 {
+            // Compute J * dx (directional change in constraints)
+            let mut jdx = vec![0.0; self.m];
+            for (idx, (&row, &col)) in
+                self.jac_rows.iter().zip(self.jac_cols.iter()).enumerate()
+            {
+                jdx[row] += self.jac_vals[idx] * self.dx[col];
+            }
+            for i in 0..self.m {
+                let is_eq = self.g_l[i].is_finite() && self.g_u[i].is_finite()
+                    && (self.g_l[i] - self.g_u[i]).abs() < 1e-15;
+                if is_eq {
+                    continue;
+                }
+                if self.g_l[i].is_finite() {
+                    let slack = self.g[i] - self.g_l[i];
+                    if slack > self.mu * 1e-2 {
+                        grad_phi_dx -= self.mu * jdx[i] / slack;
+                    }
+                }
+                if self.g_u[i].is_finite() {
+                    let slack = self.g_u[i] - self.g[i];
+                    if slack > self.mu * 1e-2 {
+                        grad_phi_dx += self.mu * jdx[i] / slack;
+                    }
+                }
+            }
         }
         grad_phi_dx
     }
@@ -480,8 +575,8 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
         // Line search
         let theta_current = primal_inf;
-        let phi_current = state.barrier_objective();
-        let grad_phi_step = state.barrier_directional_derivative();
+        let phi_current = state.barrier_objective(options);
+        let grad_phi_step = state.barrier_directional_derivative(options);
 
         let mut alpha = alpha_primal_max;
         let mut step_accepted = false;
@@ -516,7 +611,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             let theta_trial =
                 convergence::primal_infeasibility(&g_trial, &state.g_l, &state.g_u);
 
-            // Compute barrier objective at trial (variable bounds only)
+            // Compute barrier objective at trial
             let mut phi_trial = obj_trial;
             #[allow(clippy::needless_range_loop)]
             for i in 0..n {
@@ -527,6 +622,27 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 if state.x_u[i].is_finite() {
                     let slack = (state.x_u[i] - x_trial[i]).max(1e-20);
                     phi_trial -= state.mu * slack.ln();
+                }
+            }
+            if options.constraint_slack_barrier {
+                for i in 0..m {
+                    let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
+                        && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
+                    if is_eq {
+                        continue;
+                    }
+                    if state.g_l[i].is_finite() {
+                        let slack = g_trial[i] - state.g_l[i];
+                        if slack > state.mu * 1e-2 {
+                            phi_trial -= state.mu * slack.ln();
+                        }
+                    }
+                    if state.g_u[i].is_finite() {
+                        let slack = state.g_u[i] - g_trial[i];
+                        if slack > state.mu * 1e-2 {
+                            phi_trial -= state.mu * slack.ln();
+                        }
+                    }
                 }
             }
 
@@ -765,7 +881,7 @@ fn attempt_soc<P: NlpProblem>(
 
         let theta_soc = convergence::primal_infeasibility(&g_soc, &state.g_l, &state.g_u);
 
-        // Compute barrier objective (variable bounds only)
+        // Compute barrier objective
         let mut phi_soc = obj_soc;
         #[allow(clippy::needless_range_loop)]
         for i in 0..n {
@@ -776,6 +892,27 @@ fn attempt_soc<P: NlpProblem>(
             if state.x_u[i].is_finite() {
                 let slack = (state.x_u[i] - x_soc[i]).max(1e-20);
                 phi_soc -= state.mu * slack.ln();
+            }
+        }
+        if options.constraint_slack_barrier {
+            for i in 0..m {
+                let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
+                    && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
+                if is_eq {
+                    continue;
+                }
+                if state.g_l[i].is_finite() {
+                    let slack = g_soc[i] - state.g_l[i];
+                    if slack > state.mu * 1e-2 {
+                        phi_soc -= state.mu * slack.ln();
+                    }
+                }
+                if state.g_u[i].is_finite() {
+                    let slack = state.g_u[i] - g_soc[i];
+                    if slack > state.mu * 1e-2 {
+                        phi_soc -= state.mu * slack.ln();
+                    }
+                }
             }
         }
 
@@ -835,11 +972,14 @@ fn update_barrier_parameter(state: &SolverState, options: &SolverOptions) -> f64
         let avg_compl = sum_compl / count as f64;
 
         // Kappa adaptive: reduce faster when progress is good
-        let kappa = 10.0;
-        let mu_new = (avg_compl / kappa).max(options.mu_min);
+        let mu_new = (avg_compl / options.kappa).max(options.mu_min);
 
-        // Don't let mu increase
-        mu_new.min(mu)
+        // Allow mu to increase if the option is set (helps after restoration/stall)
+        if options.mu_allow_increase {
+            mu_new
+        } else {
+            mu_new.min(mu)
+        }
     } else {
         // Monotone decrease
         let mu_new = mu * options.mu_linear_decrease_factor;
