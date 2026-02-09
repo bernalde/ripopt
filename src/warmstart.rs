@@ -71,3 +71,111 @@ impl WarmStartInitializer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_warmstart_no_bounds() {
+        let mut x = vec![1.0, 2.0];
+        let mut z_l = vec![0.5, 0.5];
+        let mut z_u = vec![0.5, 0.5];
+        let x_l = vec![f64::NEG_INFINITY; 2];
+        let x_u = vec![f64::INFINITY; 2];
+        let opts = SolverOptions::default();
+
+        let mu = WarmStartInitializer::initialize(&mut x, &mut z_l, &mut z_u, &x_l, &x_u, &opts);
+
+        // x unchanged (no bounds to push from)
+        assert!((x[0] - 1.0).abs() < 1e-15);
+        assert!((x[1] - 2.0).abs() < 1e-15);
+        // z floored to mult_push
+        assert!(z_l[0] >= opts.warm_start_mult_bound_push);
+        assert!(z_u[0] >= opts.warm_start_mult_bound_push);
+        // No finite bounds → mu = mu_init
+        assert!((mu - opts.mu_init).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_warmstart_lower_bound_push() {
+        let mut x = vec![0.0]; // At lower bound
+        let mut z_l = vec![1.0];
+        let mut z_u = vec![0.0];
+        let x_l = vec![0.0];
+        let x_u = vec![f64::INFINITY];
+        let opts = SolverOptions::default();
+
+        WarmStartInitializer::initialize(&mut x, &mut z_l, &mut z_u, &x_l, &x_u, &opts);
+
+        // x should be pushed away from lower bound
+        assert!(x[0] > x_l[0], "x should be pushed from lower bound");
+        assert!(x[0] >= x_l[0] + opts.warm_start_bound_push);
+    }
+
+    #[test]
+    fn test_warmstart_both_bounds_push() {
+        let mut x = vec![0.0]; // At lower bound
+        let mut z_l = vec![1.0];
+        let mut z_u = vec![1.0];
+        let x_l = vec![0.0];
+        let x_u = vec![10.0];
+        let opts = SolverOptions::default();
+
+        WarmStartInitializer::initialize(&mut x, &mut z_l, &mut z_u, &x_l, &x_u, &opts);
+
+        assert!(x[0] > x_l[0], "x pushed from lower bound");
+        assert!(x[0] < x_u[0], "x stays below upper bound");
+    }
+
+    #[test]
+    fn test_warmstart_narrow_bounds() {
+        // Very narrow range: [0, 0.001]
+        let mut x = vec![0.0];
+        let mut z_l = vec![1.0];
+        let mut z_u = vec![1.0];
+        let x_l = vec![0.0];
+        let x_u = vec![0.001];
+        let opts = SolverOptions::default();
+
+        WarmStartInitializer::initialize(&mut x, &mut z_l, &mut z_u, &x_l, &x_u, &opts);
+
+        // Should be strictly between bounds
+        assert!(x[0] > x_l[0]);
+        assert!(x[0] < x_u[0]);
+    }
+
+    #[test]
+    fn test_warmstart_multiplier_floor() {
+        let mut x = vec![5.0];
+        let mut z_l = vec![-1.0]; // Negative — should be floored
+        let mut z_u = vec![-2.0]; // Negative — should be floored
+        let x_l = vec![0.0];
+        let x_u = vec![10.0];
+        let opts = SolverOptions::default();
+
+        WarmStartInitializer::initialize(&mut x, &mut z_l, &mut z_u, &x_l, &x_u, &opts);
+
+        assert!(z_l[0] >= opts.warm_start_mult_bound_push,
+            "z_l should be floored, got {}", z_l[0]);
+        assert!(z_u[0] >= opts.warm_start_mult_bound_push,
+            "z_u should be floored, got {}", z_u[0]);
+    }
+
+    #[test]
+    fn test_warmstart_mu_from_complementarity() {
+        let mut x = vec![1.0, 3.0];
+        let mut z_l = vec![2.0, 1.0];
+        let mut z_u = vec![0.5, 0.5];
+        let x_l = vec![0.0, 0.0];
+        let x_u = vec![5.0, 5.0];
+        let opts = SolverOptions::default();
+
+        let mu = WarmStartInitializer::initialize(&mut x, &mut z_l, &mut z_u, &x_l, &x_u, &opts);
+
+        // mu should be computed from complementarity products
+        // After push adjustments, mu = average of (x-x_l)*z_l + (x_u-x)*z_u
+        assert!(mu > 0.0, "mu should be positive");
+        assert!(mu >= opts.mu_min, "mu should be at least mu_min");
+    }
+}

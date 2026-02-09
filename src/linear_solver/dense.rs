@@ -670,4 +670,84 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_1x1_matrix() {
+        let mut mat = SymmetricMatrix::zeros(1);
+        mat.set(0, 0, 5.0);
+        let mut solver = DenseLdl::new();
+        let inertia = solver.factor(&mat).unwrap().unwrap();
+        assert_eq!(inertia.positive, 1);
+        assert_eq!(inertia.negative, 0);
+        assert_eq!(inertia.zero, 0);
+        // Solve 5x = 3
+        let rhs = [3.0];
+        let mut sol = [0.0];
+        solver.solve(&rhs, &mut sol).unwrap();
+        assert!((sol[0] - 0.6).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_zero_matrix() {
+        let mat = SymmetricMatrix::zeros(2);
+        let mut solver = DenseLdl::new();
+        let inertia = solver.factor(&mat).unwrap().unwrap();
+        assert_eq!(inertia.positive, 0);
+        assert_eq!(inertia.negative, 0);
+        assert_eq!(inertia.zero, 2);
+    }
+
+    #[test]
+    fn test_solve_unfactored_error() {
+        let mut solver = DenseLdl::new();
+        let rhs = [1.0, 2.0];
+        let mut sol = [0.0; 2];
+        let result = solver.solve(&rhs, &mut sol);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_dimension_mismatch() {
+        let mut mat = SymmetricMatrix::zeros(3);
+        for i in 0..3 {
+            mat.set(i, i, 1.0);
+        }
+        let mut solver = DenseLdl::new();
+        solver.factor(&mat).unwrap();
+        let rhs = [1.0, 2.0]; // Wrong size (2 instead of 3)
+        let mut sol = [0.0; 2];
+        let result = solver.solve(&rhs, &mut sol);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_round_trip_pivot_swap() {
+        // Matrix with zero diagonal to force Bunch-Kaufman pivoting
+        // A = [[0, 3, 1], [3, 1, 2], [1, 2, 4]]
+        let mut mat = SymmetricMatrix::zeros(3);
+        mat.set(0, 0, 0.0);
+        mat.set(1, 0, 3.0);
+        mat.set(1, 1, 1.0);
+        mat.set(2, 0, 1.0);
+        mat.set(2, 1, 2.0);
+        mat.set(2, 2, 4.0);
+
+        let mut solver = DenseLdl::new();
+        solver.factor(&mat).unwrap();
+
+        let rhs = [1.0, 2.0, 3.0];
+        let mut sol = [0.0; 3];
+        solver.solve(&rhs, &mut sol).unwrap();
+
+        // Verify A * sol = rhs
+        let full = mat.to_full();
+        for i in 0..3 {
+            let ax_i: f64 = (0..3).map(|j| full[i][j] * sol[j]).sum();
+            assert!(
+                (ax_i - rhs[i]).abs() < 1e-10,
+                "Row {}: Ax={}, b={}",
+                i, ax_i, rhs[i]
+            );
+        }
+    }
 }

@@ -223,4 +223,151 @@ mod tests {
             ConvergenceStatus::NotConverged
         );
     }
+
+    #[test]
+    fn test_convergence_diverging() {
+        let info = ConvergenceInfo {
+            primal_inf: 1e-3,
+            dual_inf: 1e-3,
+            compl_inf: 1e-3,
+            mu: 1e-11,
+            objective: 1e21,
+            multiplier_sum: 0.0,
+            multiplier_count: 0,
+        };
+        let opts = SolverOptions::default();
+        assert_eq!(
+            check_convergence(&info, &opts, 0),
+            ConvergenceStatus::Diverging
+        );
+    }
+
+    #[test]
+    fn test_convergence_acceptable() {
+        let info = ConvergenceInfo {
+            primal_inf: 1e-7,
+            dual_inf: 1e-7,
+            compl_inf: 1e-7,
+            mu: 1e-8,
+            objective: 5.0,
+            multiplier_sum: 0.0,
+            multiplier_count: 0,
+        };
+        let opts = SolverOptions::default();
+        // Need enough consecutive acceptable iterations
+        assert_eq!(
+            check_convergence(&info, &opts, opts.acceptable_iter),
+            ConvergenceStatus::Acceptable
+        );
+    }
+
+    #[test]
+    fn test_convergence_acceptable_insufficient_count() {
+        let info = ConvergenceInfo {
+            primal_inf: 1e-7,
+            dual_inf: 1e-7,
+            compl_inf: 1e-7,
+            mu: 1e-8,
+            objective: 5.0,
+            multiplier_sum: 0.0,
+            multiplier_count: 0,
+        };
+        let opts = SolverOptions::default();
+        // Not enough consecutive iterations
+        assert_eq!(
+            check_convergence(&info, &opts, opts.acceptable_iter - 1),
+            ConvergenceStatus::NotConverged
+        );
+    }
+
+    #[test]
+    fn test_convergence_dual_scaling() {
+        // Large multipliers should scale the dual tolerance
+        let info = ConvergenceInfo {
+            primal_inf: 1e-10,
+            dual_inf: 5e-5, // Would fail without scaling
+            compl_inf: 1e-10,
+            mu: 1e-11,
+            objective: 1.0,
+            multiplier_sum: 1e6, // Large multipliers
+            multiplier_count: 10,
+        };
+        let opts = SolverOptions::default();
+        // s_d = max(100, 1e6/10)/100 = 1e5/100 = 1000
+        // dual_tol = 1e-8 * 1000 = 1e-5
+        // 5e-5 > 1e-5, so not converged
+        assert_eq!(
+            check_convergence(&info, &opts, 0),
+            ConvergenceStatus::NotConverged
+        );
+
+        // With slightly smaller dual_inf it should pass
+        let info2 = ConvergenceInfo {
+            dual_inf: 5e-6,
+            ..info
+        };
+        assert_eq!(
+            check_convergence(&info2, &opts, 0),
+            ConvergenceStatus::Converged
+        );
+    }
+
+    #[test]
+    fn test_complementarity_error_no_bounds() {
+        let x = vec![1.0, 2.0];
+        let x_l = vec![f64::NEG_INFINITY; 2];
+        let x_u = vec![f64::INFINITY; 2];
+        let z_l = vec![0.0; 2];
+        let z_u = vec![0.0; 2];
+        let err = complementarity_error(&x, &x_l, &x_u, &z_l, &z_u, 0.0);
+        assert!((err).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_complementarity_error_at_optimality() {
+        // At optimality: (x - x_l) * z_l = mu
+        let mu = 0.01;
+        let x = vec![1.1]; // slack = 0.1
+        let x_l = vec![1.0];
+        let x_u = vec![f64::INFINITY];
+        let z_l = vec![mu / 0.1]; // z_l = mu/slack = 0.1
+        let z_u = vec![0.0];
+        let err = complementarity_error(&x, &x_l, &x_u, &z_l, &z_u, mu);
+        assert!(err < 1e-12, "At optimality, complementarity error should be ~0, got {}", err);
+    }
+
+    #[test]
+    fn test_complementarity_error_away_from_optimality() {
+        let mu = 0.01;
+        let x = vec![1.5]; // slack = 0.5
+        let x_l = vec![1.0];
+        let x_u = vec![f64::INFINITY];
+        let z_l = vec![1.0]; // z_l * slack = 0.5 >> mu
+        let z_u = vec![0.0];
+        let err = complementarity_error(&x, &x_l, &x_u, &z_l, &z_u, mu);
+        // err = |0.5 * 1.0 - 0.01| = 0.49
+        assert!((err - 0.49).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_dual_infeasibility_stationarity() {
+        // Exact stationarity: grad_f + J^T * lambda - z_l + z_u = 0
+        let n = 2;
+        let grad_f = vec![1.0, 2.0];
+        let jac_rows = vec![0, 0];
+        let jac_cols = vec![0, 1];
+        let jac_vals = vec![1.0, 1.0]; // J = [1, 1]
+        let lambda = vec![-0.5]; // J^T * lambda = [-0.5, -0.5]
+        // residual = [1.0 + (-0.5), 2.0 + (-0.5)] - z_l + z_u
+        // Need z_l, z_u such that residual = 0
+        let z_l = vec![0.5, 1.5];
+        let z_u = vec![0.0, 0.0];
+        let di = dual_infeasibility(&grad_f, &jac_rows, &jac_cols, &jac_vals, &lambda, &z_l, &z_u, n);
+        assert!(di < 1e-12, "Exact stationarity should give 0, got {}", di);
+
+        // Nonzero case
+        let z_l2 = vec![0.0, 0.0];
+        let di2 = dual_infeasibility(&grad_f, &jac_rows, &jac_cols, &jac_vals, &lambda, &z_l2, &z_u, n);
+        assert!(di2 > 0.1, "Non-stationary should give positive dual_inf");
+    }
 }

@@ -236,3 +236,169 @@ pub trait LinearSolver {
     /// Whether this solver can report inertia.
     fn provides_inertia(&self) -> bool;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_zeros_creates_correct_size() {
+        // n=0
+        let m = SymmetricMatrix::zeros(0);
+        assert_eq!(m.n, 0);
+        assert_eq!(m.data.len(), 0);
+        // n=1
+        let m = SymmetricMatrix::zeros(1);
+        assert_eq!(m.n, 1);
+        assert_eq!(m.data.len(), 1);
+        // n=4
+        let m = SymmetricMatrix::zeros(4);
+        assert_eq!(m.n, 4);
+        assert_eq!(m.data.len(), 10); // 4*5/2
+    }
+
+    #[test]
+    fn test_packed_index_j_zero() {
+        // Regression: old formula j*(j-1)/2 underflowed for j=0 with usize
+        // New formula: j*n - j*(j+1)/2 + i
+        // For n=3, (0,0) should be index 0
+        assert_eq!(SymmetricMatrix::packed_index(3, 0, 0), 0);
+        // (1,0) should be 1
+        assert_eq!(SymmetricMatrix::packed_index(3, 1, 0), 1);
+        // (2,0) should be 2
+        assert_eq!(SymmetricMatrix::packed_index(3, 2, 0), 2);
+        // (1,1) should be 3
+        assert_eq!(SymmetricMatrix::packed_index(3, 1, 1), 3);
+        // (2,1) should be 4
+        assert_eq!(SymmetricMatrix::packed_index(3, 2, 1), 4);
+        // (2,2) should be 5
+        assert_eq!(SymmetricMatrix::packed_index(3, 2, 2), 5);
+    }
+
+    #[test]
+    fn test_get_set_symmetry() {
+        let mut m = SymmetricMatrix::zeros(3);
+        m.set(2, 1, 7.5);
+        assert!((m.get(2, 1) - 7.5).abs() < 1e-15);
+        assert!((m.get(1, 2) - 7.5).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_add_accumulates() {
+        let mut m = SymmetricMatrix::zeros(2);
+        m.set(0, 0, 3.0);
+        m.add(0, 0, 2.0);
+        assert!((m.get(0, 0) - 5.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_add_diagonal() {
+        let mut m = SymmetricMatrix::zeros(3);
+        m.add_diagonal(5.0);
+        for i in 0..3 {
+            assert!((m.get(i, i) - 5.0).abs() < 1e-15);
+        }
+        // Off-diagonal should remain 0
+        assert!((m.get(1, 0)).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_add_diagonal_range() {
+        let mut m = SymmetricMatrix::zeros(4);
+        m.add_diagonal_range(1, 3, 2.0);
+        assert!((m.get(0, 0)).abs() < 1e-15);
+        assert!((m.get(1, 1) - 2.0).abs() < 1e-15);
+        assert!((m.get(2, 2) - 2.0).abs() < 1e-15);
+        assert!((m.get(3, 3)).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_matvec_identity() {
+        let mut m = SymmetricMatrix::zeros(3);
+        for i in 0..3 {
+            m.set(i, i, 1.0);
+        }
+        let x = [2.0, 3.0, 4.0];
+        let mut y = [0.0; 3];
+        m.matvec(&x, &mut y);
+        for i in 0..3 {
+            assert!((y[i] - x[i]).abs() < 1e-15);
+        }
+    }
+
+    #[test]
+    fn test_matvec_symmetric() {
+        // A = [[2, 1, 0], [1, 3, 1], [0, 1, 4]]
+        let mut m = SymmetricMatrix::zeros(3);
+        m.set(0, 0, 2.0);
+        m.set(1, 0, 1.0);
+        m.set(1, 1, 3.0);
+        m.set(2, 1, 1.0);
+        m.set(2, 2, 4.0);
+        let x = [1.0, 2.0, 3.0];
+        let mut y = [0.0; 3];
+        m.matvec(&x, &mut y);
+        // y = [2*1+1*2+0*3, 1*1+3*2+1*3, 0*1+1*2+4*3] = [4, 10, 14]
+        assert!((y[0] - 4.0).abs() < 1e-15);
+        assert!((y[1] - 10.0).abs() < 1e-15);
+        assert!((y[2] - 14.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_matvec_zero_vector() {
+        let mut m = SymmetricMatrix::zeros(3);
+        m.set(0, 0, 5.0);
+        m.set(1, 1, 3.0);
+        let x = [0.0, 0.0, 0.0];
+        let mut y = [0.0; 3];
+        m.matvec(&x, &mut y);
+        for i in 0..3 {
+            assert!((y[i]).abs() < 1e-15);
+        }
+    }
+
+    #[test]
+    fn test_to_full_round_trip() {
+        let mut m = SymmetricMatrix::zeros(3);
+        m.set(0, 0, 1.0);
+        m.set(1, 0, 2.0);
+        m.set(1, 1, 3.0);
+        m.set(2, 0, 4.0);
+        m.set(2, 1, 5.0);
+        m.set(2, 2, 6.0);
+        let full = m.to_full();
+        assert!((full[0][0] - 1.0).abs() < 1e-15);
+        assert!((full[0][1] - 2.0).abs() < 1e-15);
+        assert!((full[1][0] - 2.0).abs() < 1e-15);
+        assert!((full[1][1] - 3.0).abs() < 1e-15);
+        assert!((full[0][2] - 4.0).abs() < 1e-15);
+        assert!((full[2][0] - 4.0).abs() < 1e-15);
+        assert!((full[2][2] - 6.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_eigenvalues_identity() {
+        let mut m = SymmetricMatrix::zeros(3);
+        for i in 0..3 {
+            m.set(i, i, 1.0);
+        }
+        let eigs = m.eigenvalues();
+        assert_eq!(eigs.len(), 3);
+        for e in &eigs {
+            assert!((e - 1.0).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn test_eigenvalues_known_spectrum() {
+        // [[2, 1], [1, 2]] has eigenvalues 1 and 3
+        let mut m = SymmetricMatrix::zeros(2);
+        m.set(0, 0, 2.0);
+        m.set(1, 0, 1.0);
+        m.set(1, 1, 2.0);
+        let eigs = m.eigenvalues();
+        assert_eq!(eigs.len(), 2);
+        assert!((eigs[0] - 1.0).abs() < 1e-10);
+        assert!((eigs[1] - 3.0).abs() < 1e-10);
+    }
+}

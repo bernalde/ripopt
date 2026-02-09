@@ -777,3 +777,490 @@ fn multiple_equality_constraints() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// 7. Inequality only
+//    min x1^2 + x2^2 s.t. x1 + x2 >= 1
+//    x* = (0.5, 0.5), f* = 0.5
+// ---------------------------------------------------------------------------
+
+struct InequalityOnly;
+
+impl NlpProblem for InequalityOnly {
+    fn num_variables(&self) -> usize { 2 }
+    fn num_constraints(&self) -> usize { 1 }
+    fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+        x_l.iter_mut().for_each(|v| *v = f64::NEG_INFINITY);
+        x_u.iter_mut().for_each(|v| *v = f64::INFINITY);
+    }
+    fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+        g_l[0] = 1.0;
+        g_u[0] = f64::INFINITY;
+    }
+    fn initial_point(&self, x0: &mut [f64]) { x0[0] = 0.0; x0[1] = 0.0; }
+    fn objective(&self, x: &[f64]) -> f64 { x[0] * x[0] + x[1] * x[1] }
+    fn gradient(&self, x: &[f64], grad: &mut [f64]) { grad[0] = 2.0 * x[0]; grad[1] = 2.0 * x[1]; }
+    fn constraints(&self, x: &[f64], g: &mut [f64]) { g[0] = x[0] + x[1]; }
+    fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) { (vec![0, 0], vec![0, 1]) }
+    fn jacobian_values(&self, _x: &[f64], vals: &mut [f64]) { vals[0] = 1.0; vals[1] = 1.0; }
+    fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) { (vec![0, 1], vec![0, 1]) }
+    fn hessian_values(&self, _x: &[f64], obj_factor: f64, _lambda: &[f64], vals: &mut [f64]) {
+        vals[0] = obj_factor * 2.0;
+        vals[1] = obj_factor * 2.0;
+    }
+}
+
+#[test]
+fn inequality_only() {
+    let problem = InequalityOnly;
+    let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
+    let result = ripopt::solve(&problem, &options);
+    assert!(result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        "Got {:?}", result.status);
+    assert!((result.objective - 0.5).abs() < 1e-3, "f*={}", result.objective);
+}
+
+// ---------------------------------------------------------------------------
+// 8. Nonlinear equality
+//    min x1 + x2 s.t. x1^2 + x2^2 = 1
+//    x* = (-1/sqrt(2), -1/sqrt(2)), f* = -sqrt(2)
+// ---------------------------------------------------------------------------
+
+struct NonlinearEquality;
+
+impl NlpProblem for NonlinearEquality {
+    fn num_variables(&self) -> usize { 2 }
+    fn num_constraints(&self) -> usize { 1 }
+    fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+        x_l.iter_mut().for_each(|v| *v = f64::NEG_INFINITY);
+        x_u.iter_mut().for_each(|v| *v = f64::INFINITY);
+    }
+    fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) { g_l[0] = 1.0; g_u[0] = 1.0; }
+    fn initial_point(&self, x0: &mut [f64]) { x0[0] = -0.5; x0[1] = -0.5; }
+    fn objective(&self, x: &[f64]) -> f64 { x[0] + x[1] }
+    fn gradient(&self, _x: &[f64], grad: &mut [f64]) { grad[0] = 1.0; grad[1] = 1.0; }
+    fn constraints(&self, x: &[f64], g: &mut [f64]) { g[0] = x[0] * x[0] + x[1] * x[1]; }
+    fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) { (vec![0, 0], vec![0, 1]) }
+    fn jacobian_values(&self, x: &[f64], vals: &mut [f64]) { vals[0] = 2.0 * x[0]; vals[1] = 2.0 * x[1]; }
+    fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) { (vec![0, 1], vec![0, 1]) }
+    fn hessian_values(&self, _x: &[f64], _obj_factor: f64, lambda: &[f64], vals: &mut [f64]) {
+        vals[0] = lambda[0] * 2.0;
+        vals[1] = lambda[0] * 2.0;
+    }
+}
+
+#[test]
+fn nonlinear_equality() {
+    let problem = NonlinearEquality;
+    let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
+    let result = ripopt::solve(&problem, &options);
+    assert!(result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        "Got {:?}", result.status);
+    let expected = -(2.0_f64.sqrt());
+    assert!((result.objective - expected).abs() < 1e-3, "f*={}, expected {}", result.objective, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 9. Single variable
+//    min (x-3)^2, n=1, no constraints, no bounds
+//    x* = 3, f* = 0
+// ---------------------------------------------------------------------------
+
+struct SingleVariable;
+
+impl NlpProblem for SingleVariable {
+    fn num_variables(&self) -> usize { 1 }
+    fn num_constraints(&self) -> usize { 0 }
+    fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) { x_l[0] = f64::NEG_INFINITY; x_u[0] = f64::INFINITY; }
+    fn constraint_bounds(&self, _g_l: &mut [f64], _g_u: &mut [f64]) {}
+    fn initial_point(&self, x0: &mut [f64]) { x0[0] = 0.0; }
+    fn objective(&self, x: &[f64]) -> f64 { (x[0] - 3.0) * (x[0] - 3.0) }
+    fn gradient(&self, x: &[f64], grad: &mut [f64]) { grad[0] = 2.0 * (x[0] - 3.0); }
+    fn constraints(&self, _x: &[f64], _g: &mut [f64]) {}
+    fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) { (vec![], vec![]) }
+    fn jacobian_values(&self, _x: &[f64], _vals: &mut [f64]) {}
+    fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) { (vec![0], vec![0]) }
+    fn hessian_values(&self, _x: &[f64], obj_factor: f64, _lambda: &[f64], vals: &mut [f64]) {
+        vals[0] = obj_factor * 2.0;
+    }
+}
+
+#[test]
+fn single_variable() {
+    let problem = SingleVariable;
+    let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
+    let result = ripopt::solve(&problem, &options);
+    assert!(result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable);
+    assert!((result.x[0] - 3.0).abs() < 1e-4);
+    assert!(result.objective.abs() < 1e-6);
+}
+
+// ---------------------------------------------------------------------------
+// 10. Linear objective with bounds
+//     min -x1 - x2, 0 <= xi <= 1
+//     x* = (1, 1), f* = -2
+// ---------------------------------------------------------------------------
+
+struct LinearObjectiveWithBounds;
+
+impl NlpProblem for LinearObjectiveWithBounds {
+    fn num_variables(&self) -> usize { 2 }
+    fn num_constraints(&self) -> usize { 0 }
+    fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+        x_l[0] = 0.0; x_l[1] = 0.0;
+        x_u[0] = 1.0; x_u[1] = 1.0;
+    }
+    fn constraint_bounds(&self, _g_l: &mut [f64], _g_u: &mut [f64]) {}
+    fn initial_point(&self, x0: &mut [f64]) { x0[0] = 0.5; x0[1] = 0.5; }
+    fn objective(&self, x: &[f64]) -> f64 { -x[0] - x[1] }
+    fn gradient(&self, _x: &[f64], grad: &mut [f64]) { grad[0] = -1.0; grad[1] = -1.0; }
+    fn constraints(&self, _x: &[f64], _g: &mut [f64]) {}
+    fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) { (vec![], vec![]) }
+    fn jacobian_values(&self, _x: &[f64], _vals: &mut [f64]) {}
+    fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) { (vec![], vec![]) }
+    fn hessian_values(&self, _x: &[f64], _obj_factor: f64, _lambda: &[f64], _vals: &mut [f64]) {}
+}
+
+#[test]
+fn linear_objective_with_bounds() {
+    let problem = LinearObjectiveWithBounds;
+    let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
+    let result = ripopt::solve(&problem, &options);
+    assert!(result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable);
+    assert!((result.objective - (-2.0)).abs() < 1e-3, "f*={}", result.objective);
+}
+
+// ---------------------------------------------------------------------------
+// 11. Mixed equality and inequality
+//     min x1^2 + x2^2 + x3^2
+//     s.t. x1 + x2 + x3 = 3 (equality)
+//          x1 - x2 >= 0     (inequality)
+//     x* = (1, 1, 1), f* = 3.0
+// ---------------------------------------------------------------------------
+
+struct MixedEqualityInequality;
+
+impl NlpProblem for MixedEqualityInequality {
+    fn num_variables(&self) -> usize { 3 }
+    fn num_constraints(&self) -> usize { 2 }
+    fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+        for i in 0..3 { x_l[i] = f64::NEG_INFINITY; x_u[i] = f64::INFINITY; }
+    }
+    fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+        g_l[0] = 3.0; g_u[0] = 3.0;
+        g_l[1] = 0.0; g_u[1] = f64::INFINITY;
+    }
+    fn initial_point(&self, x0: &mut [f64]) { x0[0] = 2.0; x0[1] = 0.5; x0[2] = 0.5; }
+    fn objective(&self, x: &[f64]) -> f64 { x[0] * x[0] + x[1] * x[1] + x[2] * x[2] }
+    fn gradient(&self, x: &[f64], grad: &mut [f64]) {
+        grad[0] = 2.0 * x[0]; grad[1] = 2.0 * x[1]; grad[2] = 2.0 * x[2];
+    }
+    fn constraints(&self, x: &[f64], g: &mut [f64]) { g[0] = x[0] + x[1] + x[2]; g[1] = x[0] - x[1]; }
+    fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+        (vec![0, 0, 0, 1, 1], vec![0, 1, 2, 0, 1])
+    }
+    fn jacobian_values(&self, _x: &[f64], vals: &mut [f64]) {
+        vals[0] = 1.0; vals[1] = 1.0; vals[2] = 1.0; vals[3] = 1.0; vals[4] = -1.0;
+    }
+    fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) { (vec![0, 1, 2], vec![0, 1, 2]) }
+    fn hessian_values(&self, _x: &[f64], obj_factor: f64, _lambda: &[f64], vals: &mut [f64]) {
+        vals[0] = obj_factor * 2.0; vals[1] = obj_factor * 2.0; vals[2] = obj_factor * 2.0;
+    }
+}
+
+#[test]
+fn mixed_equality_inequality() {
+    let problem = MixedEqualityInequality;
+    let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
+    let result = ripopt::solve(&problem, &options);
+    assert!(result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        "Got {:?}", result.status);
+    assert!((result.objective - 3.0).abs() < 1e-2, "f*={}", result.objective);
+}
+
+// ---------------------------------------------------------------------------
+// 12. Quadratic equality constraint
+//     min x1 + x2 s.t. x1^2 + x2^2 = 4
+//     x* = (-sqrt(2), -sqrt(2)), f* = -2*sqrt(2)
+// ---------------------------------------------------------------------------
+
+struct QuadraticEqualityConstraint;
+
+impl NlpProblem for QuadraticEqualityConstraint {
+    fn num_variables(&self) -> usize { 2 }
+    fn num_constraints(&self) -> usize { 1 }
+    fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+        for i in 0..2 { x_l[i] = f64::NEG_INFINITY; x_u[i] = f64::INFINITY; }
+    }
+    fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) { g_l[0] = 4.0; g_u[0] = 4.0; }
+    fn initial_point(&self, x0: &mut [f64]) { x0[0] = -1.0; x0[1] = -1.0; }
+    fn objective(&self, x: &[f64]) -> f64 { x[0] + x[1] }
+    fn gradient(&self, _x: &[f64], grad: &mut [f64]) { grad[0] = 1.0; grad[1] = 1.0; }
+    fn constraints(&self, x: &[f64], g: &mut [f64]) { g[0] = x[0] * x[0] + x[1] * x[1]; }
+    fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) { (vec![0, 0], vec![0, 1]) }
+    fn jacobian_values(&self, x: &[f64], vals: &mut [f64]) { vals[0] = 2.0 * x[0]; vals[1] = 2.0 * x[1]; }
+    fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) { (vec![0, 1], vec![0, 1]) }
+    fn hessian_values(&self, _x: &[f64], _obj_factor: f64, lambda: &[f64], vals: &mut [f64]) {
+        vals[0] = lambda[0] * 2.0; vals[1] = lambda[0] * 2.0;
+    }
+}
+
+#[test]
+fn quadratic_equality_constraint() {
+    let problem = QuadraticEqualityConstraint;
+    let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
+    let result = ripopt::solve(&problem, &options);
+    assert!(result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        "Got {:?}", result.status);
+    let expected = -2.0 * 2.0_f64.sqrt();
+    assert!((result.objective - expected).abs() < 1e-3, "f*={}, expected {}", result.objective, expected);
+}
+
+// ---------------------------------------------------------------------------
+// 13. Starting at optimum
+//     min x1^2 + x2^2, start at x* = (0, 0), f* = 0
+// ---------------------------------------------------------------------------
+
+struct StartingAtOptimum;
+
+impl NlpProblem for StartingAtOptimum {
+    fn num_variables(&self) -> usize { 2 }
+    fn num_constraints(&self) -> usize { 0 }
+    fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+        for i in 0..2 { x_l[i] = f64::NEG_INFINITY; x_u[i] = f64::INFINITY; }
+    }
+    fn constraint_bounds(&self, _g_l: &mut [f64], _g_u: &mut [f64]) {}
+    fn initial_point(&self, x0: &mut [f64]) { x0[0] = 0.0; x0[1] = 0.0; }
+    fn objective(&self, x: &[f64]) -> f64 { x[0] * x[0] + x[1] * x[1] }
+    fn gradient(&self, x: &[f64], grad: &mut [f64]) { grad[0] = 2.0 * x[0]; grad[1] = 2.0 * x[1]; }
+    fn constraints(&self, _x: &[f64], _g: &mut [f64]) {}
+    fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) { (vec![], vec![]) }
+    fn jacobian_values(&self, _x: &[f64], _vals: &mut [f64]) {}
+    fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) { (vec![0, 1], vec![0, 1]) }
+    fn hessian_values(&self, _x: &[f64], obj_factor: f64, _lambda: &[f64], vals: &mut [f64]) {
+        vals[0] = obj_factor * 2.0; vals[1] = obj_factor * 2.0;
+    }
+}
+
+#[test]
+fn starting_at_optimum() {
+    let problem = StartingAtOptimum;
+    let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
+    let result = ripopt::solve(&problem, &options);
+    assert!(result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable);
+    assert!(result.objective < 1e-6);
+    assert!(result.iterations <= 30, "Should converge fast, took {} iters", result.iterations);
+}
+
+// ---------------------------------------------------------------------------
+// 14. High dimensional (n=20)
+//     min sum (xi - i)^2, i=1..20, 0 <= xi <= 100
+//     x* = (1, 2, ..., 20), f* = 0
+// ---------------------------------------------------------------------------
+
+struct HighDimensional;
+
+impl NlpProblem for HighDimensional {
+    fn num_variables(&self) -> usize { 20 }
+    fn num_constraints(&self) -> usize { 0 }
+    fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+        for i in 0..20 { x_l[i] = 0.0; x_u[i] = 100.0; }
+    }
+    fn constraint_bounds(&self, _g_l: &mut [f64], _g_u: &mut [f64]) {}
+    fn initial_point(&self, x0: &mut [f64]) { for i in 0..20 { x0[i] = 50.0; } }
+    fn objective(&self, x: &[f64]) -> f64 {
+        (0..20).map(|i| (x[i] - (i as f64 + 1.0)).powi(2)).sum()
+    }
+    fn gradient(&self, x: &[f64], grad: &mut [f64]) {
+        for i in 0..20 { grad[i] = 2.0 * (x[i] - (i as f64 + 1.0)); }
+    }
+    fn constraints(&self, _x: &[f64], _g: &mut [f64]) {}
+    fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) { (vec![], vec![]) }
+    fn jacobian_values(&self, _x: &[f64], _vals: &mut [f64]) {}
+    fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+        let indices: Vec<usize> = (0..20).collect();
+        (indices.clone(), indices)
+    }
+    fn hessian_values(&self, _x: &[f64], obj_factor: f64, _lambda: &[f64], vals: &mut [f64]) {
+        for v in vals.iter_mut() { *v = obj_factor * 2.0; }
+    }
+}
+
+#[test]
+fn high_dimensional() {
+    let problem = HighDimensional;
+    let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
+    let result = ripopt::solve(&problem, &options);
+    assert!(result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable);
+    assert!(result.objective < 1e-4, "f*={}", result.objective);
+    for i in 0..20 {
+        assert!((result.x[i] - (i as f64 + 1.0)).abs() < 1e-2,
+            "x[{}]={}, expected {}", i, result.x[i], i as f64 + 1.0);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 15. Upper bound inequality
+//     min -x1 s.t. x1^2 <= 4
+//     x* = 2, f* = -2
+// ---------------------------------------------------------------------------
+
+struct UpperBoundInequality;
+
+impl NlpProblem for UpperBoundInequality {
+    fn num_variables(&self) -> usize { 1 }
+    fn num_constraints(&self) -> usize { 1 }
+    fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+        x_l[0] = f64::NEG_INFINITY; x_u[0] = f64::INFINITY;
+    }
+    fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+        g_l[0] = f64::NEG_INFINITY; g_u[0] = 4.0;
+    }
+    fn initial_point(&self, x0: &mut [f64]) { x0[0] = 1.0; }
+    fn objective(&self, x: &[f64]) -> f64 { -x[0] }
+    fn gradient(&self, _x: &[f64], grad: &mut [f64]) { grad[0] = -1.0; }
+    fn constraints(&self, x: &[f64], g: &mut [f64]) { g[0] = x[0] * x[0]; }
+    fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) { (vec![0], vec![0]) }
+    fn jacobian_values(&self, x: &[f64], vals: &mut [f64]) { vals[0] = 2.0 * x[0]; }
+    fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) { (vec![0], vec![0]) }
+    fn hessian_values(&self, _x: &[f64], _obj_factor: f64, lambda: &[f64], vals: &mut [f64]) {
+        vals[0] = lambda[0] * 2.0;
+    }
+}
+
+#[test]
+fn upper_bound_inequality() {
+    let problem = UpperBoundInequality;
+    let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
+    let result = ripopt::solve(&problem, &options);
+    assert!(result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        "Got {:?}", result.status);
+    assert!((result.objective - (-2.0)).abs() < 1e-2, "f*={}", result.objective);
+}
+
+// ---------------------------------------------------------------------------
+// 16. Many active bounds (concave objective)
+//     min sum -(xi - 10)^2, 0 <= xi <= 5
+//     x* = (5,...,5), f* = -200
+// ---------------------------------------------------------------------------
+
+struct ManyActiveBounds;
+
+impl NlpProblem for ManyActiveBounds {
+    fn num_variables(&self) -> usize { 8 }
+    fn num_constraints(&self) -> usize { 0 }
+    fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+        for i in 0..8 { x_l[i] = 0.0; x_u[i] = 5.0; }
+    }
+    fn constraint_bounds(&self, _g_l: &mut [f64], _g_u: &mut [f64]) {}
+    fn initial_point(&self, x0: &mut [f64]) { for i in 0..8 { x0[i] = 2.5; } }
+    fn objective(&self, x: &[f64]) -> f64 {
+        (0..8).map(|i| -(x[i] - 10.0).powi(2)).sum()
+    }
+    fn gradient(&self, x: &[f64], grad: &mut [f64]) {
+        for i in 0..8 { grad[i] = -2.0 * (x[i] - 10.0); }
+    }
+    fn constraints(&self, _x: &[f64], _g: &mut [f64]) {}
+    fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) { (vec![], vec![]) }
+    fn jacobian_values(&self, _x: &[f64], _vals: &mut [f64]) {}
+    fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+        let indices: Vec<usize> = (0..8).collect();
+        (indices.clone(), indices)
+    }
+    fn hessian_values(&self, _x: &[f64], obj_factor: f64, _lambda: &[f64], vals: &mut [f64]) {
+        for v in vals.iter_mut() { *v = obj_factor * (-2.0); }
+    }
+}
+
+#[test]
+fn many_active_bounds() {
+    let problem = ManyActiveBounds;
+    let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
+    let result = ripopt::solve(&problem, &options);
+    assert!(result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        "Got {:?}", result.status);
+    // Concave minimization: IPM finds a KKT point at a vertex.
+    // Both x=0 (f=-800) and x=5 (f=-200) are valid KKT points.
+    assert!(result.objective <= -200.0 + 1.0, "f*={}", result.objective);
+    // All variables should be at a bound (0 or 5)
+    for i in 0..8 {
+        assert!(result.x[i] < 0.1 || (result.x[i] - 5.0).abs() < 0.1,
+            "x[{}]={} should be at a bound", i, result.x[i]);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 17. Infeasible equality (should not crash)
+//     x1 = 1 AND x1 = 2 — contradictory constraints
+// ---------------------------------------------------------------------------
+
+struct InfeasibleEquality;
+
+impl NlpProblem for InfeasibleEquality {
+    fn num_variables(&self) -> usize { 1 }
+    fn num_constraints(&self) -> usize { 2 }
+    fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+        x_l[0] = f64::NEG_INFINITY; x_u[0] = f64::INFINITY;
+    }
+    fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+        g_l[0] = 1.0; g_u[0] = 1.0;
+        g_l[1] = 2.0; g_u[1] = 2.0;
+    }
+    fn initial_point(&self, x0: &mut [f64]) { x0[0] = 1.5; }
+    fn objective(&self, x: &[f64]) -> f64 { x[0] * x[0] }
+    fn gradient(&self, x: &[f64], grad: &mut [f64]) { grad[0] = 2.0 * x[0]; }
+    fn constraints(&self, x: &[f64], g: &mut [f64]) { g[0] = x[0]; g[1] = x[0]; }
+    fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) { (vec![0, 1], vec![0, 0]) }
+    fn jacobian_values(&self, _x: &[f64], vals: &mut [f64]) { vals[0] = 1.0; vals[1] = 1.0; }
+    fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) { (vec![0], vec![0]) }
+    fn hessian_values(&self, _x: &[f64], obj_factor: f64, _lambda: &[f64], vals: &mut [f64]) {
+        vals[0] = obj_factor * 2.0;
+    }
+}
+
+#[test]
+fn infeasible_equality() {
+    let problem = InfeasibleEquality;
+    let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
+    let result = ripopt::solve(&problem, &options);
+    assert!(result.status != SolveStatus::Optimal,
+        "Infeasible problem should not return Optimal");
+}
+
+// ---------------------------------------------------------------------------
+// 18. Zero Hessian (linear program)
+//     min -x1 - 2*x2 s.t. x1 + x2 <= 4, x1 >= 0, x2 >= 0
+//     x* = (0, 4), f* = -8
+// ---------------------------------------------------------------------------
+
+struct ZeroHessianLP;
+
+impl NlpProblem for ZeroHessianLP {
+    fn num_variables(&self) -> usize { 2 }
+    fn num_constraints(&self) -> usize { 1 }
+    fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+        x_l[0] = 0.0; x_l[1] = 0.0;
+        x_u[0] = f64::INFINITY; x_u[1] = f64::INFINITY;
+    }
+    fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+        g_l[0] = f64::NEG_INFINITY; g_u[0] = 4.0;
+    }
+    fn initial_point(&self, x0: &mut [f64]) { x0[0] = 1.0; x0[1] = 1.0; }
+    fn objective(&self, x: &[f64]) -> f64 { -x[0] - 2.0 * x[1] }
+    fn gradient(&self, _x: &[f64], grad: &mut [f64]) { grad[0] = -1.0; grad[1] = -2.0; }
+    fn constraints(&self, x: &[f64], g: &mut [f64]) { g[0] = x[0] + x[1]; }
+    fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) { (vec![0, 0], vec![0, 1]) }
+    fn jacobian_values(&self, _x: &[f64], vals: &mut [f64]) { vals[0] = 1.0; vals[1] = 1.0; }
+    fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) { (vec![], vec![]) }
+    fn hessian_values(&self, _x: &[f64], _obj_factor: f64, _lambda: &[f64], _vals: &mut [f64]) {}
+}
+
+#[test]
+fn zero_hessian_linear_program() {
+    let problem = ZeroHessianLP;
+    let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
+    let result = ripopt::solve(&problem, &options);
+    assert!(result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        "Got {:?}", result.status);
+    assert!((result.objective - (-8.0)).abs() < 0.1, "f*={}", result.objective);
+}

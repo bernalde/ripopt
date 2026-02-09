@@ -255,4 +255,111 @@ mod tests {
         // Positive directional derivative -> no switching
         assert!(!filter.switching_condition(1e-4, 1.0, 1.0));
     }
+
+    #[test]
+    fn test_armijo_condition() {
+        let filter = Filter::new(100.0);
+        // phi_trial <= phi_current + eta_phi * alpha * grad_phi_step
+        // eta_phi = 1e-4
+        let phi_current = 10.0;
+        let grad_phi_step = -1.0;
+        let alpha = 1.0;
+        // Threshold: 10.0 + 1e-4 * 1.0 * (-1.0) = 9.9999
+        assert!(filter.armijo_condition(phi_current, 9.0, grad_phi_step, alpha));
+        assert!(!filter.armijo_condition(phi_current, 10.0, grad_phi_step, alpha));
+    }
+
+    #[test]
+    fn test_sufficient_infeasibility_reduction() {
+        let filter = Filter::new(100.0);
+        // gamma_theta = 1e-5
+        // theta_trial <= (1 - 1e-5) * theta_current
+        let theta_current = 1.0;
+        assert!(filter.sufficient_infeasibility_reduction(theta_current, 0.5));
+        assert!(!filter.sufficient_infeasibility_reduction(theta_current, 1.0));
+    }
+
+    #[test]
+    fn test_check_acceptability_switching_mode() {
+        let mut filter = Filter::new(100.0);
+        filter.set_theta_min_from_initial(10.0);
+        // Small theta + negative grad_phi_step → switching condition
+        // Then Armijo must pass
+        let theta_current = 1e-5;
+        let phi_current = 10.0;
+        let theta_trial = 1e-6;
+        let phi_trial = 9.0; // Satisfies Armijo
+        let grad_phi_step = -100.0; // Strong descent
+        let alpha = 1.0;
+
+        let (accept, switching) = filter.check_acceptability(
+            theta_current, phi_current, theta_trial, phi_trial, grad_phi_step, alpha,
+        );
+        assert!(accept, "Should be accepted via Armijo");
+        assert!(switching, "Should use switching condition");
+    }
+
+    #[test]
+    fn test_check_acceptability_filter_mode() {
+        let mut filter = Filter::new(100.0);
+        filter.set_theta_min_from_initial(10.0);
+        // Large theta → no switching → use filter
+        let theta_current = 5.0;
+        let phi_current = 10.0;
+        let theta_trial = 2.0; // Sufficient reduction
+        let phi_trial = 10.0;
+        let grad_phi_step = -0.01; // Weak descent
+        let alpha = 1.0;
+
+        let (accept, switching) = filter.check_acceptability(
+            theta_current, phi_current, theta_trial, phi_trial, grad_phi_step, alpha,
+        );
+        assert!(accept, "Should be accepted via filter mode");
+        assert!(!switching, "Should NOT use switching");
+    }
+
+    #[test]
+    fn test_check_acceptability_rejected() {
+        let mut filter = Filter::new(100.0);
+        filter.set_theta_min_from_initial(10.0);
+        // Add a filter entry that dominates the trial
+        filter.add(0.5, 5.0);
+        // Trial point is worse than filter
+        let (accept, _) = filter.check_acceptability(
+            1.0, 10.0, 0.6, 6.0, -0.01, 1.0,
+        );
+        assert!(!accept, "Should be rejected by filter");
+    }
+
+    #[test]
+    fn test_filter_dominated_entry_removal() {
+        let mut filter = Filter::new(100.0);
+        // Use entries that don't dominate each other: one has lower theta, other has lower phi
+        filter.add(0.5, 10.0);
+        filter.add(2.0, 5.0);
+        assert_eq!(filter.len(), 2);
+        // Add an entry that dominates both
+        filter.add(0.01, 0.01);
+        // The dominating entry should have removed both
+        assert!(filter.len() <= 2);
+        // The new entry should be in the filter
+        assert!(filter.is_acceptable(0.005, -1.0));
+    }
+
+    #[test]
+    fn test_fraction_to_boundary_edge_cases() {
+        // All positive steps → alpha = 1.0
+        let s = vec![1.0, 2.0, 0.5];
+        let ds = vec![0.1, 0.5, 0.3];
+        let tau = 0.99;
+        let alpha = fraction_to_boundary(&s, &ds, tau);
+        assert!((alpha - 1.0).abs() < 1e-12);
+
+        // Tight constraint: s = [0.01], ds = [-1.0]
+        let s2 = vec![0.01];
+        let ds2 = vec![-1.0];
+        let alpha2 = fraction_to_boundary(&s2, &ds2, tau);
+        // alpha = -tau * s / ds = 0.99 * 0.01 / 1.0 = 0.0099
+        assert!((alpha2 - 0.0099).abs() < 1e-12);
+    }
 }

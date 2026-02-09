@@ -321,3 +321,162 @@ impl RestorationPhase {
         Some(step)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::options::SolverOptions;
+
+    fn default_opts() -> SolverOptions {
+        SolverOptions {
+            print_level: 0,
+            ..SolverOptions::default()
+        }
+    }
+
+    #[test]
+    fn test_restoration_no_constraints() {
+        let mut phase = RestorationPhase::new(50);
+        let x = vec![1.0, 2.0];
+        let x_l = vec![f64::NEG_INFINITY; 2];
+        let x_u = vec![f64::INFINITY; 2];
+        let opts = default_opts();
+
+        let (x_new, success) = phase.restore(
+            &x, &x_l, &x_u, &[], &[],
+            &[], &[], 2, 0, &opts,
+            &|_theta, _phi| true,
+            &|_x, _g| {},
+            &|_x, _vals| {},
+        );
+
+        assert!(success, "No constraints → immediate success");
+        assert!((x_new[0] - 1.0).abs() < 1e-15);
+        assert!((x_new[1] - 2.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_restoration_already_feasible() {
+        let mut phase = RestorationPhase::new(50);
+        let x = vec![0.5, 0.5];
+        let x_l = vec![f64::NEG_INFINITY; 2];
+        let x_u = vec![f64::INFINITY; 2];
+        let g_l = vec![1.0]; // g = x0 + x1 = 1.0 = g_l → feasible
+        let g_u = vec![1.0];
+        let jac_rows = vec![0, 0];
+        let jac_cols = vec![0, 1];
+        let opts = default_opts();
+
+        let (_, success) = phase.restore(
+            &x, &x_l, &x_u, &g_l, &g_u,
+            &jac_rows, &jac_cols, 2, 1, &opts,
+            &|_theta, _phi| true,
+            &|x, g| { g[0] = x[0] + x[1]; },
+            &|_x, vals| { vals[0] = 1.0; vals[1] = 1.0; },
+        );
+
+        assert!(success, "Already feasible → success");
+    }
+
+    #[test]
+    fn test_restoration_linear_equality() {
+        // g(x) = x0 + x1 = 1, from x = (0, 0)
+        let mut phase = RestorationPhase::new(100);
+        let x = vec![0.0, 0.0];
+        let x_l = vec![f64::NEG_INFINITY; 2];
+        let x_u = vec![f64::INFINITY; 2];
+        let g_l = vec![1.0];
+        let g_u = vec![1.0];
+        let jac_rows = vec![0, 0];
+        let jac_cols = vec![0, 1];
+        let opts = default_opts();
+
+        let (x_new, success) = phase.restore(
+            &x, &x_l, &x_u, &g_l, &g_u,
+            &jac_rows, &jac_cols, 2, 1, &opts,
+            &|_theta, _phi| true,
+            &|x, g| { g[0] = x[0] + x[1]; },
+            &|_x, vals| { vals[0] = 1.0; vals[1] = 1.0; },
+        );
+
+        assert!(success, "Linear equality should be restored");
+        let g_val = x_new[0] + x_new[1];
+        assert!((g_val - 1.0).abs() < 1e-6,
+            "Constraint should be satisfied: g = {}", g_val);
+    }
+
+    #[test]
+    fn test_restoration_linear_inequality() {
+        // g(x) = x0 >= 2, from x = (0)
+        let mut phase = RestorationPhase::new(100);
+        let x = vec![0.0];
+        let x_l = vec![f64::NEG_INFINITY];
+        let x_u = vec![f64::INFINITY];
+        let g_l = vec![2.0];
+        let g_u = vec![f64::INFINITY];
+        let jac_rows = vec![0];
+        let jac_cols = vec![0];
+        let opts = default_opts();
+
+        let (x_new, success) = phase.restore(
+            &x, &x_l, &x_u, &g_l, &g_u,
+            &jac_rows, &jac_cols, 1, 1, &opts,
+            &|_theta, _phi| true,
+            &|x, g| { g[0] = x[0]; },
+            &|_x, vals| { vals[0] = 1.0; },
+        );
+
+        assert!(success, "Linear inequality should be restored");
+        assert!(x_new[0] >= 2.0 - 1e-6,
+            "Should satisfy x >= 2, got {}", x_new[0]);
+    }
+
+    #[test]
+    fn test_restoration_with_bounds() {
+        // g(x) = x0 + x1 = 5, from x = (0, 0), with bounds 0 <= xi <= 3
+        let mut phase = RestorationPhase::new(100);
+        let x = vec![0.5, 0.5];
+        let x_l = vec![0.0, 0.0];
+        let x_u = vec![3.0, 3.0];
+        let g_l = vec![5.0];
+        let g_u = vec![5.0];
+        let jac_rows = vec![0, 0];
+        let jac_cols = vec![0, 1];
+        let opts = default_opts();
+
+        let (x_new, _success) = phase.restore(
+            &x, &x_l, &x_u, &g_l, &g_u,
+            &jac_rows, &jac_cols, 2, 1, &opts,
+            &|_theta, _phi| true,
+            &|x, g| { g[0] = x[0] + x[1]; },
+            &|_x, vals| { vals[0] = 1.0; vals[1] = 1.0; },
+        );
+
+        // Verify bounds are respected
+        for i in 0..2 {
+            assert!(x_new[i] >= x_l[i], "x[{}] = {} below lower bound", i, x_new[i]);
+            assert!(x_new[i] <= x_u[i], "x[{}] = {} above upper bound", i, x_new[i]);
+        }
+    }
+
+    #[test]
+    fn test_restoration_active_flag() {
+        let mut phase = RestorationPhase::new(50);
+        assert!(!phase.is_active(), "Should not be active initially");
+
+        let x = vec![1.0];
+        let x_l = vec![f64::NEG_INFINITY];
+        let x_u = vec![f64::INFINITY];
+        let opts = default_opts();
+
+        phase.restore(
+            &x, &x_l, &x_u, &[], &[],
+            &[], &[], 1, 0, &opts,
+            &|_theta, _phi| true,
+            &|_x, _g| {},
+            &|_x, _vals| {},
+        );
+
+        assert!(!phase.is_active(), "Should not be active after restore completes");
+    }
+}

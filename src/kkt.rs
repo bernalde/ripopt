@@ -402,3 +402,344 @@ pub fn recover_dz(
 
     (dz_l, dz_u)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::linear_solver::dense::DenseLdl;
+
+    #[test]
+    fn test_compute_sigma_no_bounds() {
+        let x = vec![1.0, 2.0];
+        let x_l = vec![f64::NEG_INFINITY, f64::NEG_INFINITY];
+        let x_u = vec![f64::INFINITY, f64::INFINITY];
+        let z_l = vec![0.0, 0.0];
+        let z_u = vec![0.0, 0.0];
+        let sigma = compute_sigma(&x, &x_l, &x_u, &z_l, &z_u);
+        assert!((sigma[0]).abs() < 1e-15);
+        assert!((sigma[1]).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_compute_sigma_lower_bound_only() {
+        let x = vec![1.5];
+        let x_l = vec![1.0];
+        let x_u = vec![f64::INFINITY];
+        let z_l = vec![2.0];
+        let z_u = vec![0.0];
+        let sigma = compute_sigma(&x, &x_l, &x_u, &z_l, &z_u);
+        // sigma = z_l / (x - x_l) = 2.0 / 0.5 = 4.0
+        assert!((sigma[0] - 4.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_compute_sigma_both_bounds() {
+        let x = vec![1.5];
+        let x_l = vec![1.0];
+        let x_u = vec![2.0];
+        let z_l = vec![2.0];
+        let z_u = vec![3.0];
+        let sigma = compute_sigma(&x, &x_l, &x_u, &z_l, &z_u);
+        // sigma = 2.0/0.5 + 3.0/0.5 = 4.0 + 6.0 = 10.0
+        assert!((sigma[0] - 10.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_compute_sigma_at_bound_clamped() {
+        let x = vec![1.0]; // At lower bound
+        let x_l = vec![1.0];
+        let x_u = vec![f64::INFINITY];
+        let z_l = vec![1.0];
+        let z_u = vec![0.0];
+        let sigma = compute_sigma(&x, &x_l, &x_u, &z_l, &z_u);
+        // slack = max(0, 1e-20) = 1e-20, sigma = 1.0/1e-20 = 1e20
+        assert!(sigma[0] > 1e19);
+    }
+
+    #[test]
+    fn test_assemble_kkt_unconstrained() {
+        // 2 vars, no constraints
+        // H = [[2, 0], [0, 3]]
+        let n = 2;
+        let m = 0;
+        let hess_rows = vec![0, 1];
+        let hess_cols = vec![0, 1];
+        let hess_vals = vec![2.0, 3.0];
+        let sigma = vec![1.0, 2.0];
+        let grad_f = vec![0.5, 0.5];
+        let x = vec![1.0, 2.0];
+        let x_l = vec![f64::NEG_INFINITY; 2];
+        let x_u = vec![f64::INFINITY; 2];
+        let z_l = vec![0.0; 2];
+        let z_u = vec![0.0; 2];
+
+        let kkt = assemble_kkt(
+            n, m, &hess_rows, &hess_cols, &hess_vals,
+            &[], &[], &[], &sigma, &grad_f,
+            &[], &[], &[], &[], &z_l, &z_u,
+            &x, &x_l, &x_u, 0.1,
+        );
+
+        assert_eq!(kkt.dim, 2);
+        // (1,1) block: H + Sigma = [[3, 0], [0, 5]]
+        assert!((kkt.matrix.get(0, 0) - 3.0).abs() < 1e-12);
+        assert!((kkt.matrix.get(1, 1) - 5.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_assemble_kkt_equality_constraint() {
+        // 2 vars, 1 equality constraint: x0 + x1 = 1
+        let n = 2;
+        let m = 1;
+        let hess_rows = vec![0, 1];
+        let hess_cols = vec![0, 1];
+        let hess_vals = vec![2.0, 2.0];
+        let jac_rows = vec![0, 0];
+        let jac_cols = vec![0, 1];
+        let jac_vals = vec![1.0, 1.0];
+        let sigma = vec![0.0; 2];
+        let grad_f = vec![1.0, 1.0];
+        let g = vec![0.7]; // current constraint value
+        let g_l = vec![1.0];
+        let g_u = vec![1.0];
+        let y = vec![0.5];
+        let x = vec![0.3, 0.4];
+        let x_l = vec![f64::NEG_INFINITY; 2];
+        let x_u = vec![f64::INFINITY; 2];
+        let z_l = vec![0.0; 2];
+        let z_u = vec![0.0; 2];
+
+        let kkt = assemble_kkt(
+            n, m, &hess_rows, &hess_cols, &hess_vals,
+            &jac_rows, &jac_cols, &jac_vals, &sigma, &grad_f,
+            &g, &g_l, &g_u, &y, &z_l, &z_u,
+            &x, &x_l, &x_u, 0.1,
+        );
+
+        assert_eq!(kkt.dim, 3);
+        // Verify J block: matrix[2,0] and matrix[2,1] should be 1.0
+        assert!((kkt.matrix.get(2, 0) - 1.0).abs() < 1e-12);
+        assert!((kkt.matrix.get(2, 1) - 1.0).abs() < 1e-12);
+        // Equality constraint: (2,2) block should be 0
+        assert!((kkt.matrix.get(2, 2)).abs() < 1e-12);
+        // Primal residual: -(g - g_l) = -(0.7 - 1.0) = 0.3
+        assert!((kkt.rhs[2] - 0.3).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_assemble_kkt_rhs_sign_convention() {
+        // Regression: J^T*y must be subtracted from r_d
+        let n = 1;
+        let m = 1;
+        let hess_rows = vec![0];
+        let hess_cols = vec![0];
+        let hess_vals = vec![1.0];
+        let jac_rows = vec![0];
+        let jac_cols = vec![0];
+        let jac_vals = vec![2.0]; // J = [2]
+        let sigma = vec![0.0];
+        let grad_f = vec![3.0];
+        let g = vec![1.0];
+        let g_l = vec![1.0];
+        let g_u = vec![1.0];
+        let y = vec![1.0];
+        let x = vec![1.0];
+        let x_l = vec![f64::NEG_INFINITY];
+        let x_u = vec![f64::INFINITY];
+        let z_l = vec![0.0];
+        let z_u = vec![0.0];
+
+        let kkt = assemble_kkt(
+            n, m, &hess_rows, &hess_cols, &hess_vals,
+            &jac_rows, &jac_cols, &jac_vals, &sigma, &grad_f,
+            &g, &g_l, &g_u, &y, &z_l, &z_u,
+            &x, &x_l, &x_u, 0.1,
+        );
+
+        // r_d = -grad_f + z_l - z_u = -3.0 + 0 - 0 = -3.0
+        // Then subtract J^T * y: -3.0 - 2.0*1.0 = -5.0
+        assert!((kkt.rhs[0] - (-5.0)).abs() < 1e-12,
+            "RHS sign convention: expected -5.0, got {}", kkt.rhs[0]);
+    }
+
+    #[test]
+    fn test_assemble_kkt_inequality_constraint() {
+        // Feasible inequality: g(x) = 2.0, g_l = 1.0, g_u = INF
+        let n = 1;
+        let m = 1;
+        let hess_rows = vec![0];
+        let hess_cols = vec![0];
+        let hess_vals = vec![1.0];
+        let jac_rows = vec![0];
+        let jac_cols = vec![0];
+        let jac_vals = vec![1.0];
+        let sigma = vec![0.0];
+        let grad_f = vec![0.0];
+        let g = vec![2.0]; // feasible: 2.0 > 1.0
+        let g_l = vec![1.0];
+        let g_u = vec![f64::INFINITY];
+        let y = vec![0.0];
+        let x = vec![2.0];
+        let x_l = vec![f64::NEG_INFINITY];
+        let x_u = vec![f64::INFINITY];
+        let z_l = vec![0.0];
+        let z_u = vec![0.0];
+        let mu = 0.1;
+
+        let kkt = assemble_kkt(
+            n, m, &hess_rows, &hess_cols, &hess_vals,
+            &jac_rows, &jac_cols, &jac_vals, &sigma, &grad_f,
+            &g, &g_l, &g_u, &y, &z_l, &z_u,
+            &x, &x_l, &x_u, mu,
+        );
+
+        // (2,2) block should be negative (from -Σ_s^{-1})
+        assert!(kkt.matrix.get(1, 1) < 0.0,
+            "Inequality (2,2) block should be negative, got {}", kkt.matrix.get(1, 1));
+    }
+
+    #[test]
+    fn test_factor_with_inertia_correction_good() {
+        // KKT matrix with correct inertia (2, 1, 0) — no perturbation needed
+        let n = 2;
+        let m = 1;
+        let mut matrix = SymmetricMatrix::zeros(3);
+        matrix.set(0, 0, 2.0);
+        matrix.set(1, 1, 2.0);
+        matrix.set(2, 0, 1.0);
+        matrix.set(2, 1, 1.0);
+
+        let mut kkt = KktSystem {
+            dim: 3, n, m,
+            matrix,
+            rhs: vec![1.0, 2.0, 3.0],
+        };
+        let mut solver = DenseLdl::new();
+        let mut params = InertiaCorrectionParams::default();
+
+        let (delta_w, delta_c) = factor_with_inertia_correction(&mut kkt, &mut solver, &mut params).unwrap();
+        assert!((delta_w).abs() < 1e-15, "Good inertia should need no delta_w");
+        assert!((delta_c).abs() < 1e-15, "Good inertia should need no delta_c");
+    }
+
+    #[test]
+    fn test_factor_with_inertia_correction_needs_perturbation() {
+        // Matrix with wrong inertia: all positive (3, 0, 0) instead of (2, 1, 0)
+        let n = 2;
+        let m = 1;
+        let mut matrix = SymmetricMatrix::zeros(3);
+        matrix.set(0, 0, 2.0);
+        matrix.set(1, 1, 2.0);
+        matrix.set(2, 2, 1.0); // Positive instead of 0
+        matrix.set(2, 0, 0.1);
+        matrix.set(2, 1, 0.1);
+
+        let mut kkt = KktSystem {
+            dim: 3, n, m,
+            matrix,
+            rhs: vec![1.0, 2.0, 3.0],
+        };
+        let mut solver = DenseLdl::new();
+        let mut params = InertiaCorrectionParams::default();
+
+        let (delta_w, _delta_c) = factor_with_inertia_correction(&mut kkt, &mut solver, &mut params).unwrap();
+        assert!(delta_w > 0.0, "Wrong inertia should require delta_w > 0");
+    }
+
+    #[test]
+    fn test_factor_with_inertia_correction_warm_start() {
+        // Use delta_w_last to warm-start perturbation
+        let n = 2;
+        let m = 1;
+        let mut matrix = SymmetricMatrix::zeros(3);
+        matrix.set(0, 0, 2.0);
+        matrix.set(1, 1, 2.0);
+        matrix.set(2, 2, 1.0);
+        matrix.set(2, 0, 0.1);
+        matrix.set(2, 1, 0.1);
+
+        let mut kkt = KktSystem {
+            dim: 3, n, m,
+            matrix,
+            rhs: vec![1.0, 2.0, 3.0],
+        };
+        let mut solver = DenseLdl::new();
+        let mut params = InertiaCorrectionParams::default();
+        params.delta_w_last = 1.0; // Warm-start from previous
+
+        let (delta_w, _) = factor_with_inertia_correction(&mut kkt, &mut solver, &mut params).unwrap();
+        // Should start from delta_w_last / growth = 1.0 / 8.0 = 0.125
+        assert!(delta_w >= 0.125 - 1e-10, "Warm-start should begin from delta_w_last/growth");
+    }
+
+    #[test]
+    fn test_solve_for_direction_simple() {
+        // Create a simple 2-var, 1-constraint KKT system and solve
+        let n = 2;
+        let m = 1;
+        let mut matrix = SymmetricMatrix::zeros(3);
+        matrix.set(0, 0, 2.0);
+        matrix.set(1, 1, 2.0);
+        matrix.set(2, 0, 1.0);
+        matrix.set(2, 1, 1.0);
+
+        let rhs = vec![1.0, 2.0, 0.5];
+        let kkt = KktSystem {
+            dim: 3, n, m,
+            matrix: matrix.clone(),
+            rhs: rhs.clone(),
+        };
+
+        let mut solver = DenseLdl::new();
+        solver.factor(&matrix).unwrap();
+
+        let (dx, dy) = solve_for_direction(&kkt, &mut solver).unwrap();
+        assert_eq!(dx.len(), 2);
+        assert_eq!(dy.len(), 1);
+
+        // Verify KKT * [dx; dy] ≈ rhs
+        let mut sol = vec![0.0; 3];
+        sol[..2].copy_from_slice(&dx);
+        sol[2] = dy[0];
+        let mut ax = vec![0.0; 3];
+        matrix.matvec(&sol, &mut ax);
+        for i in 0..3 {
+            assert!((ax[i] - rhs[i]).abs() < 1e-8,
+                "KKT*solution mismatch at {}: {} vs {}", i, ax[i], rhs[i]);
+        }
+    }
+
+    #[test]
+    fn test_recover_dz_no_bounds() {
+        let x = vec![1.0, 2.0];
+        let x_l = vec![f64::NEG_INFINITY; 2];
+        let x_u = vec![f64::INFINITY; 2];
+        let z_l = vec![0.0; 2];
+        let z_u = vec![0.0; 2];
+        let dx = vec![0.1, 0.2];
+        let (dz_l, dz_u) = recover_dz(&x, &x_l, &x_u, &z_l, &z_u, &dx, 0.1);
+        for i in 0..2 {
+            assert!((dz_l[i]).abs() < 1e-15);
+            assert!((dz_u[i]).abs() < 1e-15);
+        }
+    }
+
+    #[test]
+    fn test_recover_dz_lower_bound() {
+        let x = vec![1.5];
+        let x_l = vec![1.0];
+        let x_u = vec![f64::INFINITY];
+        let z_l = vec![2.0];
+        let z_u = vec![0.0];
+        let dx = vec![0.1];
+        let mu = 0.1;
+        let (dz_l, _) = recover_dz(&x, &x_l, &x_u, &z_l, &z_u, &dx, mu);
+        // s_l = 0.5
+        // dz_l = (mu - z_l*s_l)/s_l - (z_l/s_l)*dx
+        //      = (0.1 - 2.0*0.5)/0.5 - (2.0/0.5)*0.1
+        //      = (0.1 - 1.0)/0.5 - 4.0*0.1
+        //      = -0.9/0.5 - 0.4
+        //      = -1.8 - 0.4 = -2.2
+        assert!((dz_l[0] - (-2.2)).abs() < 1e-12);
+    }
+}
