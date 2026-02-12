@@ -17,8 +17,10 @@ pub enum ConvergenceStatus {
 pub struct ConvergenceInfo {
     /// Primal infeasibility: max |c_i(x)| for violated constraints.
     pub primal_inf: f64,
-    /// Dual infeasibility: ||grad_f + J^T y - z||_inf.
+    /// Dual infeasibility: ||grad_f + J^T y - z||_inf (using z_opt for scaled check).
     pub dual_inf: f64,
+    /// Dual infeasibility using iterative z (for unscaled gate).
+    pub dual_inf_unscaled: f64,
     /// Complementarity: max |x_i * z_i - mu|.
     pub compl_inf: f64,
     /// Current barrier parameter.
@@ -55,26 +57,33 @@ pub fn check_convergence(
     let dual_tol = options.tol * s_d;
     let compl_tol = options.tol * s_d;
 
-    // Ipopt-style unscaled dual infeasibility threshold (dual_inf_tol).
-    // Even if the scaled check passes (using z_opt), the unscaled check
-    // with iterative z must also pass. This prevents false convergence
-    // where z_opt absorbs huge gradient residuals into bound multipliers.
-    // Check strict convergence
-    if info.primal_inf <= primal_tol
+    // Strict convergence: BOTH scaled AND unscaled must pass.
+    // Scaled check uses z_opt for dual_inf (fast convergence for LPs/QPs).
+    // Unscaled check uses iterative z for dual_inf (catches false convergence
+    // where z_opt absorbs gradient residuals into bound multipliers).
+    let scaled_ok = info.primal_inf <= primal_tol
         && info.dual_inf <= dual_tol
-        && info.compl_inf <= compl_tol
-    {
+        && info.compl_inf <= compl_tol;
+    let unscaled_ok = info.primal_inf <= options.constr_viol_tol
+        && info.dual_inf_unscaled <= options.dual_inf_tol
+        && info.compl_inf <= options.compl_inf_tol;
+    if scaled_ok && unscaled_ok {
         return ConvergenceStatus::Converged;
     }
 
-    // Check acceptable convergence (also scaled)
+    // Check acceptable convergence: BOTH scaled AND unscaled must pass.
     let acc_primal_tol = options.acceptable_tol;
     let acc_dual_tol = options.acceptable_tol * s_d;
     let acc_compl_tol = options.acceptable_tol * s_d;
 
-    if info.primal_inf <= acc_primal_tol
+    let acc_scaled_ok = info.primal_inf <= acc_primal_tol
         && info.dual_inf <= acc_dual_tol
-        && info.compl_inf <= acc_compl_tol
+        && info.compl_inf <= acc_compl_tol;
+    let acc_unscaled_ok = info.primal_inf <= options.acceptable_constr_viol_tol
+        && info.dual_inf_unscaled <= options.acceptable_dual_inf_tol
+        && info.compl_inf <= options.acceptable_compl_inf_tol;
+
+    if acc_scaled_ok && acc_unscaled_ok
         && consecutive_acceptable >= options.acceptable_iter
     {
         return ConvergenceStatus::Acceptable;
@@ -168,6 +177,52 @@ pub fn complementarity_error(
     max_err
 }
 
+/// Compute full complementarity error including constraint slack complementarity.
+///
+/// In addition to variable bound complementarity (x-x_l)*z_l and (x_u-x)*z_u,
+/// this also checks constraint slack complementarity for inequality constraints:
+/// - Lower-bounded: (g(x) - g_l) * max(y[i], 0)
+/// - Upper-bounded: (g_u - g(x)) * max(-y[i], 0)
+/// - Equality constraints are skipped.
+#[allow(clippy::too_many_arguments)]
+pub fn complementarity_error_full(
+    x: &[f64],
+    x_l: &[f64],
+    x_u: &[f64],
+    z_l: &[f64],
+    z_u: &[f64],
+    g: &[f64],
+    g_l: &[f64],
+    g_u: &[f64],
+    y: &[f64],
+    mu: f64,
+) -> f64 {
+    // Start with variable bound complementarity
+    let mut max_err = complementarity_error(x, x_l, x_u, z_l, z_u, mu);
+
+    // Add constraint slack complementarity for inequality constraints
+    let m = g.len();
+    for i in 0..m {
+        let is_equality = g_l[i].is_finite()
+            && g_u[i].is_finite()
+            && (g_l[i] - g_u[i]).abs() < 1e-15;
+        if is_equality {
+            continue;
+        }
+        if g_l[i].is_finite() {
+            let slack = g[i] - g_l[i];
+            let mult = y[i].max(0.0);
+            max_err = max_err.max((slack * mult - mu).abs());
+        }
+        if g_u[i].is_finite() {
+            let slack = g_u[i] - g[i];
+            let mult = (-y[i]).max(0.0);
+            max_err = max_err.max((slack * mult - mu).abs());
+        }
+    }
+    max_err
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,6 +248,7 @@ mod tests {
         let info = ConvergenceInfo {
             primal_inf: 1e-10,
             dual_inf: 1e-10,
+            dual_inf_unscaled: 1e-10,
             compl_inf: 1e-10,
             mu: 1e-11,
             objective: 17.0,
@@ -211,6 +267,7 @@ mod tests {
         let info = ConvergenceInfo {
             primal_inf: 1e-3,
             dual_inf: 1e-3,
+            dual_inf_unscaled: 1e-3,
             compl_inf: 1e-3,
             mu: 0.01,
             objective: 17.0,
@@ -229,6 +286,7 @@ mod tests {
         let info = ConvergenceInfo {
             primal_inf: 1e-3,
             dual_inf: 1e-3,
+            dual_inf_unscaled: 1e-3,
             compl_inf: 1e-3,
             mu: 1e-11,
             objective: 1e21,
@@ -247,6 +305,7 @@ mod tests {
         let info = ConvergenceInfo {
             primal_inf: 1e-7,
             dual_inf: 1e-7,
+            dual_inf_unscaled: 1e-7,
             compl_inf: 1e-7,
             mu: 1e-8,
             objective: 5.0,
@@ -266,6 +325,7 @@ mod tests {
         let info = ConvergenceInfo {
             primal_inf: 1e-7,
             dual_inf: 1e-7,
+            dual_inf_unscaled: 1e-7,
             compl_inf: 1e-7,
             mu: 1e-8,
             objective: 5.0,
@@ -286,6 +346,7 @@ mod tests {
         let info = ConvergenceInfo {
             primal_inf: 1e-10,
             dual_inf: 5e-5, // Would fail without scaling
+            dual_inf_unscaled: 5e-5,
             compl_inf: 1e-10,
             mu: 1e-11,
             objective: 1.0,
@@ -304,6 +365,38 @@ mod tests {
         // With slightly smaller dual_inf it should pass
         let info2 = ConvergenceInfo {
             dual_inf: 5e-6,
+            dual_inf_unscaled: 5e-6,
+            ..info
+        };
+        assert_eq!(
+            check_convergence(&info2, &opts, 0),
+            ConvergenceStatus::Converged
+        );
+    }
+
+    #[test]
+    fn test_convergence_unscaled_gate_blocks_false_convergence() {
+        // z_opt says converged (dual_inf small), but iterative z says not (dual_inf_unscaled large)
+        let info = ConvergenceInfo {
+            primal_inf: 1e-10,
+            dual_inf: 1e-10, // z_opt-based: looks converged
+            dual_inf_unscaled: 5.0, // iterative z: clearly not converged (> dual_inf_tol=1.0)
+            compl_inf: 1e-10,
+            mu: 1e-11,
+            objective: 1.0,
+            multiplier_sum: 0.0,
+            multiplier_count: 0,
+        };
+        let opts = SolverOptions::default();
+        // Should NOT converge: unscaled gate blocks it
+        assert_eq!(
+            check_convergence(&info, &opts, 0),
+            ConvergenceStatus::NotConverged
+        );
+
+        // Now with unscaled also passing
+        let info2 = ConvergenceInfo {
+            dual_inf_unscaled: 0.5, // below dual_inf_tol=1.0
             ..info
         };
         assert_eq!(

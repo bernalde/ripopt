@@ -56,6 +56,9 @@ impl Filter {
     /// Check if a trial point (theta, phi) is acceptable to the filter.
     /// Returns true if the point is acceptable (not dominated by any filter entry).
     pub fn is_acceptable(&self, theta: f64, phi: f64) -> bool {
+        if theta.is_nan() || phi.is_nan() {
+            return false;
+        }
         if theta > self.theta_max {
             return false;
         }
@@ -80,8 +83,8 @@ impl Filter {
         grad_phi_step: f64,
         _alpha: f64,
     ) -> bool {
-        // grad_phi_step is the directional derivative of phi along the step
-        // (should be negative for descent)
+        // Switching condition per Ipopt Algorithm A (step A-4): no alpha factor.
+        // The directional derivative is already per-unit-alpha.
         grad_phi_step < 0.0
             && theta_current < self.theta_min
             && (-grad_phi_step).powf(self.s_phi) * self.delta
@@ -155,6 +158,16 @@ impl Filter {
     /// Reset the filter (used when barrier parameter decreases).
     pub fn reset(&mut self) {
         self.entries.clear();
+    }
+
+    /// Save filter entries for watchdog mechanism.
+    pub fn save_entries(&self) -> Vec<FilterEntry> {
+        self.entries.clone()
+    }
+
+    /// Restore filter entries (watchdog rollback).
+    pub fn restore_entries(&mut self, entries: Vec<FilterEntry>) {
+        self.entries = entries;
     }
 
     /// Number of entries in the filter.

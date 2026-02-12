@@ -1,4 +1,4 @@
-use crate::linear_solver::{LinearSolver, SymmetricMatrix};
+use crate::linear_solver::{LinearSolver, SolverError, SymmetricMatrix};
 
 /// Information about the KKT system structure.
 pub struct KktSystem {
@@ -160,7 +160,7 @@ pub fn assemble_kkt(
         }
 
         if any_feasible && sigma_s > 1e-20 {
-            let sigma_s_inv = 1.0 / sigma_s;
+            let sigma_s_inv = (1.0 / sigma_s).min(1e20);
             // (2,2) block: -Σ_s^{-1} (always negative, correct for KKT inertia)
             matrix.add(n + i, n + i, -sigma_s_inv);
             // RHS: Σ_s^{-1} * (y + μ/s_l - μ/s_u) + infeasible contributions
@@ -224,8 +224,8 @@ impl Default for InertiaCorrectionParams {
         Self {
             delta_w_init: 1e-4,
             delta_c_base: 1e-8,
-            delta_w_growth: 8.0,
-            max_attempts: 10,
+            delta_w_growth: 4.0,
+            max_attempts: 15,
             delta_w_last: 0.0,
         }
     }
@@ -401,6 +401,190 @@ pub fn recover_dz(
     }
 
     (dz_l, dz_u)
+}
+
+/// Condensed KKT system for m >> n problems (Schur complement).
+///
+/// Instead of factoring the full (n+m)×(n+m) KKT system, we condense to n×n:
+///   S = H + Σ + δ_w·I + J^T · D_c^{-1} · J
+///   S · dx = r_d + J^T · D_c^{-1} · r_p
+///   dy = D_c^{-1} · (J · dx - r_p)
+///
+/// where D_c is the (2,2) block diagonal (negative for inequalities).
+/// Cost: O(n²·m + n³) instead of O((n+m)³).
+pub struct CondensedKktSystem {
+    /// Condensed matrix S (n × n).
+    pub matrix: SymmetricMatrix,
+    /// Condensed RHS (n-vector).
+    pub rhs: Vec<f64>,
+    /// Number of primal variables.
+    pub n: usize,
+    /// Number of constraints.
+    pub m: usize,
+    /// D_c diagonal (m-vector, from the (2,2) block).
+    pub d_c: Vec<f64>,
+    /// Original primal RHS (n-vector).
+    pub rhs_primal: Vec<f64>,
+    /// Original constraint RHS (m-vector).
+    pub rhs_constraint: Vec<f64>,
+    /// Jacobian in COO format.
+    pub jac_rows: Vec<usize>,
+    pub jac_cols: Vec<usize>,
+    pub jac_vals: Vec<f64>,
+}
+
+/// Assemble the condensed (Schur complement) KKT system.
+///
+/// Takes the same inputs as `assemble_kkt` but produces an n×n system
+/// instead of (n+m)×(n+m).
+#[allow(clippy::too_many_arguments)]
+pub fn assemble_condensed_kkt(
+    n: usize,
+    m: usize,
+    hess_rows: &[usize],
+    hess_cols: &[usize],
+    hess_vals: &[f64],
+    jac_rows: &[usize],
+    jac_cols: &[usize],
+    jac_vals: &[f64],
+    sigma: &[f64],
+    grad_f: &[f64],
+    g: &[f64],
+    g_l: &[f64],
+    g_u: &[f64],
+    y: &[f64],
+    z_l: &[f64],
+    z_u: &[f64],
+    x: &[f64],
+    x_l: &[f64],
+    x_u: &[f64],
+    mu: f64,
+) -> CondensedKktSystem {
+    // First assemble the full KKT to get the (2,2) block and RHS
+    let full = assemble_kkt(
+        n, m, hess_rows, hess_cols, hess_vals,
+        jac_rows, jac_cols, jac_vals, sigma, grad_f,
+        g, g_l, g_u, y, z_l, z_u, x, x_l, x_u, mu,
+    );
+
+    let rhs_primal = full.rhs[..n].to_vec();
+    let rhs_constraint = full.rhs[n..].to_vec();
+
+    // Extract D_c diagonal from the (2,2) block
+    let mut d_c = vec![0.0; m];
+    for i in 0..m {
+        d_c[i] = full.matrix.get(n + i, n + i);
+    }
+
+    // Build the condensed matrix: S = (1,1) block + J^T · (-D_c)^{-1} · J
+    let mut matrix = SymmetricMatrix::zeros(n);
+
+    // Copy (1,1) block from full KKT
+    for i in 0..n {
+        for j in 0..=i {
+            matrix.set(i, j, full.matrix.get(i, j));
+        }
+    }
+
+    // Add J^T · (-D_c)^{-1} · J
+    // For each constraint i, if D_c[i] != 0, add (1/(-D_c[i])) * J[i,:] ⊗ J[i,:]
+    // Build dense J rows for efficiency
+    let mut j_dense = vec![0.0; m * n];
+    for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
+        j_dense[row * n + col] += jac_vals[idx];
+    }
+
+    for i in 0..m {
+        // For equality constraints (d_c ≈ 0), use a large penalty instead of
+        // skipping — dropping equalities from the Schur complement corrupts
+        // the solution for mixed equality/inequality problems.
+        let d_c_eff = if d_c[i].abs() < 1e-20 {
+            -1e-16  // equality: very stiff spring (inv = -1e16)
+        } else {
+            d_c[i]
+        };
+        let inv_neg_dc = 1.0 / (-d_c_eff); // -D_c is positive for inequalities
+        for p in 0..n {
+            let jp = j_dense[i * n + p];
+            if jp == 0.0 {
+                continue;
+            }
+            for q in 0..=p {
+                let jq = j_dense[i * n + q];
+                if jq != 0.0 {
+                    matrix.add(p, q, inv_neg_dc * jp * jq);
+                }
+            }
+        }
+    }
+
+    // Build condensed RHS: r_d + J^T · (-D_c)^{-1} · r_p
+    let mut rhs = rhs_primal.clone();
+    for i in 0..m {
+        let d_c_eff = if d_c[i].abs() < 1e-20 {
+            -1e-16
+        } else {
+            d_c[i]
+        };
+        let inv_neg_dc = 1.0 / (-d_c_eff);
+        let scaled_rp = inv_neg_dc * rhs_constraint[i];
+        for p in 0..n {
+            let jp = j_dense[i * n + p];
+            if jp != 0.0 {
+                rhs[p] += jp * scaled_rp;
+            }
+        }
+    }
+
+    CondensedKktSystem {
+        matrix,
+        rhs,
+        n,
+        m,
+        d_c,
+        rhs_primal,
+        rhs_constraint,
+        jac_rows: jac_rows.to_vec(),
+        jac_cols: jac_cols.to_vec(),
+        jac_vals: jac_vals.to_vec(),
+    }
+}
+
+/// Solve the condensed KKT system: compute dx from condensed, recover dy.
+pub fn solve_condensed(
+    condensed: &CondensedKktSystem,
+    solver: &mut dyn LinearSolver,
+) -> Result<(Vec<f64>, Vec<f64>), SolverError> {
+    let n = condensed.n;
+    let m = condensed.m;
+
+    // Solve S · dx = rhs_condensed
+    let mut dx = vec![0.0; n];
+    solver.solve(&condensed.rhs, &mut dx)?;
+
+    // Recover dy = (-D_c)^{-1} · (J · dx - r_p)
+    // First compute J · dx
+    let mut jdx = vec![0.0; m];
+    for (idx, (&row, &col)) in condensed
+        .jac_rows
+        .iter()
+        .zip(condensed.jac_cols.iter())
+        .enumerate()
+    {
+        jdx[row] += condensed.jac_vals[idx] * dx[col];
+    }
+
+    let mut dy = vec![0.0; m];
+    for i in 0..m {
+        let d_c_eff = if condensed.d_c[i].abs() < 1e-20 {
+            -1e-16  // equality: consistent with assembly
+        } else {
+            condensed.d_c[i]
+        };
+        dy[i] = (jdx[i] - condensed.rhs_constraint[i]) / (-d_c_eff);
+    }
+
+    Ok((dx, dy))
 }
 
 #[cfg(test)]
@@ -741,5 +925,66 @@ mod tests {
         //      = -0.9/0.5 - 0.4
         //      = -1.8 - 0.4 = -2.2
         assert!((dz_l[0] - (-2.2)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_condensed_kkt_matches_full() {
+        // 2 variables, 3 inequality constraints (m > n)
+        // min x0^2 + x1^2 s.t. x0 + x1 >= 1, x0 >= 0.2, x1 >= 0.3
+        let n = 2;
+        let m = 3;
+        let hess_rows = vec![0, 1];
+        let hess_cols = vec![0, 1];
+        let hess_vals = vec![2.0, 2.0];
+        let jac_rows = vec![0, 0, 1, 2];
+        let jac_cols = vec![0, 1, 0, 1];
+        let jac_vals = vec![1.0, 1.0, 1.0, 1.0];
+        let x = vec![0.6, 0.7];
+        let x_l = vec![f64::NEG_INFINITY; 2];
+        let x_u = vec![f64::INFINITY; 2];
+        let z_l = vec![0.0; 2];
+        let z_u = vec![0.0; 2];
+        let sigma = compute_sigma(&x, &x_l, &x_u, &z_l, &z_u);
+        let grad_f = vec![1.2, 1.4];
+        let g = vec![1.3, 0.6, 0.7];
+        let g_l = vec![1.0, 0.2, 0.3];
+        let g_u = vec![f64::INFINITY; 3];
+        let y = vec![0.1, 0.05, 0.05];
+        let mu = 0.01;
+
+        // Solve with full KKT
+        let mut full_kkt = assemble_kkt(
+            n, m, &hess_rows, &hess_cols, &hess_vals,
+            &jac_rows, &jac_cols, &jac_vals, &sigma, &grad_f,
+            &g, &g_l, &g_u, &y, &z_l, &z_u, &x, &x_l, &x_u, mu,
+        );
+        let mut full_solver = DenseLdl::new();
+        let mut params = InertiaCorrectionParams::default();
+        let _ = factor_with_inertia_correction(&mut full_kkt, &mut full_solver, &mut params);
+        let (dx_full, dy_full) = solve_for_direction(&full_kkt, &mut full_solver).unwrap();
+
+        // Solve with condensed KKT
+        let condensed = assemble_condensed_kkt(
+            n, m, &hess_rows, &hess_cols, &hess_vals,
+            &jac_rows, &jac_cols, &jac_vals, &sigma, &grad_f,
+            &g, &g_l, &g_u, &y, &z_l, &z_u, &x, &x_l, &x_u, mu,
+        );
+        let mut cond_solver = DenseLdl::new();
+        cond_solver.factor(&condensed.matrix).unwrap();
+        let (dx_cond, dy_cond) = solve_condensed(&condensed, &mut cond_solver).unwrap();
+
+        // Compare solutions
+        for i in 0..n {
+            assert!(
+                (dx_full[i] - dx_cond[i]).abs() < 1e-6,
+                "dx mismatch at {}: full={}, condensed={}", i, dx_full[i], dx_cond[i]
+            );
+        }
+        for i in 0..m {
+            assert!(
+                (dy_full[i] - dy_cond[i]).abs() < 1e-6,
+                "dy mismatch at {}: full={}, condensed={}", i, dy_full[i], dy_cond[i]
+            );
+        }
     }
 }

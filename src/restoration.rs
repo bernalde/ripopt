@@ -66,6 +66,10 @@ impl RestorationPhase {
         let jac_nnz = jac_rows.len();
         let mut jac_vals = vec![0.0; jac_nnz];
 
+        // Record initial constraint violation for stricter success criteria
+        eval_constraints(&x_rest, &mut g);
+        let theta_initial = convergence::primal_infeasibility(&g, g_l, g_u);
+
         for _iter in 0..self.max_iter {
             // Evaluate constraints at current point
             eval_constraints(&x_rest, &mut g);
@@ -232,18 +236,19 @@ impl RestorationPhase {
         let theta_final = convergence::primal_infeasibility(&g, g_l, g_u);
 
         self.active = false;
-        if theta_final < options.tol {
-            (x_rest, true)
-        } else {
-            // Return the improved point even if not fully feasible,
-            // as long as it's different from the input
-            let moved: f64 = x_rest
-                .iter()
-                .zip(x.iter())
-                .map(|(a, b)| (a - b).abs())
-                .fold(0.0f64, f64::max);
-            (x_rest, moved > 1e-14)
-        }
+        // Success if any of:
+        // 1. Constraint violation is below solver tolerance
+        // 2. Constraint violation is below constr_viol_tol AND improved by at least 50%
+        // 3. Point moved AND improved by at least 10% (incremental progress)
+        let moved: f64 = x_rest
+            .iter()
+            .zip(x.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f64, f64::max);
+        let success = theta_final < options.tol
+            || (theta_final < options.constr_viol_tol && theta_final < 0.5 * theta_initial)
+            || (moved > 1e-14 && theta_final < 0.9 * theta_initial);
+        (x_rest, success)
     }
 
     /// Compute Gauss-Newton step: dx = -J_a^T * (J_a * J_a^T + eps*I)^{-1} * v_a

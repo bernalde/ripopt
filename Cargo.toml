@@ -13,6 +13,7 @@ serde_json = "1"
 
 [features]
 ipopt-native = []
+cutest = []
 
 [[bin]]
 name = "hs_suite"
@@ -22,6 +23,11 @@ path = "hs_suite/run_ripopt.rs"
 name = "ipopt_native"
 path = "hs_suite/run_ipopt_native.rs"
 required-features = ["ipopt-native"]
+
+[[bin]]
+name = "cutest_suite"
+path = "cutest_suite/run_cutest.rs"
+required-features = ["cutest", "ipopt-native"]
 
 [dev-dependencies]
 approx = "0.5"
