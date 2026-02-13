@@ -235,6 +235,12 @@ pub trait LinearSolver {
 
     /// Whether this solver can report inertia.
     fn provides_inertia(&self) -> bool;
+
+    /// Return the minimum diagonal entry of D after LDL^T factorization.
+    /// Used for direct inertia correction on unconstrained problems.
+    fn min_diagonal(&self) -> Option<f64> {
+        None
+    }
 }
 
 #[cfg(test)]

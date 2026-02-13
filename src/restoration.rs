@@ -70,6 +70,9 @@ impl RestorationPhase {
         eval_constraints(&x_rest, &mut g);
         let theta_initial = convergence::primal_infeasibility(&g, g_l, g_u);
 
+        // Track consecutive failed line searches — only break after 3 (not 1)
+        let mut consecutive_ls_failures: usize = 0;
+
         for _iter in 0..self.max_iter {
             // Evaluate constraints at current point
             eval_constraints(&x_rest, &mut g);
@@ -112,17 +115,27 @@ impl RestorationPhase {
                 break;
             }
 
-            // Try Gauss-Newton step: dx = -J_a^T * (J_a * J_a^T + eps*I)^{-1} * v_a
-            let step = self.gauss_newton_step(
-                &jac_rows,
-                &jac_cols,
-                &jac_vals,
-                &violation,
-                &active_indices,
-                n,
-            );
+            // Try Gauss-Newton step with adaptive Levenberg-Marquardt regularization.
+            // Start with eps_factor=1e-8 (original value), increase by 10x on failure (up to 1e-2).
+            let mut gn_step = None;
+            let mut eps_factor = 1e-8;
+            while eps_factor <= 1e-2 {
+                gn_step = self.gauss_newton_step(
+                    &jac_rows,
+                    &jac_cols,
+                    &jac_vals,
+                    &violation,
+                    &active_indices,
+                    n,
+                    eps_factor,
+                );
+                if gn_step.is_some() {
+                    break;
+                }
+                eps_factor *= 10.0;
+            }
 
-            let step = match step {
+            let step = match gn_step {
                 Some(s) => s,
                 None => {
                     // Fall back to gradient descent: step = -J^T * violation
@@ -178,7 +191,9 @@ impl RestorationPhase {
                 alpha *= 0.5;
             }
 
-            if !found_decrease {
+            if found_decrease {
+                consecutive_ls_failures = 0;
+            } else {
                 // Gauss-Newton line search failed — try gradient descent as fallback
                 // step_gd = -J_a^T * violation_a (steepest descent on 0.5*||violation||^2)
                 let mut grad_step = vec![0.0; n];
@@ -225,8 +240,94 @@ impl RestorationPhase {
                     gd_alpha *= 0.5;
                 }
 
-                if !gd_found {
-                    break;
+                if gd_found {
+                    consecutive_ls_failures = 0;
+                } else {
+                    consecutive_ls_failures += 1;
+                    if consecutive_ls_failures >= 3 {
+                        break;
+                    }
+                    // Don't break yet — the Jacobian at the next point may yield a better direction
+                }
+            }
+        }
+
+        // Check constraint violation after GN phase
+        eval_constraints(&x_rest, &mut g);
+        let theta_after_gn = convergence::primal_infeasibility(&g, g_l, g_u);
+
+        // If GN didn't achieve adequate reduction, try penalty-regularized fallback.
+        // Minimizes 0.5*||violation||^2 + rho*||x - x_ref||^2 with increasing rho.
+        // The trust-region-like penalty prevents wandering too far from the starting point.
+        if theta_after_gn > options.constr_viol_tol && theta_after_gn > 0.5 * theta_initial {
+            let x_ref = x_rest.clone();
+            for &rho in &[1e-6, 1e-4, 1e-2] {
+                for _pen_iter in 0..50 {
+                    eval_constraints(&x_rest, &mut g);
+                    let theta_pen = convergence::primal_infeasibility(&g, g_l, g_u);
+                    if theta_pen < options.constr_viol_tol {
+                        break;
+                    }
+
+                    eval_jacobian(&x_rest, &mut jac_vals);
+
+                    // Compute violation
+                    let mut violation_pen = vec![0.0; m];
+                    let mut any_active = false;
+                    for i in 0..m {
+                        let is_eq = g_l[i].is_finite() && g_u[i].is_finite()
+                            && (g_l[i] - g_u[i]).abs() < 1e-15;
+                        if is_eq {
+                            violation_pen[i] = g[i] - g_l[i];
+                            any_active = true;
+                        } else if g_l[i].is_finite() && g[i] < g_l[i] {
+                            violation_pen[i] = g[i] - g_l[i];
+                            any_active = true;
+                        } else if g_u[i].is_finite() && g[i] > g_u[i] {
+                            violation_pen[i] = g[i] - g_u[i];
+                            any_active = true;
+                        }
+                    }
+                    if !any_active { break; }
+
+                    // Gradient = J^T * violation + rho * (x - x_ref)
+                    let mut pen_grad = vec![0.0; n];
+                    for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
+                        pen_grad[col] += jac_vals[idx] * violation_pen[row];
+                    }
+                    for i in 0..n {
+                        pen_grad[i] += rho * (x_rest[i] - x_ref[i]);
+                    }
+
+                    let grad_norm: f64 = pen_grad.iter().map(|v| v * v).sum::<f64>().sqrt();
+                    if grad_norm < 1e-20 { break; }
+
+                    // Steepest descent with Armijo backtracking
+                    let scale = if grad_norm > 10.0 { 10.0 / grad_norm } else { 1.0 };
+                    let mut pen_alpha = scale;
+                    let mut pen_found = false;
+                    let mut x_trial_pen = vec![0.0; n];
+                    let mut g_trial_pen = vec![0.0; m];
+                    for _ls in 0..20 {
+                        for i in 0..n {
+                            x_trial_pen[i] = x_rest[i] - pen_alpha * pen_grad[i];
+                            if x_l[i].is_finite() {
+                                x_trial_pen[i] = x_trial_pen[i].max(x_l[i] + 1e-8);
+                            }
+                            if x_u[i].is_finite() {
+                                x_trial_pen[i] = x_trial_pen[i].min(x_u[i] - 1e-8);
+                            }
+                        }
+                        eval_constraints(&x_trial_pen, &mut g_trial_pen);
+                        let theta_trial_pen = convergence::primal_infeasibility(&g_trial_pen, g_l, g_u);
+                        if theta_trial_pen < (1.0 - 1e-4 * pen_alpha) * theta_pen {
+                            x_rest.copy_from_slice(&x_trial_pen);
+                            pen_found = true;
+                            break;
+                        }
+                        pen_alpha *= 0.5;
+                    }
+                    if !pen_found { break; }
                 }
             }
         }
@@ -245,9 +346,9 @@ impl RestorationPhase {
             .zip(x.iter())
             .map(|(a, b)| (a - b).abs())
             .fold(0.0f64, f64::max);
-        let success = theta_final < options.tol
-            || (theta_final < options.constr_viol_tol && theta_final < 0.5 * theta_initial)
-            || (moved > 1e-14 && theta_final < 0.9 * theta_initial);
+        let success = theta_final < options.constr_viol_tol  // feasible enough for main loop
+            || (theta_final < 0.5 * theta_initial)  // >50% reduction is always good
+            || (moved > 1e-14 && theta_final < 0.9 * theta_initial);  // 10% improvement with movement
         (x_rest, success)
     }
 
@@ -255,6 +356,7 @@ impl RestorationPhase {
     ///
     /// where J_a is the Jacobian restricted to active (violated) constraints
     /// and v_a is the violation vector for active constraints.
+    /// `eps_factor` controls the Levenberg-Marquardt regularization strength.
     fn gauss_newton_step(
         &self,
         jac_rows: &[usize],
@@ -263,6 +365,7 @@ impl RestorationPhase {
         violation: &[f64],
         active_indices: &[usize],
         n: usize,
+        eps_factor: f64,
     ) -> Option<Vec<f64>> {
         let m_active = active_indices.len();
         if m_active == 0 {
@@ -299,7 +402,7 @@ impl RestorationPhase {
         let jjt_diag_max = (0..m_active)
             .map(|i| jjt.get(i, i).abs())
             .fold(0.0f64, f64::max);
-        let eps = 1e-8 * jjt_diag_max.max(1.0);
+        let eps = eps_factor * jjt_diag_max.max(1.0);
         jjt.add_diagonal(eps);
 
         // Solve (J_a * J_a^T + eps*I) * w = violation_a

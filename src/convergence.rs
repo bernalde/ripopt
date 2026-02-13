@@ -89,8 +89,9 @@ pub fn check_convergence(
         return ConvergenceStatus::Acceptable;
     }
 
-    // Check divergence
-    if info.objective.abs() > 1e20 {
+    // Check divergence (use 1e50 — constrained problems can have large feasible objectives,
+    // and transient excursions to large |obj| can occur during interior point iterations)
+    if info.objective.abs() > 1e50 {
         return ConvergenceStatus::Diverging;
     }
 
@@ -289,7 +290,7 @@ mod tests {
             dual_inf_unscaled: 1e-3,
             compl_inf: 1e-3,
             mu: 1e-11,
-            objective: 1e21,
+            objective: 1e51,
             multiplier_sum: 0.0,
             multiplier_count: 0,
         };

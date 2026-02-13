@@ -422,6 +422,37 @@ impl DenseLdl {
     }
 }
 
+impl DenseLdl {
+    /// Return the minimum diagonal entry of D after factorization.
+    /// For 2x2 blocks, returns the minimum eigenvalue of the block.
+    /// Returns None if not factored or n=0.
+    pub fn min_diagonal(&self) -> Option<f64> {
+        if !self.factored || self.n == 0 {
+            return None;
+        }
+        let mut min_d = f64::INFINITY;
+        let mut k = 0;
+        while k < self.n {
+            if k + 1 < self.n && self.d_offdiag[k].abs() > self.zero_pivot_tol {
+                // 2x2 block: use eigenvalues
+                let a = self.d[k];
+                let b = self.d_offdiag[k];
+                let c = self.d[k + 1];
+                let trace = a + c;
+                let det = a * c - b * b;
+                let disc = (trace * trace - 4.0 * det).max(0.0).sqrt();
+                let eig_min = (trace - disc) / 2.0;
+                min_d = min_d.min(eig_min);
+                k += 2;
+            } else {
+                min_d = min_d.min(self.d[k]);
+                k += 1;
+            }
+        }
+        Some(min_d)
+    }
+}
+
 impl LinearSolver for DenseLdl {
     fn factor(&mut self, matrix: &SymmetricMatrix) -> Result<Option<Inertia>, SolverError> {
         let inertia = self.bunch_kaufman_factor(matrix)?;
@@ -434,6 +465,10 @@ impl LinearSolver for DenseLdl {
 
     fn provides_inertia(&self) -> bool {
         true
+    }
+
+    fn min_diagonal(&self) -> Option<f64> {
+        DenseLdl::min_diagonal(self)
     }
 }
 

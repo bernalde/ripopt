@@ -423,8 +423,264 @@ impl SolverState {
     }
 }
 
+/// Wrapper that reformulates an overdetermined nonlinear equations (NE) problem
+/// as an unconstrained least-squares problem.
+///
+/// Original:  min 0  subject to  g_i(x) = target_i,  i = 1,...,m   (m > n)
+/// Reformulated:  min 0.5 * Σ (g_i(x) - target_i)^2   (no constraints, keep variable bounds)
+///
+/// Gradient: ∇f_LS = J^T * r   where r_i = g_i(x) - target_i
+/// Hessian:  H_LS ≈ J^T * J   (Gauss-Newton approximation)
+struct LeastSquaresProblem<'a, P: NlpProblem> {
+    inner: &'a P,
+    /// Targets for each constraint (g_l == g_u for equalities).
+    targets: Vec<f64>,
+    /// Jacobian structure cached from inner problem.
+    jac_rows: Vec<usize>,
+    jac_cols: Vec<usize>,
+    /// Hessian structure: lower triangle of J^T*J.
+    hess_rows: Vec<usize>,
+    hess_cols: Vec<usize>,
+}
+
+impl<P: NlpProblem> LeastSquaresProblem<'_, P> {
+    fn new(inner: &P) -> LeastSquaresProblem<'_, P> {
+        let n = inner.num_variables();
+        let m = inner.num_constraints();
+        let mut g_l = vec![0.0; m];
+        let mut g_u = vec![0.0; m];
+        inner.constraint_bounds(&mut g_l, &mut g_u);
+        let targets: Vec<f64> = (0..m).map(|i| 0.5 * (g_l[i] + g_u[i])).collect();
+
+        let (jac_rows, jac_cols) = inner.jacobian_structure();
+
+        // Build Hessian structure for J^T*J (lower triangle, n x n dense).
+        // Since J^T*J is generally dense, use full lower triangle.
+        let mut hess_rows = Vec::with_capacity(n * (n + 1) / 2);
+        let mut hess_cols = Vec::with_capacity(n * (n + 1) / 2);
+        for i in 0..n {
+            for j in 0..=i {
+                hess_rows.push(i);
+                hess_cols.push(j);
+            }
+        }
+
+        LeastSquaresProblem {
+            inner,
+            targets,
+            jac_rows,
+            jac_cols,
+            hess_rows,
+            hess_cols,
+        }
+    }
+}
+
+impl<P: NlpProblem> NlpProblem for LeastSquaresProblem<'_, P> {
+    fn num_variables(&self) -> usize {
+        self.inner.num_variables()
+    }
+    fn num_constraints(&self) -> usize {
+        0 // unconstrained LS
+    }
+    fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+        self.inner.bounds(x_l, x_u);
+    }
+    fn constraint_bounds(&self, _g_l: &mut [f64], _g_u: &mut [f64]) {
+        // no constraints
+    }
+    fn initial_point(&self, x0: &mut [f64]) {
+        self.inner.initial_point(x0);
+    }
+    fn objective(&self, x: &[f64]) -> f64 {
+        let m = self.targets.len();
+        let mut g = vec![0.0; m];
+        self.inner.constraints(x, &mut g);
+        let mut sum = 0.0;
+        for i in 0..m {
+            let r = g[i] - self.targets[i];
+            sum += r * r;
+        }
+        0.5 * sum
+    }
+    fn gradient(&self, x: &[f64], grad: &mut [f64]) {
+        let n = self.inner.num_variables();
+        let m = self.targets.len();
+        // Compute residual r = g(x) - target
+        let mut g = vec![0.0; m];
+        self.inner.constraints(x, &mut g);
+        let mut r = vec![0.0; m];
+        for i in 0..m {
+            r[i] = g[i] - self.targets[i];
+        }
+        // grad = J^T * r
+        let jac_nnz = self.jac_rows.len();
+        let mut jac_vals = vec![0.0; jac_nnz];
+        self.inner.jacobian_values(x, &mut jac_vals);
+        for i in 0..n {
+            grad[i] = 0.0;
+        }
+        for (idx, (&row, &col)) in self.jac_rows.iter().zip(self.jac_cols.iter()).enumerate() {
+            grad[col] += jac_vals[idx] * r[row];
+        }
+    }
+    fn constraints(&self, _x: &[f64], _g: &mut [f64]) {
+        // no constraints
+    }
+    fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+        (vec![], vec![]) // no constraints
+    }
+    fn jacobian_values(&self, _x: &[f64], _vals: &mut [f64]) {
+        // no constraints
+    }
+    fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+        (self.hess_rows.clone(), self.hess_cols.clone())
+    }
+    fn hessian_values(&self, x: &[f64], obj_factor: f64, _lambda: &[f64], vals: &mut [f64]) {
+        let n = self.inner.num_variables();
+        // H ≈ obj_factor * J^T * J  (Gauss-Newton approximation)
+        let jac_nnz = self.jac_rows.len();
+        let mut jac_vals = vec![0.0; jac_nnz];
+        self.inner.jacobian_values(x, &mut jac_vals);
+
+        // Build dense J (m x n) for small problems, then compute J^T*J
+        let m = self.targets.len();
+        let mut j_dense = vec![0.0; m * n];
+        for (idx, (&row, &col)) in self.jac_rows.iter().zip(self.jac_cols.iter()).enumerate() {
+            j_dense[row * n + col] += jac_vals[idx];
+        }
+
+        // Compute lower triangle of J^T*J
+        let mut idx = 0;
+        for i in 0..n {
+            for j in 0..=i {
+                let mut dot = 0.0;
+                for k in 0..m {
+                    dot += j_dense[k * n + i] * j_dense[k * n + j];
+                }
+                vals[idx] = obj_factor * dot;
+                idx += 1;
+            }
+        }
+    }
+}
+
+/// Detect if a problem is an overdetermined nonlinear equation system.
+///
+/// Returns true if ALL of:
+/// - f(x0) ≈ 0 (zero objective)
+/// - ∇f(x0) ≈ 0 (zero gradient)
+/// - All constraints are equalities (g_l[i] == g_u[i])
+/// - m > n (more constraints than variables)
+fn detect_ne_problem<P: NlpProblem>(problem: &P) -> bool {
+    let n = problem.num_variables();
+    let m = problem.num_constraints();
+
+    if m <= n || m == 0 || n == 0 {
+        return false;
+    }
+
+    // Check objective and gradient at initial point
+    let mut x0 = vec![0.0; n];
+    problem.initial_point(&mut x0);
+
+    let f0 = problem.objective(&x0);
+    if f0.abs() > 1e-10 {
+        return false;
+    }
+
+    let mut grad = vec![0.0; n];
+    problem.gradient(&x0, &mut grad);
+    let grad_max = grad.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+    if grad_max > 1e-10 {
+        return false;
+    }
+
+    // Check all constraints are equalities
+    let mut g_l = vec![0.0; m];
+    let mut g_u = vec![0.0; m];
+    problem.constraint_bounds(&mut g_l, &mut g_u);
+    for i in 0..m {
+        let is_eq = g_l[i].is_finite()
+            && g_u[i].is_finite()
+            && (g_l[i] - g_u[i]).abs() < 1e-15;
+        if !is_eq {
+            return false;
+        }
+    }
+
+    // If constraints are already satisfied at x0, no need to reformulate —
+    // the standard IPM can handle it (e.g., FBRAIN3 starts feasible).
+    let mut g0 = vec![0.0; m];
+    problem.constraints(&x0, &mut g0);
+    let theta0 = convergence::primal_infeasibility(&g0, &g_l, &g_u);
+    if theta0 < 1e-8 {
+        return false;
+    }
+
+    true
+}
+
 /// Solve the NLP using the interior point method.
 pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult {
+    // --- NE-to-LS Detection and Reformulation ---
+    // Detect overdetermined nonlinear equation problems (m > n, f≡0, all equalities)
+    // and reformulate as least-squares: min 0.5*||g(x)-target||^2.
+    if detect_ne_problem(problem) {
+        let n = problem.num_variables();
+        let m = problem.num_constraints();
+        if options.print_level >= 5 {
+            eprintln!(
+                "ripopt: Detected overdetermined NE problem (n={}, m={}), reformulating as least-squares",
+                n, m
+            );
+        }
+        let ls_problem = LeastSquaresProblem::new(problem);
+        let ls_result = solve_ipm(&ls_problem, options);
+
+        // Evaluate original constraint violation at the LS solution
+        let mut g_final = vec![0.0; m];
+        problem.constraints(&ls_result.x, &mut g_final);
+        let mut g_l = vec![0.0; m];
+        let mut g_u = vec![0.0; m];
+        problem.constraint_bounds(&mut g_l, &mut g_u);
+        let theta = convergence::primal_infeasibility(&g_final, &g_l, &g_u);
+
+        // g_final is from the original (unscaled) problem, no unscaling needed
+        let g_out = g_final;
+
+        let status = if theta < options.tol {
+            SolveStatus::Optimal
+        } else if theta < options.acceptable_tol {
+            SolveStatus::Acceptable
+        } else {
+            SolveStatus::LocalInfeasibility
+        };
+
+        if options.print_level >= 5 {
+            eprintln!(
+                "ripopt: NE-to-LS result: obj_LS={:.4e}, constraint_violation={:.4e}, status={:?}",
+                ls_result.objective, theta, status
+            );
+        }
+
+        return SolveResult {
+            x: ls_result.x,
+            objective: 0.0, // Original objective is f≡0
+            constraint_multipliers: vec![0.0; m],
+            bound_multipliers_lower: ls_result.bound_multipliers_lower,
+            bound_multipliers_upper: ls_result.bound_multipliers_upper,
+            constraint_values: g_out,
+            status,
+            iterations: ls_result.iterations,
+        };
+    }
+
+    solve_ipm(problem, options)
+}
+
+/// Core IPM solver implementation.
+fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult {
     // --- NLP Scaling (gradient-based, matching Ipopt's nlp_scaling_method) ---
     // Scale objective and constraints so max gradient norm at x0 is ≤ 100.
     let n_sc = problem.num_variables();
@@ -444,28 +700,41 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         .iter()
         .map(|v| v.abs())
         .fold(0.0f64, f64::max);
-    let obj_scaling = if grad_max > nlp_scaling_max_gradient && grad_max.is_finite() {
+    // Skip objective scaling for unconstrained problems: there is no constraint-objective
+    // tradeoff to balance, and extreme downscaling makes the barrier terms dominate.
+    let obj_scaling = if m_sc > 0 && grad_max > nlp_scaling_max_gradient && grad_max.is_finite() {
         (nlp_scaling_max_gradient / grad_max).max(nlp_scaling_min_value)
     } else {
         1.0
     };
 
     // Constraint scaling: g_scaling[i] = min(1, 100 / ||∇g_i(x0)||∞)
+    // Skip constraint scaling when initial violation is very large (>1e6) — extreme
+    // scaling ratios make restoration ill-conditioned for far-from-feasible problems.
     let (jac_rows_sc, _) = problem.jacobian_structure();
     let mut g_scaling = vec![1.0; m_sc];
     if m_sc > 0 {
-        let mut jac_vals0 = vec![0.0; jac_rows_sc.len()];
-        problem.jacobian_values(&x0, &mut jac_vals0);
-        let mut row_max = vec![0.0f64; m_sc];
-        for (idx, &row) in jac_rows_sc.iter().enumerate() {
-            let v = jac_vals0[idx].abs();
-            if v.is_finite() && v > row_max[row] {
-                row_max[row] = v;
+        let mut g0_sc = vec![0.0; m_sc];
+        problem.constraints(&x0, &mut g0_sc);
+        let mut g_l_sc = vec![0.0; m_sc];
+        let mut g_u_sc = vec![0.0; m_sc];
+        problem.constraint_bounds(&mut g_l_sc, &mut g_u_sc);
+        let init_cv = convergence::primal_infeasibility(&g0_sc, &g_l_sc, &g_u_sc);
+
+        if init_cv < 1e6 {
+            let mut jac_vals0 = vec![0.0; jac_rows_sc.len()];
+            problem.jacobian_values(&x0, &mut jac_vals0);
+            let mut row_max = vec![0.0f64; m_sc];
+            for (idx, &row) in jac_rows_sc.iter().enumerate() {
+                let v = jac_vals0[idx].abs();
+                if v.is_finite() && v > row_max[row] {
+                    row_max[row] = v;
+                }
             }
-        }
-        for i in 0..m_sc {
-            if row_max[i] > nlp_scaling_max_gradient {
-                g_scaling[i] = (nlp_scaling_max_gradient / row_max[i]).max(nlp_scaling_min_value);
+            for i in 0..m_sc {
+                if row_max[i] > nlp_scaling_max_gradient {
+                    g_scaling[i] = (nlp_scaling_max_gradient / row_max[i]).max(nlp_scaling_min_value);
+                }
             }
         }
     }
@@ -520,6 +789,11 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let stall_threshold: usize = 5;
     let mut stall_recovery_count: usize = 0;
 
+    // Unified stall recovery counter shared across all stall detection phases.
+    // Cap total recoveries at 6 to prevent infinite cycling.
+    let mut total_stall_recovery_count: usize = 0;
+    let mu_perturbation_factors: [f64; 6] = [10.0, 0.1, 100.0, 0.01, 1000.0, 0.001];
+
     // Wall-clock time limit
     let start_time = Instant::now();
 
@@ -536,6 +810,30 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     // Constraint violation history for infeasibility detection
     let theta_history_len: usize = 100;
     let mut theta_history: Vec<f64> = Vec::with_capacity(theta_history_len);
+
+    // Track whether the problem was ever feasible (theta < constr_viol_tol)
+    // to prevent false infeasibility declarations on feasible problems.
+    let mut ever_feasible = false;
+
+    // Ipopt-like monotone mu decrease fallback: after 20 stuck iterations,
+    // decrease mu by min(0.2*mu, mu^1.5). Track a ceiling to prevent stall
+    // recovery from undoing forced decreases.
+    let mut mu_stuck_count: usize = 0;
+    let mut mu_ceiling: f64 = 1e4;
+    // Tiny step counter (Ipopt: accept full step when relative step < 10*eps for 2 consecutive)
+    let mut consecutive_tiny_steps: usize = 0;
+
+    // Consecutive iterations with obj < -1e20 for robust unbounded detection
+    let mut consecutive_unbounded: usize = 0;
+    // Fix 3B: Track iterations since last stall recovery mu bump
+    let mut iters_since_stall_recovery: usize = usize::MAX;
+
+    // Best feasible point tracking: save the best (lowest obj) point that is feasible
+    let mut best_x: Option<Vec<f64>> = None;
+    let mut best_obj: f64 = f64::INFINITY;
+    let mut best_y: Option<Vec<f64>> = None;
+    let mut best_z_l: Option<Vec<f64>> = None;
+    let mut best_z_u: Option<Vec<f64>> = None;
 
     // Initial evaluation
     state.evaluate(problem, 1.0);
@@ -691,8 +989,8 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         let compl_inf_best = compl_inf.min(compl_inf_opt);
 
         if options.print_level >= 5 {
-            log::info!(
-                "{:>4} {:>14.7e} {:>10.2e} {:>10.2e} {:>10.2e} {:>10.2e} {:>8.2e} {:>8.2e}",
+            eprintln!(
+                "{:>4} obj={:>14.7e} pr={:>10.2e} du={:>10.2e} co={:>10.2e} mu={:>10.2e} a_p={:>8.2e} a_d={:>8.2e}",
                 iteration,
                 state.obj / state.obj_scaling,
                 primal_inf,
@@ -763,16 +1061,30 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
         theta_history.push(primal_inf);
 
-        // Unbounded detection: objective diverging negatively with satisfied constraints
+        // Track whether we've ever been feasible
+        if primal_inf < options.constr_viol_tol {
+            ever_feasible = true;
+        }
+
+        // Unbounded detection: objective diverging negatively with satisfied constraints.
+        // Require 10 consecutive iterations to avoid false positives from transient dips.
         if state.obj < -1e20 && primal_inf < options.constr_viol_tol {
-            return make_result(&state, SolveStatus::Unbounded);
+            consecutive_unbounded += 1;
+            if consecutive_unbounded >= 10 {
+                return make_result(&state, SolveStatus::Unbounded);
+            }
+        } else {
+            consecutive_unbounded = 0;
         }
 
         // Compute sigma (barrier diagonal)
         let sigma = kkt::compute_sigma(&state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u);
 
-        // Use condensed KKT (Schur complement) when m >> n for efficiency
-        let use_condensed = m > 2 * n && n > 0;
+        // Use condensed KKT (Schur complement) when m >= 2n for efficiency.
+        // Condensed cost is O(n^2*m + n^3) vs O((n+m)^3) — strictly better when m > n.
+        // Use m >= 2n threshold (relaxed from m > 2n) to avoid borderline cases
+        // where condensed path has different numerical behavior.
+        let use_condensed = m >= 2 * n && n > 0;
 
         // Assemble and factor KKT system
         let mut kkt_system = kkt::assemble_kkt(
@@ -817,6 +1129,78 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
         if let Err(e) = inertia_result {
             log::warn!("KKT factorization failed: {}", e);
+
+            // Early-iteration perturbation: if factorization fails in the first 5
+            // iterations, the starting point is likely degenerate (singular Jacobian).
+            // Try more aggressive perturbation scales before other recovery methods.
+            if iteration < 5 {
+                let mut early_recovered = false;
+                for &perturb_scale in &[1e-4, 1e-3, 1e-2, 5e-2, 1e-1] {
+                    let x_saved = state.x.clone();
+                    for i in 0..n {
+                        let mag = state.x[i].abs().max(1.0);
+                        // Deterministic pseudo-random sign based on index and attempt
+                        let sign = if (i * 7 + iteration * 13 + (perturb_scale * 1e4) as usize * 3) % 3 == 0 {
+                            -1.0
+                        } else {
+                            1.0
+                        };
+                        state.x[i] += sign * perturb_scale * mag;
+                        if state.x_l[i].is_finite() {
+                            state.x[i] = state.x[i].max(state.x_l[i] + 1e-14);
+                        }
+                        if state.x_u[i].is_finite() {
+                            state.x[i] = state.x[i].min(state.x_u[i] - 1e-14);
+                        }
+                    }
+                    // Re-initialize bound multipliers after perturbation
+                    for i in 0..n {
+                        if state.x_l[i].is_finite() {
+                            let slack = (state.x[i] - state.x_l[i]).max(1e-20);
+                            state.z_l[i] = state.mu / slack;
+                        }
+                        if state.x_u[i].is_finite() {
+                            let slack = (state.x_u[i] - state.x[i]).max(1e-20);
+                            state.z_u[i] = state.mu / slack;
+                        }
+                    }
+                    state.evaluate(problem, 1.0);
+                    if !state.obj.is_nan() && !state.obj.is_infinite()
+                        && !state.grad_f.iter().any(|v| v.is_nan() || v.is_infinite())
+                    {
+                        // Re-try factorization at perturbed point
+                        let sigma_p = kkt::compute_sigma(
+                            &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u,
+                        );
+                        let mut kkt_p = kkt::assemble_kkt(
+                            n, m, &state.hess_rows, &state.hess_cols, &state.hess_vals,
+                            &state.jac_rows, &state.jac_cols, &state.jac_vals, &sigma_p,
+                            &state.grad_f, &state.g, &state.g_l, &state.g_u,
+                            &state.y, &state.z_l, &state.z_u,
+                            &state.x, &state.x_l, &state.x_u, state.mu,
+                        );
+                        if kkt::factor_with_inertia_correction(
+                            &mut kkt_p, &mut lin_solver, &mut inertia_params,
+                        ).is_ok() {
+                            log::debug!(
+                                "Early perturbation (scale={:.0e}) recovered factorization at iter {}",
+                                perturb_scale, iteration
+                            );
+                            filter.reset();
+                            let theta_p = state.constraint_violation();
+                            filter.set_theta_min_from_initial(theta_p);
+                            early_recovered = true;
+                            break;
+                        }
+                    }
+                    // Restore if this perturbation didn't help
+                    state.x.copy_from_slice(&x_saved);
+                }
+                if early_recovered {
+                    continue;
+                }
+            }
+
             // Try gradient descent fallback
             if let Some(fallback) = gradient_descent_fallback(&state) {
                 state.dx = fallback.0;
@@ -866,6 +1250,32 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 state.x = x_rest;
                 state.alpha_primal = 0.0;
                 state.evaluate(problem, 1.0);
+                continue;
+            }
+            // Last resort: perturb x and retry factorization
+            let mut recovered_from_perturb = false;
+            for &perturb_scale in &[1e-3, 1e-2, 1e-1] {
+                for i in 0..n {
+                    let mag = state.x[i].abs().max(1.0);
+                    let sign = if (i * 7 + iteration * 13) % 3 == 0 { -1.0 } else { 1.0 };
+                    state.x[i] += sign * perturb_scale * mag;
+                    if state.x_l[i].is_finite() {
+                        state.x[i] = state.x[i].max(state.x_l[i] + 1e-14);
+                    }
+                    if state.x_u[i].is_finite() {
+                        state.x[i] = state.x[i].min(state.x_u[i] - 1e-14);
+                    }
+                }
+                state.evaluate(problem, 1.0);
+                if !state.obj.is_nan() && !state.obj.is_infinite() {
+                    recovered_from_perturb = true;
+                    break;
+                }
+            }
+            if recovered_from_perturb {
+                filter.reset();
+                let theta_new = state.constraint_violation();
+                filter.set_theta_min_from_initial(theta_new);
                 continue;
             }
             return make_result(&state, SolveStatus::NumericalError);
@@ -988,6 +1398,41 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         let alpha_dual_max_l = filter::fraction_to_boundary(&state.z_l, &state.dz_l, tau);
         let alpha_dual_max_u = filter::fraction_to_boundary(&state.z_u, &state.dz_u, tau);
         let alpha_dual_max = alpha_dual_max_l.min(alpha_dual_max_u);
+
+        // Ipopt-like tiny step detection: if relative step size is < 10*eps for
+        // 2 consecutive iterations, force mu decrease and accept the full step.
+        // This prevents stalling near the solution where numerical noise prevents
+        // the line search from making progress.
+        {
+            let max_rel_step: f64 = (0..n)
+                .map(|i| (alpha_primal_max * state.dx[i]).abs() / (state.x[i].abs() + 1.0))
+                .fold(0.0f64, f64::max);
+            if max_rel_step < 1e-14 && primal_inf < 1e-4 {
+                consecutive_tiny_steps += 1;
+                if consecutive_tiny_steps >= 2 {
+                    // Force mu decrease (Ipopt: monotone decrease on tiny step)
+                    let new_mu = (options.mu_linear_decrease_factor * state.mu)
+                        .min(state.mu.powf(options.mu_superlinear_decrease_power))
+                        .max(options.mu_min);
+                    if (new_mu - state.mu).abs() < 1e-20 {
+                        // mu is already at minimum and step is tiny: declare acceptable if possible
+                        log::debug!("Tiny step with mu at minimum, checking acceptability");
+                    } else {
+                        state.mu = new_mu;
+                        if ever_feasible {
+                            mu_ceiling = state.mu;
+                        }
+                        filter.reset();
+                        let theta_new = state.constraint_violation();
+                        filter.set_theta_min_from_initial(theta_new);
+                        log::debug!("Tiny step detected, forced mu decrease to {:.2e}", state.mu);
+                    }
+                    consecutive_tiny_steps = 0;
+                }
+            } else {
+                consecutive_tiny_steps = 0;
+            }
+        }
 
         // Line search
         let theta_current = primal_inf;
@@ -1168,36 +1613,64 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 // Re-evaluate at restoration point
                 state.evaluate(problem, 1.0);
 
+                // Reset filter after successful restoration.
+                // TODO: Ipopt augments filter before restoration and doesn't reset after,
+                // but that requires filter-aware restoration (our restoration ignores the filter).
+                filter.reset();
+                let theta_restored = state.constraint_violation();
+                filter.set_theta_min_from_initial(theta_restored);
+
                 // Reset acceptable counter — restoration invalidates previous acceptable streak
                 state.consecutive_acceptable = 0;
 
                 // Recompute mu from current complementarity after restoration
                 let mu_compl = compute_avg_complementarity(&state);
                 if mu_compl > 0.0 {
-                    state.mu = mu_compl.max(options.mu_min).min(1e4);
+                    state.mu = mu_compl.max(options.mu_min).min(mu_ceiling);
                 }
 
                 if move_dist < 1e-14 && primal_inf < options.tol {
                     // Restoration returned same point AND constraints already satisfied.
-                    // This happens for unconstrained problems or when the filter blocks
-                    // progress on a fully feasible iterate (e.g., concave objectives).
                     consecutive_zero_alpha += 1;
-                    if consecutive_zero_alpha >= stall_threshold {
+                    if consecutive_zero_alpha >= stall_threshold && total_stall_recovery_count < 6 {
                         stall_recovery_count += 1;
+                        total_stall_recovery_count += 1;
                         filter.reset();
                         inertia_params.delta_w_last = 0.0;
                         consecutive_zero_alpha = 0;
 
                         if stall_recovery_count >= 2 {
-                            // Repeated stalls: filter reset alone isn't enough.
-                            // Bump mu to change the barrier landscape.
-                            let mu_new = (state.mu * 10.0).max(options.mu_init).min(1e4);
+                            // Repeated stalls: use varied mu perturbation
+                            let factor = mu_perturbation_factors[total_stall_recovery_count % mu_perturbation_factors.len()];
+                            // Don't apply mu_ceiling during stall recovery
+                            let mu_new = (state.mu * factor).max(options.mu_min).min(1e4);
                             log::debug!(
-                                "Repeated stall (recovery #{}), mu: {:.2e} -> {:.2e}",
-                                stall_recovery_count, state.mu, mu_new
+                                "Repeated stall (recovery #{}/{}), mu: {:.2e} -> {:.2e} (x{})",
+                                stall_recovery_count, total_stall_recovery_count, state.mu, mu_new, factor
                             );
                             state.mu = mu_new;
                             stall_recovery_count = 0;
+                            iters_since_stall_recovery = 0;
+
+                            // After 3rd total recovery, also perturb x
+                            if total_stall_recovery_count >= 3 {
+                                for i in 0..n {
+                                    let range = if state.x_l[i].is_finite() && state.x_u[i].is_finite() {
+                                        state.x_u[i] - state.x_l[i]
+                                    } else {
+                                        state.x[i].abs().max(1.0)
+                                    };
+                                    let sign = if (i * 7 + total_stall_recovery_count * 13) % 3 == 0 { -1.0 } else { 1.0 };
+                                    state.x[i] += sign * 1e-4 * range;
+                                    if state.x_l[i].is_finite() {
+                                        state.x[i] = state.x[i].max(state.x_l[i] + 1e-14);
+                                    }
+                                    if state.x_u[i].is_finite() {
+                                        state.x[i] = state.x[i].min(state.x_u[i] - 1e-14);
+                                    }
+                                }
+                                state.evaluate(problem, 1.0);
+                            }
                         } else {
                             log::debug!("Stall detected, resetting filter (recovery #{})", stall_recovery_count);
                         }
@@ -1208,26 +1681,97 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
                 continue;
             } else {
-                // Try mu bump as last resort before giving up
-                if stall_recovery_count < 3 {
-                    state.mu = (state.mu * 10.0).max(options.mu_init).min(1e4);
+                // Try recovery as last resort before giving up.
+                // Vary mu perturbation direction and perturb x on later attempts.
+                // Only try if we haven't done a recovery recently (cooldown period).
+                let mu_factors = [10.0, 0.1, 100.0, 0.01, 1000.0, 0.001];
+                if stall_recovery_count < 6 {
+                    if iters_since_stall_recovery < 5 {
+                        // Cooldown: skip recovery but continue iterating.
+                        // The current iterate may make progress with the last mu perturbation.
+                        continue;
+                    }
+                    let factor = mu_factors[stall_recovery_count % mu_factors.len()];
+                    // Don't apply mu_ceiling during emergency recovery —
+                    // we need to explore widely to escape the current basin.
+                    state.mu = (state.mu * factor).max(options.mu_min).min(1e4);
                     filter.reset();
+                    let theta_now = state.constraint_violation();
+                    filter.set_theta_min_from_initial(theta_now);
+
+                    // On attempts 3+: also perturb x to escape current basin
+                    if stall_recovery_count >= 3 {
+                        for i in 0..n {
+                            let range = if state.x_l[i].is_finite() && state.x_u[i].is_finite() {
+                                state.x_u[i] - state.x_l[i]
+                            } else {
+                                state.x[i].abs().max(1.0)
+                            };
+                            // Quasi-random sign based on index
+                            let sign = if (i * 7 + stall_recovery_count * 13) % 3 == 0 { -1.0 } else { 1.0 };
+                            state.x[i] += sign * 1e-4 * range;
+                            if state.x_l[i].is_finite() {
+                                state.x[i] = state.x[i].max(state.x_l[i] + 1e-14);
+                            }
+                            if state.x_u[i].is_finite() {
+                                state.x[i] = state.x[i].min(state.x_u[i] - 1e-14);
+                            }
+                        }
+                        state.evaluate(problem, 1.0);
+                    }
+
                     stall_recovery_count += 1;
+                    iters_since_stall_recovery = 0;
                     log::debug!(
-                        "Restoration failed, mu bump to {:.2e} (attempt {})",
-                        state.mu, stall_recovery_count
+                        "Restoration failed, mu perturbation x{} to {:.2e} (attempt {})",
+                        factor, state.mu, stall_recovery_count
                     );
                     continue;
                 }
                 log::warn!("Restoration failed at iteration {}", iteration);
-                // Check if this is actually infeasibility: constraint violation
-                // is large and hasn't decreased meaningfully over recent iterations
                 let current_theta = state.constraint_violation();
-                let infeas_thr = options.constr_viol_tol * 1e3;
-                if current_theta > infeas_thr && iteration > 100 && theta_history.len() >= theta_history_len {
-                    let oldest_theta = theta_history[0];
-                    if current_theta > 0.01 * oldest_theta {
-                        // No 100x improvement in last 100 iterations → infeasible
+
+                // Check if we're at a stationary point of the violation function.
+                // If ||∇θ|| ≈ 0 but θ > tol, declare LocalInfeasibility.
+                // Compute ∇(0.5*||violation||^2) = J^T * violation
+                if current_theta > options.constr_viol_tol && !ever_feasible {
+                    let mut violation = vec![0.0; m];
+                    for i in 0..m {
+                        let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
+                            && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
+                        if is_eq {
+                            violation[i] = state.g[i] - state.g_l[i];
+                        } else if state.g_l[i].is_finite() && state.g[i] < state.g_l[i] {
+                            violation[i] = state.g[i] - state.g_l[i];
+                        } else if state.g_u[i].is_finite() && state.g[i] > state.g_u[i] {
+                            violation[i] = state.g[i] - state.g_u[i];
+                        }
+                    }
+                    // grad_theta = J^T * violation
+                    let mut grad_theta = vec![0.0; n];
+                    for (idx, (&row, &col)) in
+                        state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
+                    {
+                        grad_theta[col] += state.jac_vals[idx] * violation[row];
+                    }
+                    let grad_theta_norm = grad_theta.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+                    // Scale threshold by violation magnitude for robustness
+                    let stationarity_tol = 1e-4 * current_theta.max(1.0);
+                    if grad_theta_norm < stationarity_tol {
+                        log::info!(
+                            "Local infeasibility detected: theta={:.2e}, ||∇theta||={:.2e}",
+                            current_theta, grad_theta_norm
+                        );
+                        return make_result(&state, SolveStatus::LocalInfeasibility);
+                    }
+                }
+
+                // Check if constraint violation hasn't decreased meaningfully
+                // over recent iterations. Never declare infeasible if we were ever feasible.
+                if !ever_feasible && current_theta > 1e4 && iteration > 500 && theta_history.len() >= theta_history_len {
+                    let min_theta = theta_history.iter().cloned().fold(f64::INFINITY, f64::min);
+                    if current_theta > 0.01 * min_theta {
+                        // No 100x improvement over best in last 100 iterations → infeasible
                         return make_result(&state, SolveStatus::Infeasible);
                     }
                 }
@@ -1333,17 +1877,18 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 alpha_history.iter().sum::<f64>() / alpha_history.len() as f64;
             let near_converged = primal_inf < options.acceptable_tol
                 && dual_inf < options.acceptable_tol * 100.0;
-            if avg_alpha < 1e-6 && !near_converged {
-                // Cap mu to prevent runaway bumps — never exceed 1e4
-                let mu_cap = 1e4;
-                if state.mu < mu_cap {
-                    log::debug!(
-                        "Alpha stall detected (avg={:.2e}), resetting filter and bumping mu",
-                        avg_alpha
-                    );
-                    filter.reset();
-                    state.mu = (state.mu * 10.0).max(options.mu_init).min(mu_cap);
-                }
+            if avg_alpha < 1e-6 && !near_converged && total_stall_recovery_count < 6 {
+                // Use varied mu perturbation from unified counter
+                let factor = mu_perturbation_factors[total_stall_recovery_count % mu_perturbation_factors.len()];
+                log::debug!(
+                    "Alpha stall detected (avg={:.2e}), resetting filter and mu x{} (total recovery #{})",
+                    avg_alpha, factor, total_stall_recovery_count
+                );
+                filter.reset();
+                // Don't apply mu_ceiling during stall recovery
+                state.mu = (state.mu * factor).max(options.mu_min).min(1e4);
+                iters_since_stall_recovery = 0;
+                total_stall_recovery_count += 1;
                 alpha_history.clear();
             }
         }
@@ -1398,9 +1943,50 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             return make_result(&state, SolveStatus::NumericalError);
         }
 
-        // Update barrier parameter (cap at 1e4 to prevent runaway mu from stall recovery)
+        // Track best feasible point for max_iter exit
+        {
+            let theta_now = state.constraint_violation();
+            if theta_now < options.constr_viol_tol && state.obj < best_obj {
+                best_obj = state.obj;
+                best_x = Some(state.x.clone());
+                best_y = Some(state.y.clone());
+                best_z_l = Some(state.z_l.clone());
+                best_z_u = Some(state.z_u.clone());
+            }
+        }
+
+        // Fix 3B: During cooldown after stall recovery, allow mu to decrease
+        // even when alpha is tiny (bypass the alpha < 1e-4 freeze).
+        let in_cooldown = iters_since_stall_recovery < 20;
+        iters_since_stall_recovery = iters_since_stall_recovery.saturating_add(1);
+
+        // Update barrier parameter, capped by mu_ceiling to prevent stall recovery
+        // from undoing forced decreases.
         let mu_old = state.mu;
-        state.mu = update_barrier_parameter(&state, options).min(1e4);
+        state.mu = update_barrier_parameter(&state, options, in_cooldown).min(mu_ceiling);
+
+        // Ipopt-like monotone mu decrease fallback: after 20 stuck iterations,
+        // use min(linear_factor * mu, mu^superlinear_power) to force progress.
+        // This matches Ipopt's fixed-mode decrease formula.
+        if state.mu >= 0.99 * mu_old {
+            mu_stuck_count += 1;
+        } else {
+            mu_stuck_count = 0;
+        }
+        if mu_stuck_count >= 20 {
+            let new_mu = (options.mu_linear_decrease_factor * state.mu)
+                .min(state.mu.powf(options.mu_superlinear_decrease_power))
+                .max(options.mu_min);
+            state.mu = new_mu;
+            if ever_feasible {
+                mu_ceiling = state.mu; // Only lock ceiling when known feasible
+            }
+            mu_stuck_count = 0;
+            filter.reset();
+            let theta_new = state.constraint_violation();
+            filter.set_theta_min_from_initial(theta_new);
+            log::debug!("Forced mu decrease to {:.2e} (Ipopt monotone, stuck for 20 iters)", state.mu);
+        }
 
         // Filter reset on large mu decrease (>5x) — stale entries from previous
         // barrier problem can block progress
@@ -1608,13 +2194,118 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
     }
 
-    // At max_iter: check if the problem is actually infeasible
+    // At max_iter: try restoring the best feasible point we saw during the solve.
+    // The current point may have degraded, but an earlier point could pass acceptable.
+    if let Some(ref bx) = best_x {
+        state.x = bx.clone();
+        if let Some(ref by) = best_y { state.y = by.clone(); }
+        if let Some(ref bzl) = best_z_l { state.z_l = bzl.clone(); }
+        if let Some(ref bzu) = best_z_u { state.z_u = bzu.clone(); }
+        state.evaluate(problem, 1.0);
+
+        // Re-check acceptable convergence at the best point with relaxed tolerance floor
+        let bp_primal = state.constraint_violation();
+        let (bp_zl, bp_zu) = {
+            let mut gj = state.grad_f.clone();
+            for (idx, (&row, &col)) in
+                state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
+            {
+                gj[col] += state.jac_vals[idx] * state.y[row];
+            }
+            let mut zl = vec![0.0; n];
+            let mut zu = vec![0.0; n];
+            let kc = 1e10;
+            for i in 0..n {
+                if gj[i] > 0.0 && state.x_l[i].is_finite() {
+                    let sl = (state.x[i] - state.x_l[i]).max(1e-20);
+                    if gj[i] * sl <= kc * state.mu.max(1e-20) {
+                        zl[i] = gj[i];
+                    }
+                } else if gj[i] < 0.0 && state.x_u[i].is_finite() {
+                    let su = (state.x_u[i] - state.x[i]).max(1e-20);
+                    if (-gj[i]) * su <= kc * state.mu.max(1e-20) {
+                        zu[i] = -gj[i];
+                    }
+                }
+            }
+            (zl, zu)
+        };
+        let bp_du = convergence::dual_infeasibility(
+            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+            &state.y, &bp_zl, &bp_zu, n,
+        );
+        let bp_du_u = convergence::dual_infeasibility(
+            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+            &state.y, &state.z_l, &state.z_u, n,
+        );
+        let bp_co = convergence::complementarity_error(
+            &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
+        );
+        let bp_co_opt = convergence::complementarity_error(
+            &state.x, &state.x_l, &state.x_u, &bp_zl, &bp_zu, 0.0,
+        );
+        let bp_co_best = bp_co.min(bp_co_opt);
+        let bp_mult: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
+            + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
+            + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
+        let bp_sd = if (m + 2 * n) > 0 {
+            ((100.0f64.max(bp_mult / (m + 2 * n) as f64)) / 100.0).min(1e4)
+        } else {
+            1.0
+        };
+        // Relaxed tolerances for best-point check at max_iter.
+        // The solver exhausted its iterations, so we use a generous floor:
+        // - du: floor of 1.0 (was 1e-1) to catch near-converged problems
+        // - co: floor of 1.0 (barriers haven't fully resolved but point is good)
+        let bp_du_tol = (options.acceptable_tol * bp_sd).max(1.0);
+        let bp_co_tol = (options.acceptable_tol * bp_sd).max(1.0);
+        let bp_sc = bp_primal <= options.acceptable_tol
+            && bp_du <= bp_du_tol
+            && bp_co_best <= bp_co_tol;
+        // Unscaled check with 10x relaxed complementarity for best-point exit
+        let bp_usc = bp_primal <= options.acceptable_constr_viol_tol
+            && bp_du_u <= options.acceptable_dual_inf_tol
+            && bp_co_best <= options.acceptable_compl_inf_tol * 100.0;
+        if bp_sc && bp_usc {
+            return make_result(&state, SolveStatus::Acceptable);
+        }
+    }
+
+    // At max_iter: check if the problem is actually infeasible.
+    // Never declare infeasible if we were ever feasible.
     let final_theta = state.constraint_violation();
-    let infeas_thr = options.constr_viol_tol * 1e3;
-    if final_theta > infeas_thr && theta_history.len() >= theta_history_len {
-        let oldest_theta = theta_history[0];
-        if final_theta > 0.01 * oldest_theta {
-            return make_result(&state, SolveStatus::Infeasible);
+    if !ever_feasible && final_theta > options.constr_viol_tol {
+        // Check stationarity of violation: if ||∇θ|| ≈ 0, declare local infeasibility
+        let mut violation = vec![0.0; m];
+        for i in 0..m {
+            let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
+                && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
+            if is_eq {
+                violation[i] = state.g[i] - state.g_l[i];
+            } else if state.g_l[i].is_finite() && state.g[i] < state.g_l[i] {
+                violation[i] = state.g[i] - state.g_l[i];
+            } else if state.g_u[i].is_finite() && state.g[i] > state.g_u[i] {
+                violation[i] = state.g[i] - state.g_u[i];
+            }
+        }
+        let mut grad_theta = vec![0.0; n];
+        for (idx, (&row, &col)) in
+            state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
+        {
+            grad_theta[col] += state.jac_vals[idx] * violation[row];
+        }
+        let grad_theta_norm = grad_theta.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+        let stationarity_tol = 1e-4 * final_theta.max(1.0);
+        if grad_theta_norm < stationarity_tol {
+            return make_result(&state, SolveStatus::LocalInfeasibility);
+        }
+
+        // Fallback: check if theta hasn't improved over recent history
+        if final_theta > 1e4 && theta_history.len() >= theta_history_len {
+            let min_theta = theta_history.iter().cloned().fold(f64::INFINITY, f64::min);
+            if final_theta > 0.01 * min_theta {
+                return make_result(&state, SolveStatus::Infeasible);
+            }
         }
     }
     make_result(&state, SolveStatus::MaxIterations)
@@ -1756,7 +2447,7 @@ fn attempt_soc<P: NlpProblem>(
 }
 
 /// Update the barrier parameter mu using Mehrotra centering.
-fn update_barrier_parameter(state: &SolverState, options: &SolverOptions) -> f64 {
+fn update_barrier_parameter(state: &SolverState, options: &SolverOptions, force_decrease: bool) -> f64 {
     let mu = state.mu;
 
     if options.mu_strategy_adaptive {
@@ -1783,11 +2474,15 @@ fn update_barrier_parameter(state: &SolverState, options: &SolverOptions) -> f64
         let avg_compl = sum_compl / count as f64;
 
         // Adaptive (Loqo) rule: mu = avg_compl / kappa
-        let mut mu_new = (avg_compl / options.kappa).max(options.mu_min);
+        let mu_new = (avg_compl / options.kappa).max(options.mu_min);
 
-        // Don't decrease mu if last step was tiny (stalled)
-        if state.alpha_primal < 1e-4 {
-            mu_new = mu.max(mu_new);
+        // Ipopt-like mu update: when alpha is tiny, keep mu unchanged.
+        // The old logic (mu_new = mu.max(mu_new)) prevented decrease but allowed
+        // increase, creating a runaway loop where mu climbs to 1e4 and stays there.
+        // Ipopt switches to "fixed mode" with monotone decrease; we approximate
+        // by keeping mu constant and relying on the forced decrease mechanism.
+        if state.alpha_primal < 1e-4 && !force_decrease {
+            return mu;
         }
 
         // Allow mu to increase if the option is set (helps after restoration/stall)

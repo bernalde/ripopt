@@ -7,6 +7,11 @@ pub enum SolveStatus {
     Acceptable,
     /// Problem is infeasible.
     Infeasible,
+    /// Local infeasibility detected: constraint violation is at a stationary
+    /// point (gradient of violation ≈ 0) but violation is still large.
+    /// For NE-to-LS reformulations, this means the system is inconsistent
+    /// and x* is the best least-squares solution.
+    LocalInfeasibility,
     /// Reached maximum number of iterations.
     MaxIterations,
     /// Numerical difficulties (e.g., singular KKT system).

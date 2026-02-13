@@ -85,7 +85,12 @@ pub fn assemble_kkt(
 
     // RHS: dual residual r_d (first n entries)
     // Ipopt convention (L = f + y^T g): stationarity is ∇f + J^T y - z_l + z_u = 0
-    // Newton RHS: r_d = -(∇f + J^T y - z_l + z_u) + barrier correction
+    //
+    // After eliminating dz from the full Newton system, the z_l and z_u terms
+    // cancel algebraically: correct condensed RHS = -∇f - J^T*y + μ/s_l - μ/s_u.
+    // However, keeping the z terms (r_d = -∇f + z_l - z_u + μ/s_l - μ/s_u - J^T*y)
+    // provides better convergence in practice by tracking the dual residual,
+    // especially when z deviates from μ/s due to safeguarding (kappa_sigma).
     for i in 0..n {
         let mut rd = -grad_f[i];
         rd += z_l[i];
@@ -253,6 +258,29 @@ pub fn factor_with_inertia_correction(
         if inertia.positive == n && inertia.negative == m && inertia.zero == 0 {
             params.delta_w_last = 0.0;
             return Ok((0.0, 0.0));
+        }
+    }
+
+    // For unconstrained problems (m=0), try direct delta_w from min diagonal.
+    // This avoids the exponential growth that overshoots on indefinite Hessians,
+    // producing gradient-like steps instead of Newton steps.
+    // Only use this when the required perturbation is moderate (< 1e4) —
+    // extreme indefiniteness needs the standard exponential growth strategy.
+    if m == 0 {
+        if let Some(min_d) = solver.min_diagonal() {
+            if min_d < 0.0 {
+                let delta_w_direct = -min_d + 1e-8;
+                let mut perturbed = kkt.matrix.clone();
+                perturbed.add_diagonal_range(0, n, delta_w_direct);
+                let inertia = solver.factor(&perturbed)?;
+                if let Some(inertia) = inertia {
+                    if inertia.positive == n && inertia.negative == 0 && inertia.zero == 0 {
+                        kkt.matrix = perturbed;
+                        params.delta_w_last = delta_w_direct;
+                        return Ok((delta_w_direct, 0.0));
+                    }
+                }
+            }
         }
     }
 

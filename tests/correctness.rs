@@ -1264,3 +1264,150 @@ fn zero_hessian_linear_program() {
         "Got {:?}", result.status);
     assert!((result.objective - (-8.0)).abs() < 0.1, "f*={}", result.objective);
 }
+
+// ---------------------------------------------------------------------------
+// 19. NE-to-LS: Consistent overdetermined system
+//     min 0  s.t.  x0 = 1, x0 + x1 = 3, x1 = 2  (3 eqs, 2 vars, consistent)
+//     x* = (1, 2)
+// ---------------------------------------------------------------------------
+
+struct OverdeterminedConsistent;
+
+impl NlpProblem for OverdeterminedConsistent {
+    fn num_variables(&self) -> usize { 2 }
+    fn num_constraints(&self) -> usize { 3 }
+    fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+        x_l[0] = f64::NEG_INFINITY; x_u[0] = f64::INFINITY;
+        x_l[1] = f64::NEG_INFINITY; x_u[1] = f64::INFINITY;
+    }
+    fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+        g_l[0] = 1.0; g_u[0] = 1.0;
+        g_l[1] = 3.0; g_u[1] = 3.0;
+        g_l[2] = 2.0; g_u[2] = 2.0;
+    }
+    fn initial_point(&self, x0: &mut [f64]) { x0[0] = 0.5; x0[1] = 0.5; }
+    fn objective(&self, _x: &[f64]) -> f64 { 0.0 }
+    fn gradient(&self, _x: &[f64], grad: &mut [f64]) { grad[0] = 0.0; grad[1] = 0.0; }
+    fn constraints(&self, x: &[f64], g: &mut [f64]) {
+        g[0] = x[0];
+        g[1] = x[0] + x[1];
+        g[2] = x[1];
+    }
+    fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+        (vec![0, 1, 1, 2], vec![0, 0, 1, 1])
+    }
+    fn jacobian_values(&self, _x: &[f64], vals: &mut [f64]) {
+        vals[0] = 1.0; vals[1] = 1.0; vals[2] = 1.0; vals[3] = 1.0;
+    }
+    fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) { (vec![], vec![]) }
+    fn hessian_values(&self, _x: &[f64], _obj_factor: f64, _lambda: &[f64], _vals: &mut [f64]) {}
+}
+
+#[test]
+fn ne_to_ls_consistent() {
+    let problem = OverdeterminedConsistent;
+    let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
+    let result = ripopt::solve(&problem, &options);
+    assert!(result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        "Consistent NE should be solved, got {:?}", result.status);
+    assert!((result.x[0] - 1.0).abs() < 1e-4, "x0={}", result.x[0]);
+    assert!((result.x[1] - 2.0).abs() < 1e-4, "x1={}", result.x[1]);
+}
+
+// ---------------------------------------------------------------------------
+// 20. NE-to-LS: Inconsistent overdetermined system
+//     min 0  s.t.  x0 = 1, x0 = 2, x0 = 3  (3 eqs, 1 var, inconsistent)
+//     Should report LocalInfeasibility with x* ≈ 2 (LS solution)
+// ---------------------------------------------------------------------------
+
+struct OverdeterminedInconsistent;
+
+impl NlpProblem for OverdeterminedInconsistent {
+    fn num_variables(&self) -> usize { 1 }
+    fn num_constraints(&self) -> usize { 3 }
+    fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+        x_l[0] = f64::NEG_INFINITY; x_u[0] = f64::INFINITY;
+    }
+    fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+        g_l[0] = 1.0; g_u[0] = 1.0;
+        g_l[1] = 2.0; g_u[1] = 2.0;
+        g_l[2] = 3.0; g_u[2] = 3.0;
+    }
+    fn initial_point(&self, x0: &mut [f64]) { x0[0] = 0.0; }
+    fn objective(&self, _x: &[f64]) -> f64 { 0.0 }
+    fn gradient(&self, _x: &[f64], grad: &mut [f64]) { grad[0] = 0.0; }
+    fn constraints(&self, x: &[f64], g: &mut [f64]) {
+        g[0] = x[0]; g[1] = x[0]; g[2] = x[0];
+    }
+    fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+        (vec![0, 1, 2], vec![0, 0, 0])
+    }
+    fn jacobian_values(&self, _x: &[f64], vals: &mut [f64]) {
+        vals[0] = 1.0; vals[1] = 1.0; vals[2] = 1.0;
+    }
+    fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) { (vec![], vec![]) }
+    fn hessian_values(&self, _x: &[f64], _obj_factor: f64, _lambda: &[f64], _vals: &mut [f64]) {}
+}
+
+#[test]
+fn ne_to_ls_inconsistent() {
+    let problem = OverdeterminedInconsistent;
+    let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
+    let result = ripopt::solve(&problem, &options);
+    assert_eq!(result.status, SolveStatus::LocalInfeasibility,
+        "Inconsistent NE should report LocalInfeasibility, got {:?}", result.status);
+    // LS solution: x = mean(1,2,3) = 2
+    assert!((result.x[0] - 2.0).abs() < 1e-2, "x0={} (expected ~2.0)", result.x[0]);
+}
+
+// ---------------------------------------------------------------------------
+// 21. NE-to-LS: Nonlinear consistent system with bounds
+//     min 0  s.t.  x0^2 = 1, x0*x1 = 2, x1^2 = 4  (3 eqs, 2 vars)
+//     x* = (1, 2) with bounds x0 > 0, x1 > 0
+// ---------------------------------------------------------------------------
+
+struct OverdeterminedNonlinear;
+
+impl NlpProblem for OverdeterminedNonlinear {
+    fn num_variables(&self) -> usize { 2 }
+    fn num_constraints(&self) -> usize { 3 }
+    fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+        x_l[0] = 0.0; x_u[0] = f64::INFINITY;
+        x_l[1] = 0.0; x_u[1] = f64::INFINITY;
+    }
+    fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+        g_l[0] = 1.0; g_u[0] = 1.0;
+        g_l[1] = 2.0; g_u[1] = 2.0;
+        g_l[2] = 4.0; g_u[2] = 4.0;
+    }
+    fn initial_point(&self, x0: &mut [f64]) { x0[0] = 0.5; x0[1] = 1.0; }
+    fn objective(&self, _x: &[f64]) -> f64 { 0.0 }
+    fn gradient(&self, _x: &[f64], grad: &mut [f64]) { grad[0] = 0.0; grad[1] = 0.0; }
+    fn constraints(&self, x: &[f64], g: &mut [f64]) {
+        g[0] = x[0] * x[0];
+        g[1] = x[0] * x[1];
+        g[2] = x[1] * x[1];
+    }
+    fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+        (vec![0, 1, 1, 2], vec![0, 0, 1, 1])
+    }
+    fn jacobian_values(&self, x: &[f64], vals: &mut [f64]) {
+        vals[0] = 2.0 * x[0];  // dg0/dx0
+        vals[1] = x[1];        // dg1/dx0
+        vals[2] = x[0];        // dg1/dx1
+        vals[3] = 2.0 * x[1];  // dg2/dx1
+    }
+    fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) { (vec![], vec![]) }
+    fn hessian_values(&self, _x: &[f64], _obj_factor: f64, _lambda: &[f64], _vals: &mut [f64]) {}
+}
+
+#[test]
+fn ne_to_ls_nonlinear() {
+    let problem = OverdeterminedNonlinear;
+    let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
+    let result = ripopt::solve(&problem, &options);
+    assert!(result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        "Consistent nonlinear NE should solve, got {:?}", result.status);
+    assert!((result.x[0] - 1.0).abs() < 1e-2, "x0={}", result.x[0]);
+    assert!((result.x[1] - 2.0).abs() < 1e-2, "x1={}", result.x[1]);
+}
