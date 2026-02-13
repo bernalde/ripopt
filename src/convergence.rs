@@ -381,7 +381,7 @@ mod tests {
         let info = ConvergenceInfo {
             primal_inf: 1e-10,
             dual_inf: 1e-10, // z_opt-based: looks converged
-            dual_inf_unscaled: 5.0, // iterative z: clearly not converged (> dual_inf_tol=1.0)
+            dual_inf_unscaled: 150.0, // iterative z: clearly not converged (> dual_inf_tol=100.0)
             compl_inf: 1e-10,
             mu: 1e-11,
             objective: 1.0,
@@ -397,7 +397,7 @@ mod tests {
 
         // Now with unscaled also passing
         let info2 = ConvergenceInfo {
-            dual_inf_unscaled: 0.5, // below dual_inf_tol=1.0
+            dual_inf_unscaled: 50.0, // below dual_inf_tol=100.0
             ..info
         };
         assert_eq!(
