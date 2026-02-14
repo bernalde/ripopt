@@ -12,8 +12,21 @@ Comparison of ripopt vs Ipopt (C++) on the CUTEst test set.
 
 ## Accuracy Statistics (where both solve)
 
-| Metric | Objective Rel Diff |
-|--------|-------------------|
+Relative difference = |r_obj - i_obj| / max(|r_obj|, |i_obj|, 1.0).  
+The 1.0 floor prevents near-zero objectives from inflating the metric.
+
+**Matching solutions** (438 problems, rel diff < 1e-4):
+
+| Metric | Rel Diff |
+|--------|----------|
+| Mean   | 1.37e-06 |
+| Median | 1.57e-13 |
+| Max    | 7.63e-05 |
+
+**All both-solved** (533 problems, including 95 mismatches):
+
+| Metric | Rel Diff |
+|--------|----------|
 | Mean   | 8.57e-02 |
 | Median | 5.11e-10 |
 | Max    | 2.00e+00 |
@@ -998,103 +1011,109 @@ Comparison of ripopt vs Ipopt (C++) on the CUTEst test set.
 
 ### Objective mismatches (95)
 
-| Problem | ripopt obj | Ipopt obj | Rel Diff |
-|---------|-----------|-----------|----------|
-| ACOPR14 | 8.107633e+03 | 8.081526e+03 | 3.22e-03 |
-| ACOPR30 | 5.807813e+02 | 5.768924e+02 | 6.70e-03 |
-| AVGASA | -3.383299e+00 | -4.631926e+00 | 2.70e-01 |
-| AVGASB | -3.717055e+00 | -4.483219e+00 | 1.71e-01 |
-| BENNETT5LS | 1.613684e+05 | 5.563289e-04 | 1.00e+00 |
-| BIGGSC4 | -3.128034e+00 | -2.450000e+01 | 8.72e-01 |
-| BT4 | -4.551055e+01 | -3.704768e+00 | 9.19e-01 |
-| BT7 | 3.603798e+02 | 3.065000e+02 | 1.50e-01 |
-| CAMEL6 | -2.154638e-01 | -1.031628e+00 | 7.91e-01 |
-| CB2 | 2.000000e+00 | 1.952224e+00 | 2.39e-02 |
-| CHACONN1 | 2.000000e+00 | 1.952224e+00 | 2.39e-02 |
-| CHWIRUT1LS | 6.551998e+04 | 2.384477e+03 | 9.64e-01 |
-| CHWIRUT2LS | 1.355314e+04 | 5.130480e+02 | 9.62e-01 |
-| CLIFF | 1.997866e-01 | 2.072380e-01 | 7.45e-03 |
-| CRESC50 | 8.827223e-01 | 7.862467e-01 | 9.65e-02 |
-| DANWOODLS | 1.039178e+02 | 4.317308e-03 | 1.00e+00 |
-| DECONVC | 3.880899e-10 | 2.569475e-03 | 2.57e-03 |
-| DEGENLPA | 3.060434e+00 | 3.054881e+00 | 1.81e-03 |
-| DEGENLPB | -3.069162e+01 | -3.076401e+01 | 2.35e-03 |
-| DENSCHND | 6.940852e-09 | 2.221899e-04 | 2.22e-04 |
-| DEVGLA1B | 1.057042e+05 | 8.216237e-18 | 1.00e+00 |
-| DEVGLA2 | 5.932686e+01 | 6.672171e-19 | 1.00e+00 |
-| DGOSPEC | -9.887540e+02 | -9.933506e+02 | 4.63e-03 |
-| DUALC8 | 1.854450e+04 | 1.830936e+04 | 1.27e-02 |
-| ECKERLE4LS | 4.988568e-01 | 1.463589e-03 | 4.97e-01 |
-| EG1 | -1.132801e+00 | -1.429307e+00 | 2.07e-01 |
-| EGGCRATE | 1.897639e+01 | 9.488197e+00 | 5.00e-01 |
-| ELATTAR | 1.054115e+00 | 7.420618e+01 | 9.86e-01 |
-| EXPFITA | 3.932166e-01 | 1.136646e-03 | 3.92e-01 |
-| EXPFITC | 3.111184e-02 | 2.330262e-02 | 7.81e-03 |
-| FLETCHER | 1.952537e+01 | 1.165685e+01 | 4.03e-01 |
-| GIGOMEZ1 | -5.720219e-10 | -3.000000e+00 | 1.00e+00 |
-| GOFFIN | 1.918601e+01 | -9.500002e-09 | 1.00e+00 |
-| HAHN1LS | 3.086398e+01 | 3.338424e+01 | 7.55e-02 |
-| HALDMADS | 1.223712e-04 | 2.218282e+00 | 1.00e+00 |
-| HET-Z | 1.011865e+00 | 1.000000e+00 | 1.17e-02 |
-| HIMMELP2 | -6.205394e+01 | -8.198044e+00 | 8.68e-01 |
-| HIMMELP3 | -7.913699e+00 | -5.901318e+01 | 8.66e-01 |
-| HIMMELP5 | -1.475901e+01 | -5.901318e+01 | 7.50e-01 |
-| HIMMELP6 | -1.475339e+01 | -5.901318e+01 | 7.50e-01 |
-| HS116 | 9.766220e+01 | 9.758747e+01 | 7.65e-04 |
-| HS119 | 2.449254e+02 | 2.448997e+02 | 1.05e-04 |
-| HS13 | 9.938594e-01 | 9.945785e-01 | 7.19e-04 |
-| HS16 | 2.314466e+01 | 2.500000e-01 | 9.89e-01 |
-| HS17 | 1.000201e+00 | 1.000000e+00 | 2.01e-04 |
-| HS268 | 3.182746e+00 | 8.886855e-07 | 1.00e+00 |
-| HS35MOD | 6.500000e+00 | 2.500000e-01 | 9.62e-01 |
-| HS45 | 1.000314e+00 | 1.000000e+00 | 3.14e-04 |
-| HS54 | -1.566691e-01 | -9.080748e-01 | 7.51e-01 |
-| HS55 | 6.666667e+00 | 6.805833e+00 | 2.04e-02 |
-| HS59 | -6.743243e+00 | -6.749505e+00 | 9.28e-04 |
-| HS70 | 1.877383e-01 | 7.498464e-03 | 1.80e-01 |
-| HS85 | -2.211026e+00 | -2.215605e+00 | 2.07e-03 |
-| HS95 | 1.630984e-02 | 1.561772e-02 | 6.92e-04 |
-| HS96 | 1.630574e-02 | 1.561775e-02 | 6.88e-04 |
-| HS98 | 3.136227e+00 | 3.135806e+00 | 1.34e-04 |
-| HYDC20LS | 2.976453e-01 | 2.967522e-15 | 2.98e-01 |
-| KSIP | 2.768715e+01 | 5.757979e-01 | 9.79e-01 |
-| LEVYMONT5 | 1.248706e+01 | 1.239502e-25 | 1.00e+00 |
-| LIN | -1.960628e-02 | -1.757754e-02 | 2.03e-03 |
-| LSC2LS | 1.333749e+01 | 1.333439e+01 | 2.32e-04 |
-| MAKELA1 | 1.414214e+00 | -1.414214e+00 | 2.00e+00 |
-| MAKELA2 | 8.244898e+00 | 7.200000e+00 | 1.27e-01 |
-| MAKELA4 | 6.877365e-01 | -9.600000e-09 | 6.88e-01 |
-| MAXLIKA | 1.149346e+03 | 1.136307e+03 | 1.13e-02 |
-| MGH17SLS | 5.464895e-05 | 2.451788e-02 | 2.45e-02 |
-| MISTAKE | -5.000000e-01 | -1.000000e+00 | 5.00e-01 |
-| MSS1 | -1.600000e+01 | -1.400000e+01 | 1.25e-01 |
-| MUONSINELS | 5.080769e+04 | 4.387412e+04 | 1.36e-01 |
-| MWRIGHT | 1.288383e+00 | 2.497881e+01 | 9.48e-01 |
-| OET1 | 6.431699e-01 | 5.382431e-01 | 1.05e-01 |
-| OET3 | 1.528803e+07 | 4.505043e-03 | 1.00e+00 |
-| OET4 | 2.394093e+00 | 4.295421e-03 | 9.98e-01 |
-| OET7 | 1.141238e+06 | 4.465915e-05 | 1.00e+00 |
-| PALMER3 | 2.265958e+03 | 2.416980e+03 | 6.25e-02 |
-| PALMER4 | 2.424016e+03 | 2.285383e+03 | 5.72e-02 |
-| PT | 1.873320e-01 | 1.783942e-01 | 8.94e-03 |
-| QC | -9.411446e+02 | -9.565379e+02 | 1.61e-02 |
-| QCNEW | -8.045191e+02 | -8.065219e+02 | 2.48e-03 |
-| RAT43LS | 2.525083e+05 | 8.786405e+03 | 9.65e-01 |
-| S268 | 3.182746e+00 | 8.886855e-07 | 1.00e+00 |
-| SIPOW1 | 4.338956e-01 | -1.000000e+00 | 1.43e+00 |
-| SIPOW1M | 4.338960e-01 | -1.000001e+00 | 1.43e+00 |
-| SIPOW2 | 3.310227e-01 | -1.000000e+00 | 1.33e+00 |
-| SIPOW2M | 3.310254e-01 | -1.000005e+00 | 1.33e+00 |
-| SIPOW3 | 1.846738e+00 | 5.346586e-01 | 7.10e-01 |
-| SIPOW4 | 2.080345e+00 | 2.723620e-01 | 8.69e-01 |
-| SNAKE | -2.601155e-10 | -1.999999e-04 | 2.00e-04 |
-| STREG | 3.743976e-21 | 8.901950e-02 | 8.90e-02 |
-| TAXR13322 | -3.420730e+03 | -3.429089e+02 | 9.00e-01 |
-| TRO3X3 | 9.002446e+00 | 8.967478e+00 | 3.88e-03 |
-| TWOBARS | 5.257563e+00 | 1.508652e+00 | 7.13e-01 |
-| VESUVIALS | 1.500440e+03 | 9.914100e+02 | 3.39e-01 |
-| VIBRBEAM | 6.346254e+00 | 3.322376e-01 | 9.48e-01 |
-| WOMFLET | 1.010458e-11 | 6.050000e+00 | 1.00e+00 |
+Both solvers converged but found different objective values (rel diff > 1e-4).
+
+- **Different local minimum** (both Optimal): 54
+- **Convergence gap** (one Acceptable): 41
+- **Better objective found by**: ripopt 18, Ipopt 77
+
+| Problem | ripopt obj | Ipopt obj | Rel Diff | r_status | i_status | Better |
+|---------|-----------|-----------|----------|----------|----------|--------|
+| MAKELA1 | 1.414214e+00 | -1.414214e+00 | 2.00e+00 | Optimal | Optimal | ipopt |
+| SIPOW1 | 4.338956e-01 | -1.000000e+00 | 1.43e+00 | Optimal | Optimal | ipopt |
+| SIPOW1M | 4.338960e-01 | -1.000001e+00 | 1.43e+00 | Optimal | Optimal | ipopt |
+| SIPOW2M | 3.310254e-01 | -1.000005e+00 | 1.33e+00 | Optimal | Optimal | ipopt |
+| SIPOW2 | 3.310227e-01 | -1.000000e+00 | 1.33e+00 | Optimal | Optimal | ipopt |
+| GOFFIN | 1.918601e+01 | -9.500002e-09 | 1.00e+00 | Acceptable | Optimal | ipopt |
+| DEVGLA1B | 1.057042e+05 | 8.216237e-18 | 1.00e+00 | Acceptable | Optimal | ipopt |
+| DEVGLA2 | 5.932686e+01 | 6.672171e-19 | 1.00e+00 | Optimal | Optimal | ipopt |
+| LEVYMONT5 | 1.248706e+01 | 1.239502e-25 | 1.00e+00 | Acceptable | Optimal | ipopt |
+| WOMFLET | 1.010458e-11 | 6.050000e+00 | 1.00e+00 | Acceptable | Optimal | ripopt |
+| OET7 | 1.141238e+06 | 4.465915e-05 | 1.00e+00 | Acceptable | Optimal | ipopt |
+| GIGOMEZ1 | -5.720219e-10 | -3.000000e+00 | 1.00e+00 | Optimal | Optimal | ipopt |
+| OET3 | 1.528803e+07 | 4.505043e-03 | 1.00e+00 | Optimal | Optimal | ipopt |
+| BENNETT5LS | 1.613684e+05 | 5.563289e-04 | 1.00e+00 | Optimal | Optimal | ipopt |
+| HS268 | 3.182746e+00 | 8.886855e-07 | 1.00e+00 | Optimal | Optimal | ipopt |
+| S268 | 3.182746e+00 | 8.886855e-07 | 1.00e+00 | Optimal | Optimal | ipopt |
+| DANWOODLS | 1.039178e+02 | 4.317308e-03 | 1.00e+00 | Optimal | Optimal | ipopt |
+| HALDMADS | 1.223712e-04 | 2.218282e+00 | 1.00e+00 | Optimal | Optimal | ripopt |
+| OET4 | 2.394093e+00 | 4.295421e-03 | 9.98e-01 | Acceptable | Optimal | ipopt |
+| HS16 | 2.314466e+01 | 2.500000e-01 | 9.89e-01 | Optimal | Optimal | ipopt |
+| ELATTAR | 1.054115e+00 | 7.420618e+01 | 9.86e-01 | Optimal | Optimal | ripopt |
+| KSIP | 2.768715e+01 | 5.757979e-01 | 9.79e-01 | Optimal | Optimal | ipopt |
+| RAT43LS | 2.525083e+05 | 8.786405e+03 | 9.65e-01 | Acceptable | Optimal | ipopt |
+| CHWIRUT1LS | 6.551998e+04 | 2.384477e+03 | 9.64e-01 | Acceptable | Optimal | ipopt |
+| CHWIRUT2LS | 1.355314e+04 | 5.130480e+02 | 9.62e-01 | Acceptable | Optimal | ipopt |
+| HS35MOD | 6.500000e+00 | 2.500000e-01 | 9.62e-01 | Optimal | Optimal | ipopt |
+| MWRIGHT | 1.288383e+00 | 2.497881e+01 | 9.48e-01 | Optimal | Optimal | ripopt |
+| VIBRBEAM | 6.346254e+00 | 3.322376e-01 | 9.48e-01 | Optimal | Optimal | ipopt |
+| BT4 | -4.551055e+01 | -3.704768e+00 | 9.19e-01 | Optimal | Optimal | ripopt |
+| TAXR13322 | -3.420730e+03 | -3.429089e+02 | 9.00e-01 | Acceptable | Acceptable | ripopt |
+| BIGGSC4 | -3.128034e+00 | -2.450000e+01 | 8.72e-01 | Acceptable | Optimal | ipopt |
+| SIPOW4 | 2.080345e+00 | 2.723620e-01 | 8.69e-01 | Optimal | Optimal | ipopt |
+| HIMMELP2 | -6.205394e+01 | -8.198044e+00 | 8.68e-01 | Optimal | Optimal | ripopt |
+| HIMMELP3 | -7.913699e+00 | -5.901318e+01 | 8.66e-01 | Optimal | Optimal | ipopt |
+| CAMEL6 | -2.154638e-01 | -1.031628e+00 | 7.91e-01 | Optimal | Optimal | ipopt |
+| HS54 | -1.566691e-01 | -9.080748e-01 | 7.51e-01 | Optimal | Optimal | ipopt |
+| HIMMELP6 | -1.475339e+01 | -5.901318e+01 | 7.50e-01 | Optimal | Optimal | ipopt |
+| HIMMELP5 | -1.475901e+01 | -5.901318e+01 | 7.50e-01 | Optimal | Optimal | ipopt |
+| TWOBARS | 5.257563e+00 | 1.508652e+00 | 7.13e-01 | Optimal | Optimal | ipopt |
+| SIPOW3 | 1.846738e+00 | 5.346586e-01 | 7.10e-01 | Optimal | Optimal | ipopt |
+| MAKELA4 | 6.877365e-01 | -9.600000e-09 | 6.88e-01 | Optimal | Optimal | ipopt |
+| MISTAKE | -5.000000e-01 | -1.000000e+00 | 5.00e-01 | Acceptable | Optimal | ipopt |
+| EGGCRATE | 1.897639e+01 | 9.488197e+00 | 5.00e-01 | Optimal | Optimal | ipopt |
+| ECKERLE4LS | 4.988568e-01 | 1.463589e-03 | 4.97e-01 | Acceptable | Optimal | ipopt |
+| FLETCHER | 1.952537e+01 | 1.165685e+01 | 4.03e-01 | Optimal | Optimal | ipopt |
+| EXPFITA | 3.932166e-01 | 1.136646e-03 | 3.92e-01 | Optimal | Optimal | ipopt |
+| VESUVIALS | 1.500440e+03 | 9.914100e+02 | 3.39e-01 | Acceptable | Optimal | ipopt |
+| HYDC20LS | 2.976453e-01 | 2.967522e-15 | 2.98e-01 | Acceptable | Optimal | ipopt |
+| AVGASA | -3.383299e+00 | -4.631926e+00 | 2.70e-01 | Acceptable | Optimal | ipopt |
+| EG1 | -1.132801e+00 | -1.429307e+00 | 2.07e-01 | Optimal | Optimal | ipopt |
+| HS70 | 1.877383e-01 | 7.498464e-03 | 1.80e-01 | Optimal | Optimal | ipopt |
+| AVGASB | -3.717055e+00 | -4.483219e+00 | 1.71e-01 | Acceptable | Optimal | ipopt |
+| BT7 | 3.603798e+02 | 3.065000e+02 | 1.50e-01 | Optimal | Optimal | ipopt |
+| MUONSINELS | 5.080769e+04 | 4.387412e+04 | 1.36e-01 | Acceptable | Optimal | ipopt |
+| MAKELA2 | 8.244898e+00 | 7.200000e+00 | 1.27e-01 | Optimal | Optimal | ipopt |
+| MSS1 | -1.600000e+01 | -1.400000e+01 | 1.25e-01 | Acceptable | Optimal | ripopt |
+| OET1 | 6.431699e-01 | 5.382431e-01 | 1.05e-01 | Optimal | Optimal | ipopt |
+| CRESC50 | 8.827223e-01 | 7.862467e-01 | 9.65e-02 | Acceptable | Optimal | ipopt |
+| STREG | 3.743976e-21 | 8.901950e-02 | 8.90e-02 | Optimal | Optimal | ripopt |
+| HAHN1LS | 3.086398e+01 | 3.338424e+01 | 7.55e-02 | Acceptable | Optimal | ripopt |
+| PALMER3 | 2.265958e+03 | 2.416980e+03 | 6.25e-02 | Acceptable | Optimal | ripopt |
+| PALMER4 | 2.424016e+03 | 2.285383e+03 | 5.72e-02 | Optimal | Optimal | ipopt |
+| MGH17SLS | 5.464895e-05 | 2.451788e-02 | 2.45e-02 | Optimal | Optimal | ripopt |
+| CB2 | 2.000000e+00 | 1.952224e+00 | 2.39e-02 | Optimal | Optimal | ipopt |
+| CHACONN1 | 2.000000e+00 | 1.952224e+00 | 2.39e-02 | Optimal | Optimal | ipopt |
+| HS55 | 6.666667e+00 | 6.805833e+00 | 2.04e-02 | Optimal | Optimal | ripopt |
+| QC | -9.411446e+02 | -9.565379e+02 | 1.61e-02 | Acceptable | Optimal | ipopt |
+| DUALC8 | 1.854450e+04 | 1.830936e+04 | 1.27e-02 | Acceptable | Optimal | ipopt |
+| HET-Z | 1.011865e+00 | 1.000000e+00 | 1.17e-02 | Optimal | Optimal | ipopt |
+| MAXLIKA | 1.149346e+03 | 1.136307e+03 | 1.13e-02 | Acceptable | Optimal | ipopt |
+| PT | 1.873320e-01 | 1.783942e-01 | 8.94e-03 | Optimal | Optimal | ipopt |
+| EXPFITC | 3.111184e-02 | 2.330262e-02 | 7.81e-03 | Optimal | Optimal | ipopt |
+| CLIFF | 1.997866e-01 | 2.072380e-01 | 7.45e-03 | Optimal | Optimal | ripopt |
+| ACOPR30 | 5.807813e+02 | 5.768924e+02 | 6.70e-03 | Optimal | Optimal | ipopt |
+| DGOSPEC | -9.887540e+02 | -9.933506e+02 | 4.63e-03 | Acceptable | Optimal | ipopt |
+| TRO3X3 | 9.002446e+00 | 8.967478e+00 | 3.88e-03 | Acceptable | Optimal | ipopt |
+| ACOPR14 | 8.107633e+03 | 8.081526e+03 | 3.22e-03 | Acceptable | Optimal | ipopt |
+| DECONVC | 3.880899e-10 | 2.569475e-03 | 2.57e-03 | Acceptable | Optimal | ripopt |
+| QCNEW | -8.045191e+02 | -8.065219e+02 | 2.48e-03 | Optimal | Optimal | ipopt |
+| DEGENLPB | -3.069162e+01 | -3.076401e+01 | 2.35e-03 | Acceptable | Optimal | ipopt |
+| HS85 | -2.211026e+00 | -2.215605e+00 | 2.07e-03 | Optimal | Optimal | ipopt |
+| LIN | -1.960628e-02 | -1.757754e-02 | 2.03e-03 | Optimal | Optimal | ripopt |
+| DEGENLPA | 3.060434e+00 | 3.054881e+00 | 1.81e-03 | Acceptable | Optimal | ipopt |
+| HS59 | -6.743243e+00 | -6.749505e+00 | 9.28e-04 | Acceptable | Optimal | ipopt |
+| HS116 | 9.766220e+01 | 9.758747e+01 | 7.65e-04 | Acceptable | Optimal | ipopt |
+| HS13 | 9.938594e-01 | 9.945785e-01 | 7.19e-04 | Acceptable | Optimal | ripopt |
+| HS95 | 1.630984e-02 | 1.561772e-02 | 6.92e-04 | Acceptable | Optimal | ipopt |
+| HS96 | 1.630574e-02 | 1.561775e-02 | 6.88e-04 | Acceptable | Optimal | ipopt |
+| HS45 | 1.000314e+00 | 1.000000e+00 | 3.14e-04 | Acceptable | Optimal | ipopt |
+| LSC2LS | 1.333749e+01 | 1.333439e+01 | 2.32e-04 | Acceptable | Optimal | ipopt |
+| DENSCHND | 6.940852e-09 | 2.221899e-04 | 2.22e-04 | Acceptable | Optimal | ripopt |
+| HS17 | 1.000201e+00 | 1.000000e+00 | 2.01e-04 | Optimal | Optimal | ipopt |
+| SNAKE | -2.601155e-10 | -1.999999e-04 | 2.00e-04 | Optimal | Optimal | ipopt |
+| HS98 | 3.136227e+00 | 3.135806e+00 | 1.34e-04 | Acceptable | Optimal | ipopt |
+| HS119 | 2.449254e+02 | 2.448997e+02 | 1.05e-04 | Acceptable | Optimal | ipopt |
 
 ---
 *Generated by cutest_suite/compare.py*

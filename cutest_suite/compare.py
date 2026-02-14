@@ -20,7 +20,13 @@ def is_solved(status):
 
 
 def obj_diff(ro, co):
-    """Relative objective difference."""
+    """Relative objective difference, using max(|r|, |c|, 1) as denominator.
+
+    The 1.0 floor in the denominator prevents near-zero objectives (e.g.,
+    ripopt=+1e-12, ipopt=-1e-9) from producing artificially large relative
+    differences.  With this floor, two objectives that differ by < 1e-4 in
+    absolute terms will always be classified as matching.
+    """
     if ro is None or co is None:
         return float('nan')
     if math.isnan(ro) or math.isnan(co):
@@ -120,14 +126,22 @@ def main():
     both_solved = sum(1 for c in comparisons if c['both_solved'])
     passed = sum(1 for c in comparisons if c['passed'])
 
-    matched_diffs = [c['obj_diff'] for c in comparisons
-                     if c['both_solved'] and not math.isnan(c['obj_diff'])]
-    if matched_diffs:
-        mean_obj_diff = sum(matched_diffs) / len(matched_diffs)
-        max_obj_diff = max(matched_diffs)
-        median_obj_diff = sorted(matched_diffs)[len(matched_diffs) // 2]
-    else:
-        mean_obj_diff = max_obj_diff = median_obj_diff = float('nan')
+    all_diffs = [c['obj_diff'] for c in comparisons
+                 if c['both_solved'] and not math.isnan(c['obj_diff'])]
+    pass_diffs = [c['obj_diff'] for c in comparisons if c['passed']]
+    mismatch_diffs = [c['obj_diff'] for c in comparisons
+                      if c['both_solved'] and not c['passed'] and not math.isnan(c['obj_diff'])]
+
+    def compute_stats(diffs):
+        if not diffs:
+            return float('nan'), float('nan'), float('nan')
+        mean = sum(diffs) / len(diffs)
+        mx = max(diffs)
+        median = sorted(diffs)[len(diffs) // 2]
+        return mean, median, mx
+
+    all_mean, all_median, all_max = compute_stats(all_diffs)
+    pass_mean, pass_median, pass_max = compute_stats(pass_diffs)
 
     # Category breakdown
     categories = defaultdict(lambda: {'total': 0, 'ripopt': 0, 'ipopt': 0, 'both': 0, 'passed': 0})
@@ -160,11 +174,24 @@ def main():
 
     lines.append("## Accuracy Statistics (where both solve)")
     lines.append("")
-    lines.append("| Metric | Objective Rel Diff |")
-    lines.append("|--------|-------------------|")
-    lines.append(f"| Mean   | {mean_obj_diff:.2e} |")
-    lines.append(f"| Median | {median_obj_diff:.2e} |")
-    lines.append(f"| Max    | {max_obj_diff:.2e} |")
+    lines.append(f"Relative difference = |r_obj - i_obj| / max(|r_obj|, |i_obj|, 1.0).  ")
+    lines.append(f"The 1.0 floor prevents near-zero objectives from inflating the metric.")
+    lines.append("")
+    lines.append(f"**Matching solutions** ({len(pass_diffs)} problems, rel diff < 1e-4):")
+    lines.append("")
+    lines.append("| Metric | Rel Diff |")
+    lines.append("|--------|----------|")
+    lines.append(f"| Mean   | {pass_mean:.2e} |")
+    lines.append(f"| Median | {pass_median:.2e} |")
+    lines.append(f"| Max    | {pass_max:.2e} |")
+    lines.append("")
+    lines.append(f"**All both-solved** ({len(all_diffs)} problems, including {len(mismatch_diffs)} mismatches):")
+    lines.append("")
+    lines.append("| Metric | Rel Diff |")
+    lines.append("|--------|----------|")
+    lines.append(f"| Mean   | {all_mean:.2e} |")
+    lines.append(f"| Median | {all_median:.2e} |")
+    lines.append(f"| Max    | {all_max:.2e} |")
     lines.append("")
 
     lines.append("## Category Breakdown")
@@ -293,15 +320,39 @@ def main():
             lines.append(f"| {c['name']} | {c['n']} | {c['m']} | {c['ripopt_status']} | {c['ipopt_status']} |")
         lines.append("")
 
-    # Mismatches
+    # Mismatches — categorize by cause
     mismatches = [c for c in comparisons if c['both_solved'] and not c['passed']]
     if mismatches:
+        # Classify mismatches
+        diff_local_min = []  # Both Optimal, different basins
+        convergence_gap = []  # One Acceptable, didn't fully converge
+        for c in mismatches:
+            r_opt = c['ripopt_status'] == 'Optimal'
+            i_opt = c['ipopt_status'] == 'Optimal'
+            if r_opt and i_opt:
+                diff_local_min.append(c)
+            else:
+                convergence_gap.append(c)
+
+        r_better = sum(1 for c in mismatches if c['ripopt_obj'] < c['ipopt_obj'])
+        i_better = sum(1 for c in mismatches if c['ipopt_obj'] < c['ripopt_obj'])
+
         lines.append(f"### Objective mismatches ({len(mismatches)})")
         lines.append("")
-        lines.append("| Problem | ripopt obj | Ipopt obj | Rel Diff |")
-        lines.append("|---------|-----------|-----------|----------|")
-        for c in mismatches:
-            lines.append(f"| {c['name']} | {c['ripopt_obj']:.6e} | {c['ipopt_obj']:.6e} | {c['obj_diff']:.2e} |")
+        lines.append(f"Both solvers converged but found different objective values (rel diff > 1e-4).")
+        lines.append("")
+        lines.append(f"- **Different local minimum** (both Optimal): {len(diff_local_min)}")
+        lines.append(f"- **Convergence gap** (one Acceptable): {len(convergence_gap)}")
+        lines.append(f"- **Better objective found by**: ripopt {r_better}, Ipopt {i_better}")
+        lines.append("")
+        lines.append("| Problem | ripopt obj | Ipopt obj | Rel Diff | r_status | i_status | Better |")
+        lines.append("|---------|-----------|-----------|----------|----------|----------|--------|")
+        for c in sorted(mismatches, key=lambda c: -c['obj_diff']):
+            better = "ripopt" if c['ripopt_obj'] < c['ipopt_obj'] else "ipopt"
+            lines.append(
+                f"| {c['name']} | {c['ripopt_obj']:.6e} | {c['ipopt_obj']:.6e} "
+                f"| {c['obj_diff']:.2e} | {c['ripopt_status'][:10]} | {c['ipopt_status'][:10]} | {better} |"
+            )
         lines.append("")
 
     lines.append("---")
