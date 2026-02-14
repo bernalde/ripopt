@@ -6,6 +6,7 @@ pub mod linear_solver;
 pub mod options;
 pub mod problem;
 pub mod restoration;
+pub mod restoration_nlp;
 pub mod result;
 pub mod warmstart;
 

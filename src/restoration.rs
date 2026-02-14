@@ -49,9 +49,10 @@ impl RestorationPhase {
         n: usize,
         m: usize,
         options: &SolverOptions,
-        _is_acceptable_to_filter: &dyn Fn(f64, f64) -> bool,
+        is_acceptable_to_filter: &dyn Fn(f64, f64) -> bool,
         eval_constraints: &dyn Fn(&[f64], &mut [f64]),
         eval_jacobian: &dyn Fn(&[f64], &mut [f64]),
+        eval_objective: Option<&dyn Fn(&[f64]) -> f64>,
     ) -> (Vec<f64>, bool) {
         self.active = true;
 
@@ -72,6 +73,8 @@ impl RestorationPhase {
 
         // Track consecutive failed line searches — only break after 3 (not 1)
         let mut consecutive_ls_failures: usize = 0;
+        // Previous theta for detecting stalled progress
+        let mut prev_theta = theta_initial;
 
         for _iter in 0..self.max_iter {
             // Evaluate constraints at current point
@@ -135,7 +138,7 @@ impl RestorationPhase {
                 eps_factor *= 10.0;
             }
 
-            let step = match gn_step {
+            let mut step = match gn_step {
                 Some(s) => s,
                 None => {
                     // Fall back to gradient descent: step = -J^T * violation
@@ -150,6 +153,17 @@ impl RestorationPhase {
                     grad_step
                 }
             };
+
+            // Proximity regularization: when progress stalls (consecutive LS failures
+            // or theta not decreasing), add a pull toward the starting point to prevent
+            // wandering. Strength increases with consecutive failures.
+            if consecutive_ls_failures > 0 || (theta > 0.95 * prev_theta && _iter > 2) {
+                let eta = 1e-4 * (consecutive_ls_failures as f64 + 1.0);
+                for i in 0..n {
+                    step[i] -= eta * (x_rest[i] - x[i]);
+                }
+            }
+            prev_theta = theta;
 
             // Normalize step if too large
             let step_norm: f64 = step.iter().map(|s| s * s).sum::<f64>().sqrt();
@@ -337,18 +351,42 @@ impl RestorationPhase {
         let theta_final = convergence::primal_infeasibility(&g, g_l, g_u);
 
         self.active = false;
-        // Success if any of:
-        // 1. Constraint violation is below solver tolerance
-        // 2. Constraint violation is below constr_viol_tol AND improved by at least 50%
-        // 3. Point moved AND improved by at least 10% (incremental progress)
-        let moved: f64 = x_rest
-            .iter()
-            .zip(x.iter())
-            .map(|(a, b)| (a - b).abs())
-            .fold(0.0f64, f64::max);
-        let success = theta_final < options.constr_viol_tol  // feasible enough for main loop
-            || (theta_final < 0.5 * theta_initial)  // >50% reduction is always good
-            || (moved > 1e-14 && theta_final < 0.9 * theta_initial);  // 10% improvement with movement
+
+        // First-iteration protection: if less than 1% improvement, always fail.
+        // The point must have genuinely improved — returning the same point wastes an iteration.
+        if theta_initial > options.tol && theta_final >= 0.99 * theta_initial {
+            return (x_rest, false);
+        }
+
+        // Success criteria:
+        // 1. Constraint violation is below solver tolerance (feasible)
+        // 2. At least 10% infeasibility reduction (kappa_resto = 0.9) AND either
+        //    feasible enough or a meaningful absolute reduction
+        let feasible = theta_final < options.constr_viol_tol;
+        let kappa_resto_met = theta_final <= 0.9 * theta_initial;
+        let large_reduction = theta_final < 0.5 * theta_initial;
+        let abs_reduction = (theta_initial - theta_final) > options.tol;
+
+        let mut success = feasible
+            || large_reduction
+            || (kappa_resto_met && (feasible || abs_reduction));
+
+        // Filter acceptance check: if we have an objective evaluator, verify the
+        // restored point is acceptable to the filter before declaring full success.
+        if success {
+            if let Some(eval_obj) = eval_objective {
+                let phi_rest = eval_obj(&x_rest);
+                if !is_acceptable_to_filter(theta_final, phi_rest) {
+                    // Point is not acceptable to the filter.
+                    // Still succeed if we achieved feasibility (filter will be reset),
+                    // but fail if we only got partial reduction.
+                    if !feasible {
+                        success = false;
+                    }
+                }
+            }
+        }
+
         (x_rest, success)
     }
 
@@ -407,7 +445,7 @@ impl RestorationPhase {
 
         // Solve (J_a * J_a^T + eps*I) * w = violation_a
         let mut solver = DenseLdl::new();
-        if solver.factor(&jjt).is_err() {
+        if solver.bunch_kaufman_factor(&jjt).is_err() {
             return None;
         }
 
@@ -456,6 +494,7 @@ mod tests {
             &|_theta, _phi| true,
             &|_x, _g| {},
             &|_x, _vals| {},
+            None,
         );
 
         assert!(success, "No constraints → immediate success");
@@ -481,6 +520,7 @@ mod tests {
             &|_theta, _phi| true,
             &|x, g| { g[0] = x[0] + x[1]; },
             &|_x, vals| { vals[0] = 1.0; vals[1] = 1.0; },
+            None,
         );
 
         assert!(success, "Already feasible → success");
@@ -505,6 +545,7 @@ mod tests {
             &|_theta, _phi| true,
             &|x, g| { g[0] = x[0] + x[1]; },
             &|_x, vals| { vals[0] = 1.0; vals[1] = 1.0; },
+            None,
         );
 
         assert!(success, "Linear equality should be restored");
@@ -532,6 +573,7 @@ mod tests {
             &|_theta, _phi| true,
             &|x, g| { g[0] = x[0]; },
             &|_x, vals| { vals[0] = 1.0; },
+            None,
         );
 
         assert!(success, "Linear inequality should be restored");
@@ -558,6 +600,7 @@ mod tests {
             &|_theta, _phi| true,
             &|x, g| { g[0] = x[0] + x[1]; },
             &|_x, vals| { vals[0] = 1.0; vals[1] = 1.0; },
+            None,
         );
 
         // Verify bounds are respected
@@ -583,6 +626,7 @@ mod tests {
             &|_theta, _phi| true,
             &|_x, _g| {},
             &|_x, _vals| {},
+            None,
         );
 
         assert!(!phase.is_active(), "Should not be active after restore completes");

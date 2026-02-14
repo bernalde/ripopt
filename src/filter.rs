@@ -81,14 +81,15 @@ impl Filter {
         &self,
         theta_current: f64,
         grad_phi_step: f64,
-        _alpha: f64,
+        alpha: f64,
     ) -> bool {
-        // Switching condition per Ipopt Algorithm A (step A-4): no alpha factor.
-        // The directional derivative is already per-unit-alpha.
+        // Ipopt switching condition: alpha makes this depend on step length,
+        // so as alpha shrinks during backtracking, we properly fall back to
+        // h-type (constraint reduction) acceptance.
         grad_phi_step < 0.0
             && theta_current < self.theta_min
-            && (-grad_phi_step).powf(self.s_phi) * self.delta
-                > theta_current.powf(self.s_theta)
+            && alpha * (-grad_phi_step).powf(self.s_phi)
+                > self.delta * theta_current.powf(self.s_theta)
     }
 
     /// Check the Armijo sufficient decrease condition.
@@ -127,6 +128,11 @@ impl Filter {
         grad_phi_step: f64,
         alpha: f64,
     ) -> (bool, bool) {
+        // Safeguard: reject if objective increased catastrophically
+        if phi_trial > phi_current + 1e10 * (1.0 + phi_current.abs()) {
+            return (false, false);
+        }
+
         // First check if trial is acceptable to the filter
         if !self.is_acceptable(theta_trial, phi_trial) {
             return (false, false);
@@ -155,6 +161,29 @@ impl Filter {
         self.entries.push(FilterEntry { theta, phi });
     }
 
+    /// Compute problem-dependent minimum step size for the line search (Ipopt formula).
+    /// Returns alpha_min based on filter parameters and current iterate.
+    pub fn compute_alpha_min(&self, theta_current: f64, grad_phi_step: f64) -> f64 {
+        let alpha_min_frac = 1e-4;
+        if grad_phi_step >= 0.0 || theta_current <= 1e-15 {
+            // No useful descent direction or already feasible:
+            // use a very small fallback to allow Armijo acceptance to work.
+            return 1e-15;
+        }
+        let neg_gphi = -grad_phi_step;
+        let term1 = self.gamma_theta;
+        let term2 = self.gamma_phi * theta_current / neg_gphi;
+        let term3 = self.delta * theta_current.powf(self.s_theta) / neg_gphi.powf(self.s_phi);
+        let alpha_min = alpha_min_frac * term1.min(term2).min(term3);
+        // Floor at machine epsilon level to avoid overly aggressive cutoff
+        alpha_min.max(1e-15)
+    }
+
+    /// Augment theta_max based on current violation (called before restoration).
+    pub fn augment_for_restoration(&mut self, theta_current: f64) {
+        self.theta_max = self.theta_max.max(1e4 * theta_current.max(1e-4));
+    }
+
     /// Reset the filter (used when barrier parameter decreases).
     pub fn reset(&mut self) {
         self.entries.clear();
@@ -178,6 +207,26 @@ impl Filter {
     /// Whether the filter is empty.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Get theta_max.
+    pub fn theta_max(&self) -> f64 {
+        self.theta_max
+    }
+
+    /// Get gamma_theta.
+    pub fn gamma_theta(&self) -> f64 {
+        self.gamma_theta
+    }
+
+    /// Get gamma_phi.
+    pub fn gamma_phi(&self) -> f64 {
+        self.gamma_phi
+    }
+
+    /// Get the current filter entries (read-only).
+    pub fn entries(&self) -> &[FilterEntry] {
+        &self.entries
     }
 }
 
@@ -261,12 +310,16 @@ mod tests {
         let mut filter = Filter::new(100.0);
         filter.set_theta_min_from_initial(10.0);
         // theta_min = 1e-4 * 10.0 = 1e-3
-        // Small theta + negative directional derivative -> switching
+        // Small theta + negative directional derivative + alpha=1.0 -> switching
+        // alpha * 1.0^2.3 = 1.0 > delta * (1e-4)^1.1 ≈ 6.3e-5 -> true
         assert!(filter.switching_condition(1e-4, -1.0, 1.0));
-        // Large theta -> no switching
+        // Large theta -> no switching (theta >= theta_min)
         assert!(!filter.switching_condition(10.0, -1.0, 1.0));
         // Positive directional derivative -> no switching
         assert!(!filter.switching_condition(1e-4, 1.0, 1.0));
+        // Very small alpha -> switching should turn off
+        // alpha=1e-20 * 1.0^2.3 = 1e-20, vs delta * (1e-4)^1.1 ≈ 6.3e-5 -> false
+        assert!(!filter.switching_condition(1e-4, -1.0, 1e-20));
     }
 
     #[test]

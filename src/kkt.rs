@@ -1,4 +1,4 @@
-use crate::linear_solver::{LinearSolver, SolverError, SymmetricMatrix};
+use crate::linear_solver::{KktMatrix, LinearSolver, SolverError, SymmetricMatrix};
 
 /// Information about the KKT system structure.
 pub struct KktSystem {
@@ -8,8 +8,8 @@ pub struct KktSystem {
     pub n: usize,
     /// Number of constraints.
     pub m: usize,
-    /// The assembled KKT matrix.
-    pub matrix: SymmetricMatrix,
+    /// The assembled KKT matrix (dense or sparse).
+    pub matrix: KktMatrix,
     /// Right-hand side vector.
     pub rhs: Vec<f64>,
 }
@@ -62,9 +62,15 @@ pub fn assemble_kkt(
     x_l: &[f64],
     x_u: &[f64],
     mu: f64,
+    use_sparse: bool,
 ) -> KktSystem {
     let dim = n + m;
-    let mut matrix = SymmetricMatrix::zeros(dim);
+    let capacity = hess_rows.len() + jac_rows.len() + n + m;
+    let mut matrix = if use_sparse {
+        KktMatrix::zeros_sparse(dim, capacity)
+    } else {
+        KktMatrix::zeros_dense(dim)
+    };
     let mut rhs = vec![0.0; dim];
 
     // (1,1) block: H + Sigma
@@ -489,10 +495,12 @@ pub fn assemble_condensed_kkt(
     mu: f64,
 ) -> CondensedKktSystem {
     // First assemble the full KKT to get the (2,2) block and RHS
+    // Always use dense here since we need to extract entries for condensed system
     let full = assemble_kkt(
         n, m, hess_rows, hess_cols, hess_vals,
         jac_rows, jac_cols, jac_vals, sigma, grad_f,
         g, g_l, g_u, y, z_l, z_u, x, x_l, x_u, mu,
+        false,
     );
 
     let rhs_primal = full.rhs[..n].to_vec();
@@ -689,7 +697,7 @@ mod tests {
             n, m, &hess_rows, &hess_cols, &hess_vals,
             &[], &[], &[], &sigma, &grad_f,
             &[], &[], &[], &[], &z_l, &z_u,
-            &x, &x_l, &x_u, 0.1,
+            &x, &x_l, &x_u, 0.1, false,
         );
 
         assert_eq!(kkt.dim, 2);
@@ -725,7 +733,7 @@ mod tests {
             n, m, &hess_rows, &hess_cols, &hess_vals,
             &jac_rows, &jac_cols, &jac_vals, &sigma, &grad_f,
             &g, &g_l, &g_u, &y, &z_l, &z_u,
-            &x, &x_l, &x_u, 0.1,
+            &x, &x_l, &x_u, 0.1, false,
         );
 
         assert_eq!(kkt.dim, 3);
@@ -765,7 +773,7 @@ mod tests {
             n, m, &hess_rows, &hess_cols, &hess_vals,
             &jac_rows, &jac_cols, &jac_vals, &sigma, &grad_f,
             &g, &g_l, &g_u, &y, &z_l, &z_u,
-            &x, &x_l, &x_u, 0.1,
+            &x, &x_l, &x_u, 0.1, false,
         );
 
         // r_d = -grad_f + z_l - z_u = -3.0 + 0 - 0 = -3.0
@@ -802,7 +810,7 @@ mod tests {
             n, m, &hess_rows, &hess_cols, &hess_vals,
             &jac_rows, &jac_cols, &jac_vals, &sigma, &grad_f,
             &g, &g_l, &g_u, &y, &z_l, &z_u,
-            &x, &x_l, &x_u, mu,
+            &x, &x_l, &x_u, mu, false,
         );
 
         // (2,2) block should be negative (from -Σ_s^{-1})
@@ -823,7 +831,7 @@ mod tests {
 
         let mut kkt = KktSystem {
             dim: 3, n, m,
-            matrix,
+            matrix: KktMatrix::Dense(matrix),
             rhs: vec![1.0, 2.0, 3.0],
         };
         let mut solver = DenseLdl::new();
@@ -848,7 +856,7 @@ mod tests {
 
         let mut kkt = KktSystem {
             dim: 3, n, m,
-            matrix,
+            matrix: KktMatrix::Dense(matrix),
             rhs: vec![1.0, 2.0, 3.0],
         };
         let mut solver = DenseLdl::new();
@@ -872,7 +880,7 @@ mod tests {
 
         let mut kkt = KktSystem {
             dim: 3, n, m,
-            matrix,
+            matrix: KktMatrix::Dense(matrix),
             rhs: vec![1.0, 2.0, 3.0],
         };
         let mut solver = DenseLdl::new();
@@ -898,12 +906,12 @@ mod tests {
         let rhs = vec![1.0, 2.0, 0.5];
         let kkt = KktSystem {
             dim: 3, n, m,
-            matrix: matrix.clone(),
+            matrix: KktMatrix::Dense(matrix.clone()),
             rhs: rhs.clone(),
         };
 
         let mut solver = DenseLdl::new();
-        solver.factor(&matrix).unwrap();
+        solver.factor(&KktMatrix::Dense(matrix.clone())).unwrap();
 
         let (dx, dy) = solve_for_direction(&kkt, &mut solver).unwrap();
         assert_eq!(dx.len(), 2);
@@ -984,7 +992,7 @@ mod tests {
         let mut full_kkt = assemble_kkt(
             n, m, &hess_rows, &hess_cols, &hess_vals,
             &jac_rows, &jac_cols, &jac_vals, &sigma, &grad_f,
-            &g, &g_l, &g_u, &y, &z_l, &z_u, &x, &x_l, &x_u, mu,
+            &g, &g_l, &g_u, &y, &z_l, &z_u, &x, &x_l, &x_u, mu, false,
         );
         let mut full_solver = DenseLdl::new();
         let mut params = InertiaCorrectionParams::default();
@@ -998,7 +1006,7 @@ mod tests {
             &g, &g_l, &g_u, &y, &z_l, &z_u, &x, &x_l, &x_u, mu,
         );
         let mut cond_solver = DenseLdl::new();
-        cond_solver.factor(&condensed.matrix).unwrap();
+        cond_solver.factor(&KktMatrix::Dense(condensed.matrix.clone())).unwrap();
         let (dx_cond, dy_cond) = solve_condensed(&condensed, &mut cond_solver).unwrap();
 
         // Compare solutions

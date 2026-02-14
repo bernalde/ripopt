@@ -1,4 +1,4 @@
-use super::{Inertia, LinearSolver, SolverError, SymmetricMatrix};
+use super::{Inertia, KktMatrix, LinearSolver, SolverError, SymmetricMatrix};
 
 /// Dense LDL^T factorization with Bunch-Kaufman pivoting for symmetric indefinite matrices.
 ///
@@ -58,7 +58,7 @@ impl DenseLdl {
     ///
     /// This implements the symmetric indefinite factorization A = P L D L^T P^T.
     /// We use the standard Bunch-Kaufman algorithm with alpha = (1 + sqrt(17)) / 8.
-    fn bunch_kaufman_factor(&mut self, matrix: &SymmetricMatrix) -> Result<Inertia, SolverError> {
+    pub fn bunch_kaufman_factor(&mut self, matrix: &SymmetricMatrix) -> Result<Inertia, SolverError> {
         let n = matrix.n;
         self.n = n;
         self.l = vec![0.0; n * n];
@@ -454,9 +454,16 @@ impl DenseLdl {
 }
 
 impl LinearSolver for DenseLdl {
-    fn factor(&mut self, matrix: &SymmetricMatrix) -> Result<Option<Inertia>, SolverError> {
-        let inertia = self.bunch_kaufman_factor(matrix)?;
-        Ok(Some(inertia))
+    fn factor(&mut self, matrix: &KktMatrix) -> Result<Option<Inertia>, SolverError> {
+        match matrix {
+            KktMatrix::Dense(d) => {
+                let inertia = self.bunch_kaufman_factor(d)?;
+                Ok(Some(inertia))
+            }
+            KktMatrix::Sparse(_) => Err(SolverError::NumericalFailure(
+                "DenseLdl requires KktMatrix::Dense".into(),
+            )),
+        }
     }
 
     fn solve(&mut self, rhs: &[f64], solution: &mut [f64]) -> Result<(), SolverError> {
@@ -488,7 +495,7 @@ mod tests {
         mat.set(2, 2, 6.0);
 
         let mut solver = DenseLdl::new();
-        let inertia = solver.factor(&mat).unwrap().unwrap();
+        let inertia = solver.factor(&KktMatrix::Dense(mat.clone())).unwrap().unwrap();
 
         assert_eq!(inertia.positive, 3);
         assert_eq!(inertia.negative, 0);
@@ -523,7 +530,7 @@ mod tests {
         mat.set(1, 1, -1.0);
 
         let mut solver = DenseLdl::new();
-        let inertia = solver.factor(&mat).unwrap().unwrap();
+        let inertia = solver.factor(&KktMatrix::Dense(mat.clone())).unwrap().unwrap();
 
         assert_eq!(inertia.positive, 1);
         assert_eq!(inertia.negative, 1);
@@ -562,7 +569,7 @@ mod tests {
         mat.set(2, 2, 0.0);
 
         let mut solver = DenseLdl::new();
-        let inertia = solver.factor(&mat).unwrap().unwrap();
+        let inertia = solver.factor(&KktMatrix::Dense(mat.clone())).unwrap().unwrap();
 
         assert_eq!(
             inertia.positive, 2,
@@ -602,7 +609,7 @@ mod tests {
         mat.set(1, 1, 1e-15);
 
         let mut solver = DenseLdl::new();
-        let inertia = solver.factor(&mat).unwrap().unwrap();
+        let inertia = solver.factor(&KktMatrix::Dense(mat.clone())).unwrap().unwrap();
 
         assert_eq!(inertia.positive, 1);
         assert_eq!(inertia.zero, 1);
@@ -616,7 +623,7 @@ mod tests {
         }
 
         let mut solver = DenseLdl::new();
-        let inertia = solver.factor(&mat).unwrap().unwrap();
+        let inertia = solver.factor(&KktMatrix::Dense(mat.clone())).unwrap().unwrap();
         assert_eq!(inertia.positive, 4);
         assert_eq!(inertia.negative, 0);
         assert_eq!(inertia.zero, 0);
@@ -652,7 +659,7 @@ mod tests {
         mat.set(5, 3, 1.0); // J[1][3]
 
         let mut solver = DenseLdl::new();
-        let inertia = solver.factor(&mat).unwrap().unwrap();
+        let inertia = solver.factor(&KktMatrix::Dense(mat.clone())).unwrap().unwrap();
 
         assert_eq!(inertia.positive, 4, "Expected 4 positive eigenvalues");
         assert_eq!(inertia.negative, 2, "Expected 2 negative eigenvalues");
@@ -684,7 +691,7 @@ mod tests {
         mat.set(1, 1, -4.0);
 
         let mut solver = DenseLdl::new();
-        let inertia = solver.factor(&mat).unwrap().unwrap();
+        let inertia = solver.factor(&KktMatrix::Dense(mat.clone())).unwrap().unwrap();
 
         assert_eq!(inertia.positive, 0);
         assert_eq!(inertia.negative, 2);
@@ -711,7 +718,7 @@ mod tests {
         let mut mat = SymmetricMatrix::zeros(1);
         mat.set(0, 0, 5.0);
         let mut solver = DenseLdl::new();
-        let inertia = solver.factor(&mat).unwrap().unwrap();
+        let inertia = solver.factor(&KktMatrix::Dense(mat.clone())).unwrap().unwrap();
         assert_eq!(inertia.positive, 1);
         assert_eq!(inertia.negative, 0);
         assert_eq!(inertia.zero, 0);
@@ -726,7 +733,7 @@ mod tests {
     fn test_zero_matrix() {
         let mat = SymmetricMatrix::zeros(2);
         let mut solver = DenseLdl::new();
-        let inertia = solver.factor(&mat).unwrap().unwrap();
+        let inertia = solver.factor(&KktMatrix::Dense(mat.clone())).unwrap().unwrap();
         assert_eq!(inertia.positive, 0);
         assert_eq!(inertia.negative, 0);
         assert_eq!(inertia.zero, 2);
@@ -748,7 +755,7 @@ mod tests {
             mat.set(i, i, 1.0);
         }
         let mut solver = DenseLdl::new();
-        solver.factor(&mat).unwrap();
+        solver.factor(&KktMatrix::Dense(mat.clone())).unwrap();
         let rhs = [1.0, 2.0]; // Wrong size (2 instead of 3)
         let mut sol = [0.0; 2];
         let result = solver.solve(&rhs, &mut sol);
@@ -768,7 +775,7 @@ mod tests {
         mat.set(2, 2, 4.0);
 
         let mut solver = DenseLdl::new();
-        solver.factor(&mat).unwrap();
+        solver.factor(&KktMatrix::Dense(mat.clone())).unwrap();
 
         let rhs = [1.0, 2.0, 3.0];
         let mut sol = [0.0; 3];

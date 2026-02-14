@@ -77,6 +77,18 @@ pub struct SolverOptions {
     pub watchdog_shortened_iter_trigger: usize,
     /// Maximum trial iterations during watchdog mode. Default: 5.
     pub watchdog_trial_iter_max: usize,
+    /// KKT dimension threshold for switching to sparse solver.
+    /// When n + m >= sparse_threshold, use sparse LDLT instead of dense.
+    /// Default: 100.
+    pub sparse_threshold: usize,
+    /// Barrier tolerance factor for fixed-mode mu decrease. Default: 10.0.
+    pub barrier_tol_factor: f64,
+    /// Initial factor for mu in fixed mode: mu = this * avg_compl. Default: 0.8.
+    pub adaptive_mu_monotone_init_factor: f64,
+    /// Maximum iterations for restoration NLP subproblem. Default: 200.
+    pub restoration_max_iter: usize,
+    /// Disable NLP restoration (prevents recursion in inner solve). Default: false.
+    pub disable_nlp_restoration: bool,
 }
 
 impl Default for SolverOptions {
@@ -118,6 +130,11 @@ impl Default for SolverOptions {
             acceptable_compl_inf_tol: 1e-2,
             watchdog_shortened_iter_trigger: 10,
             watchdog_trial_iter_max: 5,
+            sparse_threshold: 100,
+            barrier_tol_factor: 10.0,
+            adaptive_mu_monotone_init_factor: 0.8,
+            restoration_max_iter: 200,
+            disable_nlp_restoration: false,
         }
     }
 }

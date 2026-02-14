@@ -13,11 +13,13 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(5);
 
+    let force_sparse = std::env::var("RIPOPT_FORCE_SPARSE").is_ok();
     let options = SolverOptions {
         tol: 1e-8,
         max_iter: 3000,
         print_level: 0,
         mu_strategy_adaptive: true,
+        sparse_threshold: if force_sparse { 0 } else { 100 },
         ..SolverOptions::default()
     };
 
