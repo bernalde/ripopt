@@ -236,6 +236,18 @@ impl SolverState {
         let mut x = vec![0.0; n];
         problem.initial_point(&mut x);
 
+        // Relax fixed variables: when x_l == x_u, the variable is fixed.
+        // Interior-point methods require strictly interior starting points,
+        // so we relax the bounds slightly (Ipopt's relax_bounds approach).
+        for i in 0..n {
+            if x_l[i].is_finite() && x_u[i].is_finite() && (x_u[i] - x_l[i]).abs() < 1e-10 {
+                let center = (x_l[i] + x_u[i]) / 2.0;
+                let relax = 1e-8 * center.abs().max(1.0);
+                x_l[i] = center - relax;
+                x_u[i] = center + relax;
+            }
+        }
+
         // Push initial point away from bounds
         for i in 0..n {
             if x_l[i].is_finite() && x_u[i].is_finite() {
@@ -497,9 +509,18 @@ struct LeastSquaresProblem<'a, P: NlpProblem> {
     /// Jacobian structure cached from inner problem.
     jac_rows: Vec<usize>,
     jac_cols: Vec<usize>,
-    /// Hessian structure: lower triangle of J^T*J.
+    /// Hessian structure: lower triangle of J^T*J + ∑ r_i ∇²g_i.
     hess_rows: Vec<usize>,
     hess_cols: Vec<usize>,
+    /// Inner problem's hessian row indices for second-order terms.
+    #[allow(dead_code)]
+    inner_hess_rows: Vec<usize>,
+    /// Inner problem's hessian col indices (kept for symmetry with rows).
+    #[allow(dead_code)]
+    inner_hess_cols: Vec<usize>,
+    /// Mapping from inner hessian entries to our dense lower triangle index.
+    /// inner_hess_map[k] = index into our vals[] for inner hessian entry k.
+    inner_hess_map: Vec<usize>,
 }
 
 impl<P: NlpProblem> LeastSquaresProblem<'_, P> {
@@ -513,7 +534,7 @@ impl<P: NlpProblem> LeastSquaresProblem<'_, P> {
 
         let (jac_rows, jac_cols) = inner.jacobian_structure();
 
-        // Build Hessian structure for J^T*J (lower triangle, n x n dense).
+        // Build Hessian structure for J^T*J + ∑r_i∇²g_i (lower triangle, n x n dense).
         // Since J^T*J is generally dense, use full lower triangle.
         let mut hess_rows = Vec::with_capacity(n * (n + 1) / 2);
         let mut hess_cols = Vec::with_capacity(n * (n + 1) / 2);
@@ -524,6 +545,18 @@ impl<P: NlpProblem> LeastSquaresProblem<'_, P> {
             }
         }
 
+        // Build mapping from inner hessian entries to our dense lower triangle.
+        // Our layout: for (i,j) with i >= j, index = i*(i+1)/2 + j
+        let (inner_hess_rows, inner_hess_cols) = inner.hessian_structure();
+        let mut inner_hess_map = Vec::with_capacity(inner_hess_rows.len());
+        for k in 0..inner_hess_rows.len() {
+            let (r, c) = (inner_hess_rows[k], inner_hess_cols[k]);
+            // Ensure lower triangle (r >= c)
+            let (i, j) = if r >= c { (r, c) } else { (c, r) };
+            let idx = i * (i + 1) / 2 + j;
+            inner_hess_map.push(idx);
+        }
+
         LeastSquaresProblem {
             inner,
             targets,
@@ -531,6 +564,9 @@ impl<P: NlpProblem> LeastSquaresProblem<'_, P> {
             jac_cols,
             hess_rows,
             hess_cols,
+            inner_hess_rows,
+            inner_hess_cols,
+            inner_hess_map,
         }
     }
 }
@@ -597,19 +633,26 @@ impl<P: NlpProblem> NlpProblem for LeastSquaresProblem<'_, P> {
     }
     fn hessian_values(&self, x: &[f64], obj_factor: f64, _lambda: &[f64], vals: &mut [f64]) {
         let n = self.inner.num_variables();
-        // H ≈ obj_factor * J^T * J  (Gauss-Newton approximation)
+        let m = self.targets.len();
+
+        // Compute residual r = g(x) - target
+        let mut g = vec![0.0; m];
+        self.inner.constraints(x, &mut g);
+        let mut r = vec![0.0; m];
+        for i in 0..m {
+            r[i] = g[i] - self.targets[i];
+        }
+
+        // Part 1: J^T * J (Gauss-Newton term)
         let jac_nnz = self.jac_rows.len();
         let mut jac_vals = vec![0.0; jac_nnz];
         self.inner.jacobian_values(x, &mut jac_vals);
 
-        // Build dense J (m x n) for small problems, then compute J^T*J
-        let m = self.targets.len();
         let mut j_dense = vec![0.0; m * n];
         for (idx, (&row, &col)) in self.jac_rows.iter().zip(self.jac_cols.iter()).enumerate() {
             j_dense[row * n + col] += jac_vals[idx];
         }
 
-        // Compute lower triangle of J^T*J
         let mut idx = 0;
         for i in 0..n {
             for j in 0..=i {
@@ -621,21 +664,32 @@ impl<P: NlpProblem> NlpProblem for LeastSquaresProblem<'_, P> {
                 idx += 1;
             }
         }
+
+        // Part 2: ∑ r_i * ∇²g_i (second-order correction)
+        // inner.hessian_values(x, 0.0, r, hess) gives ∑ r_i * ∇²g_i
+        let inner_hess_nnz = self.inner_hess_rows.len();
+        if inner_hess_nnz > 0 {
+            let mut inner_hess_vals = vec![0.0; inner_hess_nnz];
+            self.inner.hessian_values(x, 0.0, &r, &mut inner_hess_vals);
+            for (k, &v) in inner_hess_vals.iter().enumerate() {
+                vals[self.inner_hess_map[k]] += obj_factor * v;
+            }
+        }
     }
 }
 
-/// Detect if a problem is an overdetermined nonlinear equation system.
+/// Detect if a problem is a nonlinear equation system (square or overdetermined).
 ///
 /// Returns true if ALL of:
 /// - f(x0) ≈ 0 (zero objective)
 /// - ∇f(x0) ≈ 0 (zero gradient)
 /// - All constraints are equalities (g_l[i] == g_u[i])
-/// - m > n (more constraints than variables)
+/// - m >= n (square or more constraints than variables)
 fn detect_ne_problem<P: NlpProblem>(problem: &P) -> bool {
     let n = problem.num_variables();
     let m = problem.num_constraints();
 
-    if m <= n || m == 0 || n == 0 {
+    if m < n || m == 0 || n == 0 {
         return false;
     }
 
@@ -721,6 +775,18 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 "ripopt: NE-to-LS result: obj_LS={:.4e}, constraint_violation={:.4e}, status={:?}",
                 ls_result.objective, theta, status
             );
+        }
+
+        // For square systems (m == n), if LS reports LocalInfeasibility,
+        // fall back to the original constrained formulation. The LS approach
+        // may have gotten stuck at a local minimum of ||g||^2 that isn't a root.
+        if status == SolveStatus::LocalInfeasibility && m == n {
+            if options.print_level >= 5 {
+                eprintln!(
+                    "ripopt: LS reformulation failed for square system, falling back to constrained IPM"
+                );
+            }
+            return solve_ipm(problem, options);
         }
 
         return SolveResult {
@@ -1603,8 +1669,8 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 break;
             }
 
-            // Second-order correction (SOC) — only try on first backtracking step (Ipopt convention)
-            if theta_trial > theta_current && options.max_soc > 0 && alpha == alpha_primal_max {
+            // Second-order correction (SOC) — try on every backtracking step where theta increases
+            if theta_trial > theta_current && options.max_soc > 0 {
                 let soc_accepted = attempt_soc(
                     &state,
                     problem,
@@ -1673,10 +1739,10 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 mu_state.consecutive_restoration_failures += 1;
                 let fail_count = mu_state.consecutive_restoration_failures;
 
-                // At fail_count == 5: try full NLP restoration before giving up.
-                // This is expensive (creates n+2m variable subproblem), so only try
-                // after simpler recovery strategies have been exhausted.
-                if fail_count == 5 && !options.disable_nlp_restoration {
+                // At fail_count == 2: try full NLP restoration early.
+                // The NLP restoration is the most robust approach (Ipopt's primary method).
+                // Try it before exhausting simpler recovery strategies.
+                if fail_count == 2 && !options.disable_nlp_restoration {
                     let (x_nlp, outcome) = attempt_nlp_restoration(
                         problem, &state, &filter, options, theta_current,
                     );

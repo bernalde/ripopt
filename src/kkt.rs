@@ -75,7 +75,11 @@ pub fn assemble_kkt(
 
     // (1,1) block: H + Sigma
     for (idx, (&row, &col)) in hess_rows.iter().zip(hess_cols.iter()).enumerate() {
-        matrix.add(row, col, hess_vals[idx]);
+        let v = hess_vals[idx];
+        if v.is_nan() || v.is_infinite() {
+            log::warn!("NaN/Inf in Hessian at ({}, {}): {}", row, col, v);
+        }
+        matrix.add(row, col, v);
     }
 
     // Add barrier diagonal Sigma for variable bounds
@@ -179,6 +183,16 @@ pub fn assemble_kkt(
         } else {
             // All infeasible: just drive toward feasibility
             rhs[n + i] = rhs_infeasible;
+        }
+    }
+
+    // Debug: check for NaN in matrix and RHS
+    if rhs.iter().any(|v| v.is_nan() || v.is_infinite()) {
+        log::warn!("NaN/Inf in KKT RHS!");
+        for (i, v) in rhs.iter().enumerate() {
+            if v.is_nan() || v.is_infinite() {
+                log::warn!("  rhs[{}] = {}", i, v);
+            }
         }
     }
 
@@ -364,8 +378,23 @@ pub fn solve_for_direction(
     solver: &mut dyn LinearSolver,
 ) -> Result<(Vec<f64>, Vec<f64>), crate::linear_solver::SolverError> {
     let dim = kkt.dim;
+
+    // NaN guard on RHS — if the RHS has NaN, the problem evaluation is broken
+    if kkt.rhs.iter().any(|v| v.is_nan() || v.is_infinite()) {
+        return Err(crate::linear_solver::SolverError::NumericalFailure(
+            "KKT RHS contains NaN/Inf".to_string(),
+        ));
+    }
+
     let mut solution = vec![0.0; dim];
     solver.solve(&kkt.rhs, &mut solution)?;
+
+    // NaN guard on solution — factorization may produce NaN for ill-conditioned systems
+    if solution.iter().any(|v| v.is_nan() || v.is_infinite()) {
+        return Err(crate::linear_solver::SolverError::NumericalFailure(
+            "KKT solution contains NaN/Inf".to_string(),
+        ));
+    }
 
     // Iterative refinement: correct the solution using the residual
     let max_refinements = 3;
