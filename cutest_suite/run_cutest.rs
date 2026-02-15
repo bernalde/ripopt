@@ -412,6 +412,7 @@ fn run_single_problem(name: &str) {
         max_iter: 3000,
         print_level,
         mu_strategy_adaptive: true,
+        max_wall_time: 30.0,
         ..SolverOptions::default()
     };
 

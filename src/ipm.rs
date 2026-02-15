@@ -809,58 +809,94 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             return solve_ipm(problem, options);
         }
 
+        // L-BFGS retry on LS problem when IPM found a local min with nonzero residual
+        let (final_x, final_status, final_g, final_iters, final_zl, final_zu) =
+            if status == SolveStatus::LocalInfeasibility && options.enable_lbfgs_fallback {
+                if options.print_level >= 5 {
+                    eprintln!(
+                        "ripopt: NE-to-LS LocalInfeasibility (theta={:.4e}), trying L-BFGS on LS",
+                        theta
+                    );
+                }
+                let lbfgs_ls = crate::lbfgs::solve(&ls_problem, options);
+                let mut g_lb = vec![0.0; m];
+                problem.constraints(&lbfgs_ls.x, &mut g_lb);
+                let theta_lb = convergence::primal_infeasibility(&g_lb, &g_l, &g_u);
+
+                if theta_lb < theta {
+                    let new_status = if theta_lb < options.tol {
+                        SolveStatus::Optimal
+                    } else if theta_lb < options.acceptable_tol {
+                        SolveStatus::Acceptable
+                    } else {
+                        SolveStatus::LocalInfeasibility
+                    };
+                    if options.print_level >= 5 {
+                        eprintln!(
+                            "ripopt: L-BFGS improved NE-to-LS (theta: {:.4e} -> {:.4e}, status={:?})",
+                            theta, theta_lb, new_status
+                        );
+                    }
+                    (lbfgs_ls.x, new_status, g_lb, lbfgs_ls.iterations,
+                     lbfgs_ls.bound_multipliers_lower, lbfgs_ls.bound_multipliers_upper)
+                } else {
+                    if options.print_level >= 5 {
+                        eprintln!(
+                            "ripopt: L-BFGS did not improve NE-to-LS (theta_lb={:.4e} >= theta={:.4e})",
+                            theta_lb, theta
+                        );
+                    }
+                    (ls_result.x, status, g_out, ls_result.iterations,
+                     ls_result.bound_multipliers_lower, ls_result.bound_multipliers_upper)
+                }
+            } else {
+                (ls_result.x, status, g_out, ls_result.iterations,
+                 ls_result.bound_multipliers_lower, ls_result.bound_multipliers_upper)
+            };
+
         return SolveResult {
-            x: ls_result.x,
+            x: final_x,
             objective: 0.0, // Original objective is f≡0
             constraint_multipliers: vec![0.0; m],
-            bound_multipliers_lower: ls_result.bound_multipliers_lower,
-            bound_multipliers_upper: ls_result.bound_multipliers_upper,
-            constraint_values: g_out,
-            status,
-            iterations: ls_result.iterations,
+            bound_multipliers_lower: final_zl,
+            bound_multipliers_upper: final_zu,
+            constraint_values: final_g,
+            status: final_status,
+            iterations: final_iters,
         };
     }
 
-    let mut result = solve_ipm(problem, options);
-
-    // L-BFGS fallback for unconstrained problems
-    if options.enable_lbfgs_fallback
-        && problem.num_constraints() == 0
-        && matches!(
-            result.status,
-            SolveStatus::MaxIterations | SolveStatus::NumericalError
-        )
-    {
-        if options.print_level >= 5 {
-            eprintln!(
-                "ripopt: IPM failed ({:?}) on unconstrained problem, trying L-BFGS fallback",
-                result.status
-            );
-        }
+    // For unconstrained problems, try L-BFGS first (O(n·m) vs O(n³) per iteration)
+    // then fall back to IPM if needed.
+    let mut result = if options.enable_lbfgs_fallback && problem.num_constraints() == 0 {
         let lbfgs_result = crate::lbfgs::solve(problem, options);
-        let lbfgs_better = matches!(
-            lbfgs_result.status,
-            SolveStatus::Optimal | SolveStatus::Acceptable
-        ) || (!matches!(
-            result.status,
-            SolveStatus::Optimal | SolveStatus::Acceptable
-        ) && lbfgs_result.objective < result.objective);
-
-        if lbfgs_better {
+        if matches!(lbfgs_result.status, SolveStatus::Optimal | SolveStatus::Acceptable) {
             if options.print_level >= 5 {
                 eprintln!(
-                    "ripopt: L-BFGS fallback succeeded ({:?}, obj={:.6e})",
+                    "ripopt: L-BFGS solved unconstrained problem ({:?}, obj={:.6e})",
                     lbfgs_result.status, lbfgs_result.objective
                 );
             }
-            result = lbfgs_result;
-        } else if options.print_level >= 5 {
-            eprintln!(
-                "ripopt: L-BFGS fallback did not improve ({:?}, obj={:.6e})",
-                lbfgs_result.status, lbfgs_result.objective
-            );
+            lbfgs_result
+        } else {
+            if options.print_level >= 5 {
+                eprintln!(
+                    "ripopt: L-BFGS failed ({:?}, obj={:.6e}), trying IPM",
+                    lbfgs_result.status, lbfgs_result.objective
+                );
+            }
+            let ipm_result = solve_ipm(problem, options);
+            if matches!(ipm_result.status, SolveStatus::Optimal | SolveStatus::Acceptable) {
+                ipm_result
+            } else if lbfgs_result.objective < ipm_result.objective {
+                lbfgs_result
+            } else {
+                ipm_result
+            }
         }
-    }
+    } else {
+        solve_ipm(problem, options)
+    };
 
     // Augmented Lagrangian fallback for constrained problems
     if options.enable_al_fallback
