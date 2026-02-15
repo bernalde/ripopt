@@ -1,2 +1,38 @@
 /target
 __pycache__/
+
+# Build/install logs
+*.log
+cutest_install.log
+
+# CUTEst problem data and run artifacts
+cutest_suite/problems/
+cutest_suite/*_stderr.txt
+cutest_suite/*_results.json
+cutest_suite/*_results.log
+cutest_suite/cutest_phase1_run.log
+cutest_suite/phase1_results.log
+cutest_suite/results_full.txt
+cutest_suite/subset_test_results.txt
+cutest_suite/test_failures.sh
+cutest_suite/test_subset.txt
+cutest_suite/fortran_open_fixed.f90
+
+# HS suite artifacts
+hs_suite/phase1_results.log
+hs_suite_stderr.txt
+
+# Data files
+CLSF.DAT
+
+# Manuscript (local only)
+manuscript/
+
+# Archive of old docs
+archive/
+
+# Makefile (local build helper)
+Makefile
+
+# Install scripts
+install_cutest.sh
