@@ -8,6 +8,7 @@ pub mod problem;
 pub mod restoration;
 pub mod restoration_nlp;
 pub mod result;
+pub mod slack_formulation;
 pub mod warmstart;
 
 pub use options::SolverOptions;

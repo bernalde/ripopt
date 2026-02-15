@@ -11,6 +11,7 @@ use crate::problem::NlpProblem;
 use crate::restoration::RestorationPhase;
 use crate::restoration_nlp::RestorationNlp;
 use crate::result::{SolveResult, SolveStatus};
+use crate::slack_formulation::SlackFormulation;
 use crate::warmstart::WarmStartInitializer;
 
 /// NLP problem wrapper that applies gradient-based scaling.
@@ -820,7 +821,93 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         };
     }
 
-    solve_ipm(problem, options)
+    let result = solve_ipm(problem, options);
+
+    // Slack variable fallback: if the initial solve failed and the problem has
+    // inequality constraints, retry with explicit slacks (g(x)-s=0, bounds on s).
+    if options.enable_slack_fallback
+        && has_inequality_constraints(problem)
+        && matches!(
+            result.status,
+            SolveStatus::RestorationFailed
+                | SolveStatus::MaxIterations
+                | SolveStatus::NumericalError
+        )
+    {
+        if options.print_level >= 5 {
+            eprintln!(
+                "ripopt: Initial solve failed ({:?}), retrying with explicit slack variables",
+                result.status
+            );
+        }
+
+        let slack_prob = SlackFormulation::new(problem, &result.x);
+        let mut slack_opts = options.clone();
+        slack_opts.enable_slack_fallback = false; // prevent recursion
+
+        let slack_result = solve_ipm(&slack_prob, &slack_opts);
+
+        let slack_improved = matches!(
+            slack_result.status,
+            SolveStatus::Optimal | SolveStatus::Acceptable
+        );
+
+        if slack_improved {
+            let n = problem.num_variables();
+            let m = problem.num_constraints();
+
+            if options.print_level >= 5 {
+                eprintln!(
+                    "ripopt: Slack fallback succeeded ({:?}, obj={:.6e})",
+                    slack_result.status, slack_result.objective
+                );
+            }
+
+            // Extract original x from [x, s]
+            let x_out = slack_result.x[..n].to_vec();
+
+            // Evaluate original constraints at solution
+            let mut g_out = vec![0.0; m];
+            problem.constraints(&x_out, &mut g_out);
+
+            // y from slack solve = original constraint multipliers
+            let y_out = slack_result.constraint_multipliers;
+
+            // z_l[..n], z_u[..n] = original bound multipliers
+            let z_l_out = slack_result.bound_multipliers_lower[..n].to_vec();
+            let z_u_out = slack_result.bound_multipliers_upper[..n].to_vec();
+
+            return SolveResult {
+                x: x_out,
+                objective: slack_result.objective,
+                constraint_multipliers: y_out,
+                bound_multipliers_lower: z_l_out,
+                bound_multipliers_upper: z_u_out,
+                constraint_values: g_out,
+                status: slack_result.status,
+                iterations: result.iterations + slack_result.iterations,
+            };
+        } else if options.print_level >= 5 {
+            eprintln!(
+                "ripopt: Slack fallback also failed ({:?}), returning original result",
+                slack_result.status
+            );
+        }
+    }
+
+    result
+}
+
+/// Check if a problem has any inequality constraints (g_l[i] != g_u[i]).
+fn has_inequality_constraints<P: NlpProblem>(problem: &P) -> bool {
+    let m = problem.num_constraints();
+    if m == 0 {
+        return false;
+    }
+    let mut g_l = vec![0.0; m];
+    let mut g_u = vec![0.0; m];
+    problem.constraint_bounds(&mut g_l, &mut g_u);
+    (0..m).any(|i| (g_l[i] - g_u[i]).abs() > 0.0)
 }
 
 /// Core IPM solver implementation.

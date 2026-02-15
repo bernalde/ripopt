@@ -89,6 +89,10 @@ pub struct SolverOptions {
     pub restoration_max_iter: usize,
     /// Disable NLP restoration (prevents recursion in inner solve). Default: false.
     pub disable_nlp_restoration: bool,
+    /// Enable slack variable fallback for inequality problems. When the initial
+    /// solve fails, retry with explicit slack variables (g(x)-s=0, bounds on s).
+    /// Default: true.
+    pub enable_slack_fallback: bool,
 }
 
 impl Default for SolverOptions {
@@ -135,6 +139,7 @@ impl Default for SolverOptions {
             adaptive_mu_monotone_init_factor: 0.8,
             restoration_max_iter: 200,
             disable_nlp_restoration: false,
+            enable_slack_fallback: true,
         }
     }
 }
