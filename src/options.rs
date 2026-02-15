@@ -93,6 +93,12 @@ pub struct SolverOptions {
     /// solve fails, retry with explicit slack variables (g(x)-s=0, bounds on s).
     /// Default: true.
     pub enable_slack_fallback: bool,
+    /// Enable L-BFGS fallback for unconstrained problems. When IPM fails with
+    /// MaxIterations or NumericalError, retry with L-BFGS. Default: true.
+    pub enable_lbfgs_fallback: bool,
+    /// Enable Augmented Lagrangian fallback for equality-only problems. When IPM
+    /// fails, retry with AL method using L-BFGS inner solver. Default: true.
+    pub enable_al_fallback: bool,
 }
 
 impl Default for SolverOptions {
@@ -140,6 +146,8 @@ impl Default for SolverOptions {
             restoration_max_iter: 200,
             disable_nlp_restoration: false,
             enable_slack_fallback: true,
+            enable_lbfgs_fallback: true,
+            enable_al_fallback: true,
         }
     }
 }

@@ -821,7 +821,82 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         };
     }
 
-    let result = solve_ipm(problem, options);
+    let mut result = solve_ipm(problem, options);
+
+    // L-BFGS fallback for unconstrained problems
+    if options.enable_lbfgs_fallback
+        && problem.num_constraints() == 0
+        && matches!(
+            result.status,
+            SolveStatus::MaxIterations | SolveStatus::NumericalError
+        )
+    {
+        if options.print_level >= 5 {
+            eprintln!(
+                "ripopt: IPM failed ({:?}) on unconstrained problem, trying L-BFGS fallback",
+                result.status
+            );
+        }
+        let lbfgs_result = crate::lbfgs::solve(problem, options);
+        let lbfgs_better = matches!(
+            lbfgs_result.status,
+            SolveStatus::Optimal | SolveStatus::Acceptable
+        ) || (!matches!(
+            result.status,
+            SolveStatus::Optimal | SolveStatus::Acceptable
+        ) && lbfgs_result.objective < result.objective);
+
+        if lbfgs_better {
+            if options.print_level >= 5 {
+                eprintln!(
+                    "ripopt: L-BFGS fallback succeeded ({:?}, obj={:.6e})",
+                    lbfgs_result.status, lbfgs_result.objective
+                );
+            }
+            result = lbfgs_result;
+        } else if options.print_level >= 5 {
+            eprintln!(
+                "ripopt: L-BFGS fallback did not improve ({:?}, obj={:.6e})",
+                lbfgs_result.status, lbfgs_result.objective
+            );
+        }
+    }
+
+    // Augmented Lagrangian fallback for constrained problems
+    if options.enable_al_fallback
+        && problem.num_constraints() > 0
+        && matches!(
+            result.status,
+            SolveStatus::MaxIterations | SolveStatus::NumericalError
+        )
+    {
+        if options.print_level >= 5 {
+            eprintln!(
+                "ripopt: IPM failed ({:?}) on equality-only problem, trying AL fallback",
+                result.status
+            );
+        }
+        let al_result = crate::augmented_lagrangian::solve(problem, options);
+        let al_better = matches!(
+            al_result.status,
+            SolveStatus::Optimal | SolveStatus::Acceptable
+        );
+
+        if al_better {
+            if options.print_level >= 5 {
+                eprintln!(
+                    "ripopt: AL fallback succeeded ({:?}, obj={:.6e})",
+                    al_result.status, al_result.objective
+                );
+            }
+            result = al_result;
+        } else if options.print_level >= 5 {
+            eprintln!(
+                "ripopt: AL fallback did not improve ({:?})",
+                al_result.status
+            );
+        }
+    }
 
     // Slack variable fallback: if the initial solve failed and the problem has
     // inequality constraints, retry with explicit slacks (g(x)-s=0, bounds on s).
