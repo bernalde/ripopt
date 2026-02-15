@@ -63,6 +63,8 @@ pub fn assemble_kkt(
     x_u: &[f64],
     mu: f64,
     use_sparse: bool,
+    _v_l: &[f64],
+    _v_u: &[f64],
 ) -> KktSystem {
     let dim = n + m;
     let capacity = hess_rows.len() + jac_rows.len() + n + m;
@@ -150,7 +152,12 @@ pub fn assemble_kkt(
             if slack >= -1e-8 {
                 // Feasible or at bound: use barrier with safeguarded slack
                 let safe_slack = slack.max(mu.max(1e-10));
-                let z_sl = if y[i] < -1e-20 { -y[i] } else { mu / safe_slack };
+                // Heuristic: use |y| when y has correct sign, else barrier estimate mu/s
+                let z_sl = if y[i] < -1e-20 {
+                    -y[i]
+                } else {
+                    mu / safe_slack
+                };
                 sigma_s += z_sl / safe_slack;
                 rhs_correction += mu / safe_slack;
                 any_feasible = true;
@@ -164,7 +171,12 @@ pub fn assemble_kkt(
             if slack >= -1e-8 {
                 // Feasible or at bound: use barrier with safeguarded slack
                 let safe_slack = slack.max(mu.max(1e-10));
-                let z_su = if y[i] > 1e-20 { y[i] } else { mu / safe_slack };
+                // Heuristic: use |y| when y has correct sign, else barrier estimate mu/s
+                let z_su = if y[i] > 1e-20 {
+                    y[i]
+                } else {
+                    mu / safe_slack
+                };
                 sigma_s += z_su / safe_slack;
                 rhs_correction -= mu / safe_slack;
                 any_feasible = true;
@@ -522,6 +534,8 @@ pub fn assemble_condensed_kkt(
     x_l: &[f64],
     x_u: &[f64],
     mu: f64,
+    _v_l: &[f64],
+    _v_u: &[f64],
 ) -> CondensedKktSystem {
     // First assemble the full KKT to get the (2,2) block and RHS
     // Always use dense here since we need to extract entries for condensed system
@@ -529,7 +543,7 @@ pub fn assemble_condensed_kkt(
         n, m, hess_rows, hess_cols, hess_vals,
         jac_rows, jac_cols, jac_vals, sigma, grad_f,
         g, g_l, g_u, y, z_l, z_u, x, x_l, x_u, mu,
-        false,
+        false, _v_l, _v_u,
     );
 
     let rhs_primal = full.rhs[..n].to_vec();
@@ -726,7 +740,7 @@ mod tests {
             n, m, &hess_rows, &hess_cols, &hess_vals,
             &[], &[], &[], &sigma, &grad_f,
             &[], &[], &[], &[], &z_l, &z_u,
-            &x, &x_l, &x_u, 0.1, false,
+            &x, &x_l, &x_u, 0.1, false, &[], &[],
         );
 
         assert_eq!(kkt.dim, 2);
@@ -758,11 +772,13 @@ mod tests {
         let z_l = vec![0.0; 2];
         let z_u = vec![0.0; 2];
 
+        let v_l = vec![0.0; m];
+        let v_u = vec![0.0; m];
         let kkt = assemble_kkt(
             n, m, &hess_rows, &hess_cols, &hess_vals,
             &jac_rows, &jac_cols, &jac_vals, &sigma, &grad_f,
             &g, &g_l, &g_u, &y, &z_l, &z_u,
-            &x, &x_l, &x_u, 0.1, false,
+            &x, &x_l, &x_u, 0.1, false, &v_l, &v_u,
         );
 
         assert_eq!(kkt.dim, 3);
@@ -798,11 +814,13 @@ mod tests {
         let z_l = vec![0.0];
         let z_u = vec![0.0];
 
+        let v_l = vec![0.0; m];
+        let v_u = vec![0.0; m];
         let kkt = assemble_kkt(
             n, m, &hess_rows, &hess_cols, &hess_vals,
             &jac_rows, &jac_cols, &jac_vals, &sigma, &grad_f,
             &g, &g_l, &g_u, &y, &z_l, &z_u,
-            &x, &x_l, &x_u, 0.1, false,
+            &x, &x_l, &x_u, 0.1, false, &v_l, &v_u,
         );
 
         // r_d = -grad_f + z_l - z_u = -3.0 + 0 - 0 = -3.0
@@ -835,11 +853,13 @@ mod tests {
         let z_u = vec![0.0];
         let mu = 0.1;
 
+        let v_l = vec![0.0; m];
+        let v_u = vec![0.0; m];
         let kkt = assemble_kkt(
             n, m, &hess_rows, &hess_cols, &hess_vals,
             &jac_rows, &jac_cols, &jac_vals, &sigma, &grad_f,
             &g, &g_l, &g_u, &y, &z_l, &z_u,
-            &x, &x_l, &x_u, mu, false,
+            &x, &x_l, &x_u, mu, false, &v_l, &v_u,
         );
 
         // (2,2) block should be negative (from -Σ_s^{-1})
@@ -1018,10 +1038,13 @@ mod tests {
         let mu = 0.01;
 
         // Solve with full KKT
+        let v_l = vec![0.0; m];
+        let v_u = vec![0.0; m];
         let mut full_kkt = assemble_kkt(
             n, m, &hess_rows, &hess_cols, &hess_vals,
             &jac_rows, &jac_cols, &jac_vals, &sigma, &grad_f,
             &g, &g_l, &g_u, &y, &z_l, &z_u, &x, &x_l, &x_u, mu, false,
+            &v_l, &v_u,
         );
         let mut full_solver = DenseLdl::new();
         let mut params = InertiaCorrectionParams::default();
@@ -1033,6 +1056,7 @@ mod tests {
             n, m, &hess_rows, &hess_cols, &hess_vals,
             &jac_rows, &jac_cols, &jac_vals, &sigma, &grad_f,
             &g, &g_l, &g_u, &y, &z_l, &z_u, &x, &x_l, &x_u, mu,
+            &v_l, &v_u,
         );
         let mut cond_solver = DenseLdl::new();
         cond_solver.factor(&KktMatrix::Dense(condensed.matrix.clone())).unwrap();

@@ -93,6 +93,8 @@ struct WatchdogSavedState {
     y: Vec<f64>,
     z_l: Vec<f64>,
     z_u: Vec<f64>,
+    v_l: Vec<f64>,
+    v_u: Vec<f64>,
     mu: f64,
     obj: f64,
     g: Vec<f64>,
@@ -112,6 +114,12 @@ pub(crate) struct SolverState {
     pub z_l: Vec<f64>,
     /// Upper bound multipliers.
     pub z_u: Vec<f64>,
+    /// Constraint slack lower-bound multipliers (Ipopt's v_L).
+    /// v_l[i] > 0 for inequality constraints with finite g_l[i], 0 otherwise.
+    pub v_l: Vec<f64>,
+    /// Constraint slack upper-bound multipliers (Ipopt's v_U).
+    /// v_u[i] > 0 for inequality constraints with finite g_u[i], 0 otherwise.
+    pub v_u: Vec<f64>,
     /// Search direction: primal.
     pub dx: Vec<f64>,
     /// Search direction: constraint multipliers.
@@ -359,10 +367,13 @@ impl SolverState {
             y,
             z_l,
             z_u,
+            v_l: vec![0.0; m],
+            v_u: vec![0.0; m],
             dx: vec![0.0; n],
             dy: vec![0.0; m],
             dz_l: vec![0.0; n],
             dz_u: vec![0.0; n],
+
             mu: options.mu_init,
             alpha_primal: 0.0,
             alpha_dual: 0.0,
@@ -777,13 +788,21 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             );
         }
 
-        // For square systems (m == n), if LS reports LocalInfeasibility,
-        // fall back to the original constrained formulation. The LS approach
-        // may have gotten stuck at a local minimum of ||g||^2 that isn't a root.
-        if status == SolveStatus::LocalInfeasibility && m == n {
+        // Fall back to constrained IPM when LS reports infeasibility:
+        // - For square systems (m==n): LS may have found a non-root critical point
+        //   of ||g||^2; constrained IPM can find the actual root.
+        // - For non-square systems: only fall back if LS didn't converge
+        //   (MaxIterations/RestorationFailed); if LS converged with high theta,
+        //   the system is genuinely inconsistent.
+        let ls_converged = matches!(
+            ls_result.status,
+            SolveStatus::Optimal | SolveStatus::Acceptable
+        );
+        if status == SolveStatus::LocalInfeasibility && (m == n || !ls_converged) {
             if options.print_level >= 5 {
                 eprintln!(
-                    "ripopt: LS reformulation failed for square system, falling back to constrained IPM"
+                    "ripopt: LS reformulation reports infeasibility (theta={:.4e}, ls_status={:?}), falling back to constrained IPM",
+                    theta, ls_result.status
                 );
             }
             return solve_ipm(problem, options);
@@ -996,6 +1015,25 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
         if !recovered {
             return make_result(&state, SolveStatus::NumericalError);
+        }
+    }
+
+    // Initialize constraint slack barrier multipliers v_l, v_u (Ipopt's v_L, v_U).
+    // For each inequality constraint side: v = mu_init / slack.
+    // This matches Ipopt's IpDefaultIterateInitializer.cpp.
+    for i in 0..m {
+        let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
+            && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
+        if is_eq {
+            continue;
+        }
+        if state.g_l[i].is_finite() {
+            let slack = (state.g[i] - state.g_l[i]).max(1e-20);
+            state.v_l[i] = options.mu_init / slack;
+        }
+        if state.g_u[i].is_finite() {
+            let slack = (state.g_u[i] - state.g[i]).max(1e-20);
+            state.v_u[i] = options.mu_init / slack;
         }
     }
 
@@ -1220,6 +1258,8 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             &state.x_u,
             state.mu,
             use_sparse,
+            &state.v_l,
+            &state.v_u,
         );
 
         let condensed_system = if use_condensed {
@@ -1230,6 +1270,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 &sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
                 &state.y, &state.z_l, &state.z_u,
                 &state.x, &state.x_l, &state.x_u, state.mu,
+                &state.v_l, &state.v_u,
             ))
         } else {
             None
@@ -1290,7 +1331,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             &state.grad_f, &state.g, &state.g_l, &state.g_u,
                             &state.y, &state.z_l, &state.z_u,
                             &state.x, &state.x_l, &state.x_u, state.mu,
-                            use_sparse,
+                            use_sparse, &state.v_l, &state.v_u,
                         );
                         if kkt::factor_with_inertia_correction(
                             &mut kkt_p, lin_solver.as_mut(), &mut inertia_params,
@@ -1889,6 +1930,8 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 y: state.y.clone(),
                 z_l: state.z_l.clone(),
                 z_u: state.z_u.clone(),
+                v_l: state.v_l.clone(),
+                v_u: state.v_u.clone(),
                 mu: state.mu,
                 obj: state.obj,
                 g: state.g.clone(),
@@ -1939,6 +1982,8 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     state.y = saved.y.clone();
                     state.z_l = saved.z_l.clone();
                     state.z_u = saved.z_u.clone();
+                    state.v_l = saved.v_l.clone();
+                    state.v_u = saved.v_u.clone();
                     state.mu = saved.mu;
                     state.obj = saved.obj;
                     state.g = saved.g.clone();
@@ -1958,21 +2003,27 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         for i in 0..m {
             state.y[i] += alpha_d * state.dy[i];
         }
-        // Ipopt kappa_sigma safeguard: keep z*s in [mu/kappa_sigma, kappa_sigma*mu]
+        // Ipopt kappa_sigma safeguard: keep z*s in [mu_ks/kappa_sigma, kappa_sigma*mu_ks]
+        // In free mode, use avg_compl (clamped to [mu, 1e3]) for more stable z bounds
         let kappa_sigma = 1e10;
+        let mu_ks = if mu_state.mode == MuMode::Free {
+            compute_avg_complementarity(&state).max(state.mu).min(1e3)
+        } else {
+            state.mu
+        };
         for i in 0..n {
             if state.x_l[i].is_finite() {
                 let z_new = (state.z_l[i] + alpha_d * state.dz_l[i]).max(1e-20);
                 let s_l = (state.x[i] - state.x_l[i]).max(1e-20);
-                let z_lo = state.mu / (kappa_sigma * s_l);
-                let z_hi = kappa_sigma * state.mu / s_l;
+                let z_lo = mu_ks / (kappa_sigma * s_l);
+                let z_hi = kappa_sigma * mu_ks / s_l;
                 state.z_l[i] = z_new.clamp(z_lo, z_hi);
             }
             if state.x_u[i].is_finite() {
                 let z_new = (state.z_u[i] + alpha_d * state.dz_u[i]).max(1e-20);
                 let s_u = (state.x_u[i] - state.x[i]).max(1e-20);
-                let z_lo = state.mu / (kappa_sigma * s_u);
-                let z_hi = kappa_sigma * state.mu / s_u;
+                let z_lo = mu_ks / (kappa_sigma * s_u);
+                let z_hi = kappa_sigma * mu_ks / s_u;
                 state.z_u[i] = z_new.clamp(z_lo, z_hi);
             }
         }
@@ -1981,6 +2032,20 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
         // Re-evaluate at new point
         state.evaluate(problem, 1.0);
+
+        // Reset v_l, v_u from barrier equilibrium v = mu_ks / slack.
+        // Simple reset rather than Newton update (our dv is approximate since we
+        // lack explicit slacks, and FTB on v can restrict alpha_d too much).
+        for i in 0..m {
+            if state.v_l[i] > 0.0 && state.g_l[i].is_finite() {
+                let slack = (state.g[i] - state.g_l[i]).max(1e-20);
+                state.v_l[i] = mu_ks / slack;
+            }
+            if state.v_u[i] > 0.0 && state.g_u[i].is_finite() {
+                let slack = (state.g_u[i] - state.g[i]).max(1e-20);
+                state.v_u[i] = mu_ks / slack;
+            }
+        }
 
         // NaN/Inf guard on evaluation
         if state.obj.is_nan() || state.obj.is_infinite() {
@@ -2616,6 +2681,30 @@ fn apply_restoration_success<P: NlpProblem>(
         state.y[i] = 0.0;
     }
 
+    // Reset constraint slack barrier multipliers v_l, v_u from mu/slack.
+    let mu_r = state.mu;
+    for i in 0..m {
+        let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
+            && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
+        if is_eq {
+            state.v_l[i] = 0.0;
+            state.v_u[i] = 0.0;
+            continue;
+        }
+        if state.g_l[i].is_finite() {
+            let slack = (state.g[i] - state.g_l[i]).max(1e-12);
+            state.v_l[i] = (mu_r / slack).min(bound_mult_reset_threshold);
+        } else {
+            state.v_l[i] = 0.0;
+        }
+        if state.g_u[i].is_finite() {
+            let slack = (state.g_u[i] - state.g[i]).max(1e-12);
+            state.v_u[i] = (mu_r / slack).min(bound_mult_reset_threshold);
+        } else {
+            state.v_u[i] = 0.0;
+        }
+    }
+
     // Reset filter and re-initialize from restored point
     filter.reset();
     let theta_restored = state.constraint_violation();
@@ -2757,6 +2846,7 @@ fn attempt_nlp_restoration<P: NlpProblem>(
 fn compute_avg_complementarity(state: &SolverState) -> f64 {
     let mut sum_compl = 0.0;
     let mut count = 0;
+    // Variable bound complementarity: z_l * (x - x_l), z_u * (x_u - x)
     for i in 0..state.n {
         if state.x_l[i].is_finite() {
             let slack = (state.x[i] - state.x_l[i]).max(1e-20);
@@ -2767,6 +2857,29 @@ fn compute_avg_complementarity(state: &SolverState) -> f64 {
             let slack = (state.x_u[i] - state.x[i]).max(1e-20);
             sum_compl += slack * state.z_u[i];
             count += 1;
+        }
+    }
+    // If no variable bounds exist but inequality constraints do, include
+    // constraint slack complementarity v_l*(g-g_l), v_u*(g_u-g) as fallback.
+    // This prevents avg_compl=0 for problems with only inequality constraints
+    // (e.g., OET2/6/7 with m=1002 inequalities and no variable bounds),
+    // which otherwise causes mu to collapse to mu_min prematurely.
+    //
+    // When variable bounds exist, their z*slack products already drive mu;
+    // adding v*slack (which ≈ mu since v = mu/slack) would bias avg_compl
+    // and slow convergence (causes TP044/TP116 regressions).
+    if count == 0 {
+        for i in 0..state.m {
+            if state.v_l[i] > 0.0 {
+                let slack = (state.g[i] - state.g_l[i]).max(1e-20);
+                sum_compl += state.v_l[i] * slack;
+                count += 1;
+            }
+            if state.v_u[i] > 0.0 {
+                let slack = (state.g_u[i] - state.g[i]).max(1e-20);
+                sum_compl += state.v_u[i] * slack;
+                count += 1;
+            }
         }
     }
     if count > 0 {

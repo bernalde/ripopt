@@ -148,42 +148,33 @@ opportunities to correct the linearization error as the step size decreases.
 **Impact.** Improves convergence on problems where the Maratos effect persists at
 reduced step sizes (e.g., HS23, several CUTEst constrained problems).
 
-### 6. Dense Bunch-Kaufman with L-Swap Fix
+### 6. Hybrid Dense/Sparse Linear Algebra
 
 **The problem.** The KKT matrix is symmetric indefinite, requiring a factorization
-that handles mixed-sign eigenvalues. Standard LDL^T with diagonal pivoting is unstable
-for indefinite systems.
+that handles mixed-sign eigenvalues. The solver must work across problem sizes from
+n+m=3 to n+m=5000+.
 
-**ripopt's approach.** Uses Bunch-Kaufman pivoting with 1x1 and 2x2 blocks, which
-is provably stable for symmetric indefinite systems. A critical bug fix ensures that
-when rows/columns are swapped during pivoting, the L entries from previously computed
-columns are also swapped. Without this, P*L*D*L^T*P^T != A, producing incorrect
-solutions that cascade into convergence failures.
+**ripopt's approach.** Two factorization backends, selected automatically:
 
-**Impact.** Correct factorization is the foundation for all other algorithmic
-improvements. The BK L-swap bug fix was responsible for solving dozens of previously
-failing problems.
+- **Dense Bunch-Kaufman** (n+m < 100): Custom implementation with 1x1 and 2x2 block
+  pivoting. A critical bug fix ensures that when rows/columns are swapped during
+  pivoting, the L entries from previously computed columns are also swapped. Without
+  this, P*L*D*L^T*P^T != A, producing incorrect solutions.
+
+- **Sparse LDL^T** (n+m >= 100): Uses faer's simplicial LDLT with AMD ordering.
+  Symbolic factorization is computed once and cached; only numeric factorization
+  repeats each iteration. Inertia is extracted from the D diagonal.
+
+**Impact.** The hybrid approach gives optimal performance across all problem sizes.
+Small problems benefit from cache-friendly dense operations (median 34x faster than
+Ipopt). Large problems (e.g., TAX13322 with m=1261) use sparse and are competitive
+with or faster than Ipopt's MUMPS.
 
 ---
 
 ## Where Ipopt Remains Stronger
 
-### 1. Sparse Linear Algebra
-
-ripopt uses dense Bunch-Kaufman factorization with O(n^3) complexity. Ipopt uses the
-MUMPS sparse direct solver. For large problems, this difference is decisive:
-
-- **OET2/5/6/7** (n=3-7, m=1002): 1002 constraints make the KKT matrix 1005x1005.
-  Each iteration costs ~0.5s in ripopt vs ~0.1ms in Ipopt. ripopt hits MaxIterations.
-- **DIAMON2D/3D, DMN\*** (n=66-99, m=4643): Both solvers timeout at 60s, but Ipopt
-  would solve these with more time while ripopt's per-iteration cost is prohibitive.
-- **TAX13322** (n=72, m=1261): ripopt solves it (Acceptable, 34s) but is 260x slower
-  than Ipopt (132ms).
-
-This is the single largest remaining gap. A sparse factorization would unlock 10-20
-additional problems and dramatically improve timing on medium-to-large problems.
-
-### 2. Convergence on Some Constrained Problems
+### 1. Convergence on Some Constrained Problems
 
 12 problems are solved by Ipopt but not ripopt:
 
@@ -196,9 +187,9 @@ additional problems and dramatically improve timing on medium-to-large problems.
 | HS109 | 9 | 10 | MaxIterations | Slow convergence near degenerate point |
 | HS83 | 5 | 3 | MaxIterations | Restoration cycling |
 | MGH10SLS | 3 | 0 | MaxIterations | Stuck at wrong local minimum |
-| OET2 | 3 | 1002 | MaxIterations | Wrong basin + slow per-iteration (dense) |
-| OET6 | 5 | 1002 | MaxIterations | Same as OET2 |
-| OET7 | 7 | 1002 | MaxIterations | Same as OET2 |
+| OET2 | 3 | 1002 | MaxIterations | Wrong basin, dual oscillation |
+| OET6 | 5 | 1002 | MaxIterations | Slow convergence (2999 iters vs Ipopt's 126) |
+| OET7 | 7 | 1002 | MaxIterations | Slow convergence (2999 iters vs Ipopt's 193) |
 | OSBORNEA | 5 | 0 | MaxIterations | Slow convergence (unconstrained) |
 | QCNEW | 9 | 3 | MaxIterations | Slow convergence near solution |
 
@@ -207,7 +198,7 @@ but too slowly. The OET family (3 problems) would likely be solved with sparse l
 algebra. The remaining problems involve degenerate multipliers, wrong basins, or slow
 final convergence.
 
-### 3. Iteration Counts on Some Problems
+### 2. Iteration Counts on Some Problems
 
 While ripopt is faster per iteration (median 29.7x), it sometimes requires significantly
 more iterations:
@@ -226,7 +217,7 @@ second-order step computation that cause ripopt to take longer paths. In most ca
 ripopt still converges correctly (just slowly), but the iteration count difference
 indicates room for improvement in the adaptive mu oracle or the initial dual estimate.
 
-### 4. Solution Quality at Degenerate Points
+### 3. Solution Quality at Degenerate Points
 
 93 problems where both solvers converge produce different objectives (different local
 optima). While both solutions satisfy KKT conditions, Ipopt more often finds the
@@ -241,7 +232,7 @@ perturbation strategy.
 | Aspect | ripopt | Ipopt |
 |--------|--------|-------|
 | Language | Rust | C++ (with Fortran MUMPS) |
-| Linear solver | Dense Bunch-Kaufman (O(n^3)) | MUMPS sparse (O(nnz^1.5)) |
+| Linear solver | Dense BK (small) + faer sparse LDL (large) | MUMPS sparse |
 | Restoration | 2-phase: GN then NLP | Single NLP restoration |
 | NE handling | LS reformulation | Standard constrained IPM |
 | Convergence | Dual gate + unscaled check | Single scaled check |
@@ -256,15 +247,15 @@ perturbation strategy.
 
 ### High Impact
 
-1. **Sparse LDL factorization.** Would unlock OET2/5/6/7 (4 problems), dramatically
-   improve TAX/TAXR timing, and enable problems with thousands of constraints. This is
-   the single most impactful change remaining. Estimated gain: 5-10 problems, 10-100x
-   speedup on large problems.
-
-2. **Adaptive mu tuning.** Several problems (GOFFIN, HS85, LAUNCH, HYDCAR6) show
+1. **Adaptive mu tuning.** Several problems (GOFFIN, HS85, LAUNCH, HYDCAR6) show
    ripopt taking 100x more iterations than Ipopt. Improving the mu oracle to better
    estimate the optimal barrier parameter could reduce iteration counts significantly.
+   10/12 ripopt-only failures are MaxIterations -- this is the dominant failure mode.
    Estimated gain: 3-5 problems, faster convergence on many others.
+
+2. **Oscillation damping.** HATFLDH, HS83, OET2/6/7 cycle with oscillating dual
+   variables. Damping y updates (e.g., y_new = alpha*y_computed + (1-alpha)*y_old
+   with adaptive alpha) could stabilize convergence. Estimated gain: 3-5 problems.
 
 ### Medium Impact
 
@@ -272,25 +263,18 @@ perturbation strategy.
    from the initial KKT system) could reduce iteration counts and avoid wrong basins.
    Currently y is initialized to 0 for all constraints.
 
-4. **Oscillation damping.** HATFLDH, HS83, OET2 cycle with oscillating dual variables.
-   Damping y updates (e.g., y_new = alpha*y_computed + (1-alpha)*y_old with adaptive
-   alpha) could stabilize convergence.
-
-5. **Watchdog strategy.** Ipopt uses a watchdog strategy that accepts a non-monotone
+4. **Watchdog strategy.** Ipopt uses a watchdog strategy that accepts a non-monotone
    step and checks if it leads to sufficient decrease after a few iterations. This can
-   escape local stalling.
+   escape local stalling where the filter becomes too restrictive.
 
 ### Lower Impact
 
-6. **BFGS Hessian approximation.** For problems where the exact Hessian is unavailable
+5. **BFGS Hessian approximation.** For problems where the exact Hessian is unavailable
    or pathological, a quasi-Newton (L-BFGS) approximation could provide more robust
    curvature information.
 
-7. **Warm starting.** When solving sequences of related problems, reusing the previous
+6. **Warm starting.** When solving sequences of related problems, reusing the previous
    solution as a starting point could reduce iteration counts significantly.
-
-8. **Parallel function evaluation.** For problems with expensive objective/constraint
-   evaluations, evaluating f, g, grad_f, J in parallel could reduce wall-clock time.
 
 ---
 
@@ -301,13 +285,14 @@ ripopt solves 26 more CUTEst problems than Ipopt (586 vs 560), primarily through
 - Two-phase restoration (GN fast path + NLP robust fallback)
 - Pragmatic inertia correction (continues past factorization failures)
 - Complementarity gate (prevents false convergence)
+- Hybrid dense/sparse linear algebra (auto-selected by problem size)
 - Raw speed advantage from Rust (median 29.7x faster)
 
 Ipopt's remaining advantages are:
-- Sparse linear algebra (critical for m > 100)
 - More mature mu strategy (fewer iterations on some problems)
 - Decades of parameter tuning on edge cases
+- Better handling of dual oscillation at degenerate points
 
-The most impactful improvement would be adding sparse LDL factorization, which would
-close the gap on large-constraint problems and potentially push ripopt's solve rate
-above 590/727 (81%+).
+The most impactful improvement would be tuning the adaptive mu oracle and adding
+oscillation damping, targeting the 10 MaxIterations failures that dominate ripopt's
+remaining gap.

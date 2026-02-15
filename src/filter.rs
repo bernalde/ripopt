@@ -38,11 +38,11 @@ impl Filter {
             entries: Vec::new(),
             theta_max,
             gamma_theta: 1e-5,
-            gamma_phi: 1e-5,
+            gamma_phi: 1e-8,
             theta_min: 1e-4 * theta_max.max(1e-4),
             s_theta: 1.1,
             s_phi: 2.3,
-            eta_phi: 1e-4,
+            eta_phi: 1e-8,
             delta: 1.0,
         }
     }
@@ -128,8 +128,8 @@ impl Filter {
         grad_phi_step: f64,
         alpha: f64,
     ) -> (bool, bool) {
-        // Safeguard: reject if objective increased catastrophically
-        if phi_trial > phi_current + 1e10 * (1.0 + phi_current.abs()) {
+        // Safeguard: reject if objective increased too much (Ipopt uses factor 5.0)
+        if phi_trial > phi_current + 5.0 * (1.0 + phi_current.abs()) {
             return (false, false);
         }
 
@@ -164,7 +164,7 @@ impl Filter {
     /// Compute problem-dependent minimum step size for the line search (Ipopt formula).
     /// Returns alpha_min based on filter parameters and current iterate.
     pub fn compute_alpha_min(&self, theta_current: f64, grad_phi_step: f64) -> f64 {
-        let alpha_min_frac = 1e-4;
+        let alpha_min_frac = 0.05; // Ipopt default (was 1e-4)
         if grad_phi_step >= 0.0 || theta_current <= 1e-15 {
             // No useful descent direction or already feasible:
             // use a very small fallback to allow Armijo acceptance to work.
@@ -173,8 +173,13 @@ impl Filter {
         let neg_gphi = -grad_phi_step;
         let term1 = self.gamma_theta;
         let term2 = self.gamma_phi * theta_current / neg_gphi;
-        let term3 = self.delta * theta_current.powf(self.s_theta) / neg_gphi.powf(self.s_phi);
-        let alpha_min = alpha_min_frac * term1.min(term2).min(term3);
+        // Ipopt only includes switching-related term when theta <= theta_min
+        let mut alpha_min = alpha_min_frac * term1.min(term2);
+        if theta_current <= self.theta_min {
+            let term3 =
+                self.delta * theta_current.powf(self.s_theta) / neg_gphi.powf(self.s_phi);
+            alpha_min = alpha_min.min(alpha_min_frac * term3);
+        }
         // Floor at machine epsilon level to avoid overly aggressive cutoff
         alpha_min.max(1e-15)
     }
