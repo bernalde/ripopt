@@ -131,12 +131,8 @@ fn hs_tp325() {
     assert_hs_solved(&hs_problems::HsTp325, 3.7913414, 1e-2);
 }
 
-// Known failure — just verify it doesn't crash
+// TP374 was previously a known failure — now solves successfully
 #[test]
-fn hs_tp374_no_panic() {
-    let problem = hs_problems::HsTp374;
-    let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
-    let result = ripopt::solve(&problem, &options);
-    assert_ne!(result.status, SolveStatus::Optimal,
-        "TP374 is known to fail — if it now succeeds, update memory!");
+fn hs_tp374() {
+    assert_hs_solved(&hs_problems::HsTp374, 0.5, 1e-2);
 }
