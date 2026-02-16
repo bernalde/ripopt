@@ -42,56 +42,57 @@ It implements a primal-dual interior point method with a barrier formulation, si
 
 ### Hock-Schittkowski Test Suite (120 problems)
 
-| Metric | ripopt | Ipopt (native, MUMPS) |
-|--------|--------|-----------------------|
-| Problems solved | **120/120 (100%)** | 118/120 (98.3%) |
-| Optimal | 98 | 118 |
-| Acceptable | 22 | 0 |
-| Geometric mean speedup | **124x faster** | -- |
+| Metric                 | ripopt             | Ipopt (native, MUMPS) |
+|------------------------|--------------------|-----------------------|
+| Problems solved        | **120/120 (100%)** | 118/120 (98.3%)       |
+| Optimal                | 98                 | 118                   |
+| Acceptable             | 22                 | 0                     |
+| Geometric mean speedup | **124x faster**    | --                    |
 
 ripopt solves all 120 problems. Ipopt fails on TP214 (`InvalidNumberDetected`) and TP223 (declared infeasible despite being feasible -- ripopt solves it in 4 iterations).
 
 ### CUTEst Benchmark Suite (727 problems)
 
-| Metric | ripopt | Ipopt (C++ with MUMPS) |
-|--------|--------|------------------------|
-| Total solved | **599/727 (82.4%)** | 556/727 (76.5%) |
-| Constrained | **377/493** | 340/493 |
-| Unconstrained | **222/234** | 216/234 |
-| Both solve | 556 | 556 |
-| ripopt only | **43** | -- |
-| Ipopt only | -- | **0** |
-| Both fail | 128 | 128 |
+| Metric        | ripopt              | Ipopt (C++ with MUMPS) |
+|---------------|---------------------|------------------------|
+| Total solved  | **597/727 (82.1%)** | 555/727 (76.3%)        |
+| Constrained   | **376/493**         | 340/493                |
+| Unconstrained | **221/234**         | 215/234                |
+| Both solve    | 554                 | 554                    |
+| ripopt only   | **42**              | --                     |
+| Ipopt only    | --                  | **1**                  |
+| Both fail     | 129                 | 129                    |
 
-ripopt solves **43 more problems** than Ipopt. Every problem solved by Ipopt is also solved by ripopt -- zero Ipopt-only failures.
+ripopt solves **42 more problems** than Ipopt.
 
-#### Speed (556 commonly-solved problems)
+#### Speed (554 commonly-solved problems)
 
-| Metric | Value |
-|--------|-------|
-| Median speedup (ripopt faster) | **35.9x** |
-| Problems where ripopt is faster | 85.1% |
-| Problems where ripopt is 10x+ faster | 65.5% |
+| Metric                               | Value     |
+|--------------------------------------|-----------|
+| Median speedup (ripopt faster)       | **38.8x** |
+| Problems where ripopt is faster      | 85.2%     |
+| Problems where ripopt is 10x+ faster | 66.6%     |
 
 Speed by problem size:
 
-| Problem size | Median speedup |
-|--------------|----------------|
-| Small (n <= 10) | **48.8x** |
-| Medium (10 < n <= 50) | **5.0x** |
-| Large (n > 50) | **1.5x** |
+| Problem size          | Median speedup |
+|-----------------------|----------------|
+| Small (n <= 10)       | **49.9x**      |
+| Medium (10 < n <= 50) | **5.3x**       |
+| Large (n > 50)        | **1.6x**       |
+
 
 #### Large Problems (n+m >= 100)
 
 On 48 problems with n+m >= 100 (exercising the sparse LDL solver):
 
-| Metric | Value |
-|--------|-------|
-| Both solve | 48/48 (100%) |
-| ripopt faster | 29/48 (60%) |
-| Median speedup | 1.3x |
+| Metric         | Value        |
+|----------------|--------------|
+| Both solve     | 48/48 (100%) |
+| ripopt faster  | 29/48 (60%)  |
+| Median speedup | 1.6x         |
 
-ripopt's condensed KKT excels on over-constrained problems (m >> n): **50x** on PT (n=2, m=501), **65x** on DECONVNE (n=63, m=40), **6-8x** on SIPOW problems (n=2, m=2000). Ipopt is faster on problems where ripopt's fallback solvers do multiple attempts (GOFFIN, HYDCAR20, ACOPR14).
+ripopt's condensed KKT excels on over-constrained problems (m >> n): **50x** on PT (n=2, m=501), **65x** on DECONVNE (n=63, m=40), **6-8x** on SIPOW problems (n=2, m=2000). Key speedups from lazy condensed KKT: GOFFIN now **3x faster** (was 1800x slower), EXPFITC **2.5x faster** (was 12x slower).
 
 #### Attribution of ripopt-only solves (43 problems)
 
