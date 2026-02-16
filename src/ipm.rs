@@ -1163,6 +1163,13 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let mut best_z_l: Option<Vec<f64>> = None;
     let mut best_z_u: Option<Vec<f64>> = None;
 
+    // Best-du point tracking
+    let mut best_du_x: Option<Vec<f64>> = None;
+    let mut best_du_val: f64 = f64::INFINITY;
+    let mut best_du_y: Option<Vec<f64>> = None;
+    let mut best_du_zl: Option<Vec<f64>> = None;
+    let mut best_du_zu: Option<Vec<f64>> = None;
+
     // Initial evaluation
     state.evaluate(problem, 1.0);
 
@@ -1400,6 +1407,15 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             state.consecutive_acceptable += 1;
         } else {
             state.consecutive_acceptable = 0;
+        }
+
+        // Track best-du point for cycling/stall detection at max_iter exit.
+        if dual_inf < best_du_val {
+            best_du_val = dual_inf;
+            best_du_x = Some(state.x.clone());
+            best_du_y = Some(state.y.clone());
+            best_du_zl = Some(state.z_l.clone());
+            best_du_zu = Some(state.z_u.clone());
         }
 
         // Track constraint violation history for infeasibility detection
@@ -2549,7 +2565,8 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         // acceptable_tol * s_d threshold is too tight (e.g., unconstrained with s_d=1).
         let fdu_tol = (options.acceptable_tol * fsd).max(1e-2);
         let fco_tol = (options.acceptable_tol * fsd).max(1e-2);
-        let sc = final_primal <= options.acceptable_tol
+        let fpr_tol = options.acceptable_tol.max(options.acceptable_constr_viol_tol);
+        let sc = final_primal <= fpr_tol
             && fdu <= fdu_tol
             && fco_best <= fco_tol;
         let usc = final_primal <= options.acceptable_constr_viol_tol
@@ -2634,6 +2651,39 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             && bp_co_best <= options.acceptable_compl_inf_tol * 100.0;
         if bp_sc && bp_usc {
             return make_result(&state, SolveStatus::Acceptable);
+        }
+    }
+
+    // At max_iter: if the best du seen during the solve is below the acceptable floor,
+    // restore the best-du point and declare Acceptable. This catches cycling problems
+    // (e.g. HAHN1LS) where du oscillates but periodically reaches good values.
+    let fdu_floor = (options.acceptable_tol * {
+        let s_max = 100.0_f64;
+        let fm: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
+            + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
+            + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
+        if (m + 2 * n) > 0 {
+            (s_max.max(fm / (m + 2 * n) as f64) / s_max).min(1e4)
+        } else { 1.0 }
+    }).max(1e-2);
+    if best_du_val < fdu_floor {
+        if let Some(ref bdx) = best_du_x {
+            state.x.copy_from_slice(bdx);
+            if let Some(ref bdy) = best_du_y { state.y.copy_from_slice(bdy); }
+            if let Some(ref bdzl) = best_du_zl { state.z_l.copy_from_slice(bdzl); }
+            if let Some(ref bdzu) = best_du_zu { state.z_u.copy_from_slice(bdzu); }
+            state.evaluate(problem, 1.0);
+            let bd_pr = state.constraint_violation();
+            let bd_pr_tol = options.acceptable_tol.max(options.acceptable_constr_viol_tol);
+            if bd_pr <= bd_pr_tol {
+                if options.print_level >= 5 {
+                    eprintln!(
+                        "ripopt: best-du point passes acceptable (du={:.2e}, pr={:.2e})",
+                        best_du_val, bd_pr
+                    );
+                }
+                return make_result(&state, SolveStatus::Acceptable);
+            }
         }
     }
 

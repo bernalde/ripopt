@@ -51,10 +51,9 @@ impl<'a> SlackFormulation<'a> {
 
         let mut s_init = vec![0.0; m];
         for i in 0..m {
-            s_init[i] = g_val[i].clamp(
-                if g_l[i].is_finite() { g_l[i] } else { g_val[i] },
-                if g_u[i].is_finite() { g_u[i] } else { g_val[i] },
-            );
+            let lo = if g_l[i].is_finite() { g_l[i] } else { f64::NEG_INFINITY };
+            let hi = if g_u[i].is_finite() { g_u[i] } else { f64::INFINITY };
+            s_init[i] = g_val[i].clamp(lo, hi);
         }
 
         SlackFormulation {

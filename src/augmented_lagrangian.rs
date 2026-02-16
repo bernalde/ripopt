@@ -198,7 +198,6 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
     let print_level = options.print_level;
     let tol = options.tol;
-    let acceptable_tol = options.acceptable_tol;
 
     let mut total_iters = 0;
     let mut prev_violation = f64::INFINITY;
@@ -259,7 +258,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             };
         }
 
-        if violation < acceptable_tol && outer >= 5 {
+        if violation < options.acceptable_constr_viol_tol && outer >= 5 {
             if print_level >= 5 {
                 eprintln!("AL converged (acceptable)");
             }

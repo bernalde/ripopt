@@ -164,11 +164,49 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         if step_norm < 1e-15 {
             if grad_norm < acceptable_tol {
                 status = SolveStatus::Acceptable;
+                if print_level >= 5 {
+                    eprintln!("L-BFGS iter {}: step too small ({:.2e}), acceptable", k, step_norm);
+                }
+                break;
             }
-            if print_level >= 5 {
-                eprintln!("L-BFGS iter {}: step too small ({:.2e})", k, step_norm);
+            // Gradient is still large — try steepest descent restart
+            if !s_store.is_empty() {
+                if print_level >= 5 {
+                    eprintln!(
+                        "L-BFGS iter {}: step too small ({:.2e}) but ||g||={:.2e}, restarting with steepest descent",
+                        k, step_norm, grad_norm
+                    );
+                }
+                s_store.clear();
+                y_store.clear();
+                rho_store.clear();
+                // Try a steepest descent step
+                let mut d_sd = grad.clone();
+                for v in d_sd.iter_mut() {
+                    *v = -*v;
+                }
+                match wolfe_line_search(problem, &x, &d_sd, f, &grad, &x_l, &x_u) {
+                    Some((a_sd, f_sd, g_sd)) => {
+                        for i in 0..n {
+                            x[i] = clamp(x[i] + a_sd * d_sd[i], x_l[i], x_u[i]);
+                        }
+                        f = f_sd;
+                        grad.copy_from_slice(&g_sd);
+                        continue; // Continue L-BFGS loop with fresh history
+                    }
+                    None => {
+                        if print_level >= 5 {
+                            eprintln!("L-BFGS iter {}: steepest descent restart also failed", k);
+                        }
+                        break;
+                    }
+                }
+            } else {
+                if print_level >= 5 {
+                    eprintln!("L-BFGS iter {}: step too small ({:.2e})", k, step_norm);
+                }
+                break;
             }
-            break;
         }
 
         if print_level >= 5 && k % 100 == 0 {
