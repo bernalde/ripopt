@@ -719,6 +719,47 @@ pub fn solve_condensed(
     Ok((dx, dy))
 }
 
+/// Solve the condensed system with a modified constraint residual (for SOC).
+///
+/// Instead of using the original rhs_constraint, uses -c_soc as the constraint
+/// residual. This avoids rebuilding the full (n+m)×(n+m) KKT system for SOC.
+pub fn solve_condensed_soc(
+    condensed: &CondensedKktSystem,
+    solver: &mut dyn LinearSolver,
+    c_soc: &[f64],
+) -> Result<Vec<f64>, SolverError> {
+    let n = condensed.n;
+    let m = condensed.m;
+
+    // Build per-constraint scaling: (-c_soc[i]) / (-d_c[i])
+    let mut scaled = vec![0.0; m];
+    for i in 0..m {
+        let d_c_eff = if condensed.d_c[i].abs() < 1e-20 {
+            -1e-16 // equality: consistent with assembly
+        } else {
+            condensed.d_c[i]
+        };
+        scaled[i] = (-c_soc[i]) / (-d_c_eff);
+    }
+
+    // Build modified condensed RHS: rhs_primal + J^T · scaled
+    let mut rhs = condensed.rhs_primal.clone();
+    for (idx, (&row, &col)) in condensed
+        .jac_rows
+        .iter()
+        .zip(condensed.jac_cols.iter())
+        .enumerate()
+    {
+        rhs[col] += condensed.jac_vals[idx] * scaled[row];
+    }
+
+    // Solve S · dx = modified_rhs
+    let mut dx = vec![0.0; n];
+    solver.solve(&rhs, &mut dx)?;
+
+    Ok(dx)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

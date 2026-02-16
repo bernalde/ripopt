@@ -1493,33 +1493,8 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         // where condensed path has different numerical behavior.
         let use_condensed = m >= 2 * n && n > 0;
 
-        // Assemble and factor KKT system
-        let mut kkt_system = kkt::assemble_kkt(
-            n,
-            m,
-            &state.hess_rows,
-            &state.hess_cols,
-            &state.hess_vals,
-            &state.jac_rows,
-            &state.jac_cols,
-            &state.jac_vals,
-            &sigma,
-            &state.grad_f,
-            &state.g,
-            &state.g_l,
-            &state.g_u,
-            &state.y,
-            &state.z_l,
-            &state.z_u,
-            &state.x,
-            &state.x_l,
-            &state.x_u,
-            state.mu,
-            use_sparse,
-            &state.v_l,
-            &state.v_u,
-        );
-
+        // Build condensed KKT when applicable (skip full KKT assembly — saves O((n+m)^2)
+        // assembly + O((n+m)^3) factorization with up to 15 inertia correction attempts).
         let condensed_system = if use_condensed {
             Some(kkt::assemble_condensed_kkt(
                 n, m,
@@ -1534,9 +1509,26 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             None
         };
 
-        // Factor with inertia correction (full KKT — needed for SOC and fallback)
+        // Build and factor full KKT only when NOT using condensed path.
+        // For condensed path, full KKT is built on-demand only if condensed fails or SOC needs it.
+        let mut kkt_system_opt: Option<kkt::KktSystem> = if !use_condensed {
+            Some(kkt::assemble_kkt(
+                n, m,
+                &state.hess_rows, &state.hess_cols, &state.hess_vals,
+                &state.jac_rows, &state.jac_cols, &state.jac_vals,
+                &sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
+                &state.y, &state.z_l, &state.z_u,
+                &state.x, &state.x_l, &state.x_u, state.mu,
+                use_sparse, &state.v_l, &state.v_u,
+            ))
+        } else {
+            None
+        };
+
+        // Factor with inertia correction (only for non-condensed path)
+        if let Some(ref mut kkt_system) = kkt_system_opt {
         let inertia_result =
-            kkt::factor_with_inertia_correction(&mut kkt_system, lin_solver.as_mut(), &mut inertia_params);
+            kkt::factor_with_inertia_correction(kkt_system, lin_solver.as_mut(), &mut inertia_params);
 
         if let Err(e) = inertia_result {
             log::warn!("KKT factorization failed: {}", e);
@@ -1693,66 +1685,80 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             }
             return make_result(&state, SolveStatus::NumericalError);
         }
+        } // end: if let Some(ref mut kkt_system) = kkt_system_opt
 
         // Solve for search direction
+        let mut cond_solver_for_soc: Option<DenseLdl> = None;
         let (dx, dy) = if let Some(ref cond) = condensed_system {
             // Try condensed solve first (faster for m >> n)
             let mut cond_solver = DenseLdl::new();
-            match cond_solver.bunch_kaufman_factor(&cond.matrix) {
-                Ok(_) => match kkt::solve_condensed(cond, &mut cond_solver) {
-                    Ok(d) => d,
-                    Err(_) => {
-                        // Fall back to full KKT solve
-                        match kkt::solve_for_direction(&kkt_system, lin_solver.as_mut()) {
-                            Ok(d) => d,
-                            Err(e) => {
-                                log::warn!("KKT solve failed: {}", e);
-                                let (x_rest, success) = restoration.restore(
-                                    &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
-                                    &state.jac_rows, &state.jac_cols, n, m, options,
-                                    &|theta, phi| filter.is_acceptable(theta, phi),
-                                    &|x_eval, g_out| problem.constraints(x_eval, g_out),
-                                    &|x_eval, jac_out| problem.jacobian_values(x_eval, jac_out),
-                                    Some(&|x_eval: &[f64]| problem.objective(x_eval)),
-                                );
-                                if success {
-                                    state.x = x_rest;
-                                    state.alpha_primal = 0.0;
-                                    state.evaluate(problem, 1.0);
-                                    continue;
-                                }
-                                return make_result(&state, SolveStatus::NumericalError);
-                            }
-                        }
+            let cond_ok = cond_solver.bunch_kaufman_factor(&cond.matrix).is_ok();
+            let cond_result = if cond_ok {
+                kkt::solve_condensed(cond, &mut cond_solver).ok()
+            } else {
+                None
+            };
+
+            if let Some(d) = cond_result {
+                cond_solver_for_soc = Some(cond_solver);
+                d
+            } else {
+                // Condensed failed — build full KKT on demand
+                let mut kkt = kkt::assemble_kkt(
+                    n, m,
+                    &state.hess_rows, &state.hess_cols, &state.hess_vals,
+                    &state.jac_rows, &state.jac_cols, &state.jac_vals,
+                    &sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
+                    &state.y, &state.z_l, &state.z_u,
+                    &state.x, &state.x_l, &state.x_u, state.mu,
+                    use_sparse, &state.v_l, &state.v_u,
+                );
+                if kkt::factor_with_inertia_correction(
+                    &mut kkt, lin_solver.as_mut(), &mut inertia_params,
+                ).is_err() {
+                    let (x_rest, success) = restoration.restore(
+                        &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
+                        &state.jac_rows, &state.jac_cols, n, m, options,
+                        &|theta, phi| filter.is_acceptable(theta, phi),
+                        &|x_eval, g_out| problem.constraints(x_eval, g_out),
+                        &|x_eval, jac_out| problem.jacobian_values(x_eval, jac_out),
+                        Some(&|x_eval: &[f64]| problem.objective(x_eval)),
+                    );
+                    if success {
+                        state.x = x_rest;
+                        state.alpha_primal = 0.0;
+                        state.evaluate(problem, 1.0);
+                        continue;
                     }
-                },
-                Err(_) => {
-                    // Fall back to full KKT solve
-                    match kkt::solve_for_direction(&kkt_system, lin_solver.as_mut()) {
-                        Ok(d) => d,
-                        Err(e) => {
-                            log::warn!("KKT solve failed: {}", e);
-                            let (x_rest, success) = restoration.restore(
-                                &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
-                                &state.jac_rows, &state.jac_cols, n, m, options,
-                                &|theta, phi| filter.is_acceptable(theta, phi),
-                                &|x_eval, g_out| problem.constraints(x_eval, g_out),
-                                &|x_eval, jac_out| problem.jacobian_values(x_eval, jac_out),
-                                Some(&|x_eval: &[f64]| problem.objective(x_eval)),
-                            );
-                            if success {
-                                state.x = x_rest;
-                                state.alpha_primal = 0.0;
-                                state.evaluate(problem, 1.0);
-                                continue;
-                            }
-                            return make_result(&state, SolveStatus::NumericalError);
+                    return make_result(&state, SolveStatus::NumericalError);
+                }
+                match kkt::solve_for_direction(&kkt, lin_solver.as_mut()) {
+                    Ok(d) => {
+                        kkt_system_opt = Some(kkt);
+                        d
+                    },
+                    Err(e) => {
+                        log::warn!("KKT solve failed: {}", e);
+                        let (x_rest, success) = restoration.restore(
+                            &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
+                            &state.jac_rows, &state.jac_cols, n, m, options,
+                            &|theta, phi| filter.is_acceptable(theta, phi),
+                            &|x_eval, g_out| problem.constraints(x_eval, g_out),
+                            &|x_eval, jac_out| problem.jacobian_values(x_eval, jac_out),
+                            Some(&|x_eval: &[f64]| problem.objective(x_eval)),
+                        );
+                        if success {
+                            state.x = x_rest;
+                            state.alpha_primal = 0.0;
+                            state.evaluate(problem, 1.0);
+                            continue;
                         }
+                        return make_result(&state, SolveStatus::NumericalError);
                     }
                 }
             }
         } else {
-            let dir_result = kkt::solve_for_direction(&kkt_system, lin_solver.as_mut());
+            let dir_result = kkt::solve_for_direction(kkt_system_opt.as_ref().unwrap(), lin_solver.as_mut());
             match dir_result {
                 Ok(d) => d,
                 Err(e) => {
@@ -1970,20 +1976,21 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
             // Second-order correction (SOC) — try on every backtracking step where theta increases
             if theta_trial > theta_current && options.max_soc > 0 {
-                let soc_accepted = attempt_soc(
-                    &state,
-                    problem,
-                    &x_trial,
-                    &g_trial,
-                    lin_solver.as_mut(),
-                    &kkt_system,
-                    &filter,
-                    theta_current,
-                    phi_current,
-                    grad_phi_step,
-                    alpha,
-                    options,
-                );
+                let soc_accepted = if let (Some(ref cond), Some(ref mut cs)) = (&condensed_system, &mut cond_solver_for_soc) {
+                    // Use condensed SOC (avoids building full KKT)
+                    attempt_soc_condensed(
+                        &state, problem, &g_trial, cs, cond, &filter,
+                        theta_current, phi_current, grad_phi_step, alpha, options,
+                    )
+                } else if let Some(ref kkt) = kkt_system_opt {
+                    attempt_soc(
+                        &state, problem, &x_trial, &g_trial,
+                        lin_solver.as_mut(), kkt, &filter,
+                        theta_current, phi_current, grad_phi_step, alpha, options,
+                    )
+                } else {
+                    None
+                };
 
                 if let Some((x_soc, obj_soc, g_soc, alpha_soc)) = soc_accepted {
                     state.x = x_soc;
@@ -2826,6 +2833,142 @@ fn attempt_soc<P: NlpProblem>(
         }
 
         let dx_soc = &sol_soc[..n];
+
+        // Compute SOC trial point
+        #[allow(clippy::needless_range_loop)]
+        let mut x_soc = vec![0.0; n];
+        for i in 0..n {
+            x_soc[i] = state.x[i] + alpha * dx_soc[i];
+            if state.x_l[i].is_finite() {
+                x_soc[i] = x_soc[i].max(state.x_l[i] + 1e-14);
+            }
+            if state.x_u[i].is_finite() {
+                x_soc[i] = x_soc[i].min(state.x_u[i] - 1e-14);
+            }
+        }
+
+        let obj_soc = problem.objective(&x_soc);
+        let mut g_soc = vec![0.0; m];
+        problem.constraints(&x_soc, &mut g_soc);
+
+        let theta_soc = convergence::primal_infeasibility(&g_soc, &state.g_l, &state.g_u);
+
+        // Stop SOC iterations if theta isn't decreasing sufficiently
+        if theta_soc >= kappa_soc * theta_prev_soc {
+            return None;
+        }
+        theta_prev_soc = theta_soc;
+
+        // Compute barrier objective
+        let mut phi_soc = obj_soc;
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..n {
+            if state.x_l[i].is_finite() {
+                let slack = (x_soc[i] - state.x_l[i]).max(1e-20);
+                phi_soc -= state.mu * slack.ln();
+            }
+            if state.x_u[i].is_finite() {
+                let slack = (state.x_u[i] - x_soc[i]).max(1e-20);
+                phi_soc -= state.mu * slack.ln();
+            }
+        }
+        if options.constraint_slack_barrier {
+            for i in 0..m {
+                let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
+                    && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
+                if is_eq {
+                    continue;
+                }
+                if state.g_l[i].is_finite() {
+                    let slack = g_soc[i] - state.g_l[i];
+                    if slack > state.mu * 1e-2 {
+                        phi_soc -= state.mu * slack.ln();
+                    }
+                }
+                if state.g_u[i].is_finite() {
+                    let slack = state.g_u[i] - g_soc[i];
+                    if slack > state.mu * 1e-2 {
+                        phi_soc -= state.mu * slack.ln();
+                    }
+                }
+            }
+        }
+
+        let (acceptable, _) = filter.check_acceptability(
+            theta_current,
+            phi_current,
+            theta_soc,
+            phi_soc,
+            grad_phi_step,
+            alpha,
+        );
+
+        if acceptable {
+            return Some((x_soc, obj_soc, g_soc, alpha));
+        }
+
+        // Update c_soc for next SOC iteration (respecting constraint type)
+        for i in 0..m {
+            let is_equality = state.g_l[i].is_finite() && state.g_u[i].is_finite()
+                && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
+            if is_equality || state.g_l[i].is_finite() {
+                c_soc[i] = g_soc[i] - state.g_l[i];
+            } else if state.g_u[i].is_finite() {
+                c_soc[i] = g_soc[i] - state.g_u[i];
+            }
+        }
+    }
+
+    None
+}
+
+/// Attempt a second-order correction step using the condensed KKT system.
+///
+/// Same logic as `attempt_soc` but uses the condensed system to avoid building
+/// the full (n+m)×(n+m) KKT matrix. Uses `solve_condensed_soc` which rebuilds
+/// only the n-dimensional condensed RHS with the modified constraint residual.
+#[allow(clippy::too_many_arguments)]
+fn attempt_soc_condensed<P: NlpProblem>(
+    state: &SolverState,
+    problem: &P,
+    g_trial: &[f64],
+    solver: &mut DenseLdl,
+    condensed: &kkt::CondensedKktSystem,
+    filter: &Filter,
+    theta_current: f64,
+    phi_current: f64,
+    grad_phi_step: f64,
+    alpha: f64,
+    options: &SolverOptions,
+) -> Option<(Vec<f64>, f64, Vec<f64>, f64)> {
+    let n = state.n;
+    let m = state.m;
+
+    if m == 0 {
+        return None;
+    }
+
+    // Compute constraint residual at trial point, respecting constraint type
+    let mut c_soc = vec![0.0; m];
+    for i in 0..m {
+        let is_equality = state.g_l[i].is_finite() && state.g_u[i].is_finite()
+            && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
+        if is_equality || state.g_l[i].is_finite() {
+            c_soc[i] = g_trial[i] - state.g_l[i];
+        } else if state.g_u[i].is_finite() {
+            c_soc[i] = g_trial[i] - state.g_u[i];
+        }
+    }
+
+    let kappa_soc = 0.99;
+    let mut theta_prev_soc = convergence::primal_infeasibility(g_trial, &state.g_l, &state.g_u);
+
+    for _soc_iter in 0..options.max_soc {
+        // Solve condensed system with modified constraint residual
+        let dx_soc = match kkt::solve_condensed_soc(condensed, solver, &c_soc) {
+            Ok(d) => d,
+            Err(_) => return None,
+        };
 
         // Compute SOC trial point
         #[allow(clippy::needless_range_loop)]
