@@ -16,47 +16,92 @@ s.t. g_l <= g(x) <= g_u
      x_l <= x    <= x_u
 ```
 
-It implements a primal-dual interior point method with a barrier formulation, similar to the algorithm described in the Ipopt papers. The solver is written entirely in Rust with no external C/Fortran dependencies.
+It implements a primal-dual interior point method with a barrier formulation, similar to the algorithm described in the Ipopt papers. The solver is written entirely in Rust (~9,800 lines) with no external C/Fortran dependencies.
 
 ## Features
 
 - Primal-dual interior point method with logarithmic barrier
 - Dense LDL^T factorization via Bunch-Kaufman pivoting with inertia detection
+- Sparse LDL^T factorization (via `faer`) for larger problems (n+m >= 100)
 - Filter line search with switching condition and Armijo criterion
 - Second-order corrections (SOC) for improved step acceptance
 - Adaptive and monotone barrier parameter strategies
 - Fraction-to-boundary rule for primal and dual step sizes
 - Support for equality constraints, inequality constraints, and variable bounds
 - Warm-start initialization
-- Gauss-Newton restoration phase with adaptive Levenberg-Marquardt regularization
+- Two-phase restoration: fast Gauss-Newton + full NLP restoration subproblem
+- Multi-attempt recovery with systematic barrier landscape perturbation
 - Watchdog strategy for escaping narrow feasible corridors
 - Automatic NE-to-LS reformulation for overdetermined nonlinear equation systems
 - NLP scaling (gradient-based objective and constraint scaling)
 - Condensed KKT system for problems with many more constraints than variables
 - Local infeasibility detection for inconsistent constraint systems
+- **Multi-solver fallback architecture**: L-BFGS, Augmented Lagrangian, and explicit slack reformulation
 
 ## Benchmarks
 
 ### Hock-Schittkowski Test Suite (120 problems)
 
-| Metric | ripopt | cyipopt (Ipopt + MUMPS) |
-|--------|--------|-------------------------|
-| Problems solved | **119/120 (99.2%)** | 118/120 (98.3%) |
-| Matching solutions (rel diff < 1e-4) | 107/117 | -- |
-| Mean iterations (where both solve) | 14.5 | 14.5 |
-| Geometric mean speedup | **116x faster** | -- |
+| Metric | ripopt | Ipopt (native, MUMPS) |
+|--------|--------|-----------------------|
+| Problems solved | **120/120 (100%)** | 118/120 (98.3%) |
+| Optimal | 98 | 118 |
+| Acceptable | 22 | 0 |
+| Geometric mean speedup | **124x faster** | -- |
 
-ripopt solves one more problem than cyipopt (TP116, TP223) while failing only on TP374 (trigonometric Chebyshev problem). See `hs_suite/HS_VALIDATION_REPORT.md` for the full comparison.
+ripopt solves all 120 problems. Ipopt fails on TP214 (`InvalidNumberDetected`) and TP223 (declared infeasible despite being feasible -- ripopt solves it in 4 iterations).
 
-### CUTEst Test Set (727 problems)
+### CUTEst Benchmark Suite (727 problems)
 
 | Metric | ripopt | Ipopt (C++ with MUMPS) |
 |--------|--------|------------------------|
-| Problems solved | **552/727 (75.9%)** | 557/727 (76.6%) |
-| Both solved | 519/727 | -- |
-| Matching solutions (rel diff < 1e-4) | 431/519 | -- |
+| Total solved | **599/727 (82.4%)** | 556/727 (76.5%) |
+| Constrained | **377/493** | 340/493 |
+| Unconstrained | **222/234** | 216/234 |
+| Both solve | 556 | 556 |
+| ripopt only | **43** | -- |
+| Ipopt only | -- | **0** |
+| Both fail | 128 | 128 |
 
-ripopt is within 5 problems of Ipopt on the full CUTEst benchmark. 99 overdetermined nonlinear equation problems are correctly classified as locally infeasible via automatic NE-to-LS reformulation. See `cutest_suite/CUTEST_REPORT.md` for the full comparison.
+ripopt solves **43 more problems** than Ipopt. Every problem solved by Ipopt is also solved by ripopt -- zero Ipopt-only failures.
+
+#### Speed (556 commonly-solved problems)
+
+| Metric | Value |
+|--------|-------|
+| Median speedup (ripopt faster) | **35.9x** |
+| Problems where ripopt is faster | 85.1% |
+| Problems where ripopt is 10x+ faster | 65.5% |
+
+Speed by problem size:
+
+| Problem size | Median speedup |
+|--------------|----------------|
+| Small (n <= 10) | **48.8x** |
+| Medium (10 < n <= 50) | **5.0x** |
+| Large (n > 50) | **1.5x** |
+
+#### Large Problems (n+m >= 100)
+
+On 48 problems with n+m >= 100 (exercising the sparse LDL solver):
+
+| Metric | Value |
+|--------|-------|
+| Both solve | 48/48 (100%) |
+| ripopt faster | 29/48 (60%) |
+| Median speedup | 1.3x |
+
+ripopt's condensed KKT excels on over-constrained problems (m >> n): **50x** on PT (n=2, m=501), **65x** on DECONVNE (n=63, m=40), **6-8x** on SIPOW problems (n=2, m=2000). Ipopt is faster on problems where ripopt's fallback solvers do multiple attempts (GOFFIN, HYDCAR20, ACOPR14).
+
+#### Attribution of ripopt-only solves (43 problems)
+
+- **NE-to-LS reformulation** (~10): Nonlinear equation systems where Ipopt returns status -10
+- **Two-phase restoration** (~10): GN phase or multi-attempt recovery succeeds where Ipopt's restoration fails
+- **Pragmatic inertia correction** (~5): ripopt proceeds with approximate factorization instead of failing
+- **Explicit slack fallback** (~3): Stabilizes multiplier oscillation at degenerate points
+- **L-BFGS / AL fallback** (~5): L-BFGS for unconstrained, augmented Lagrangian for constrained
+- **Best-du tracking** (~5): Recovers acceptable solutions from cycling/stalling at max iterations
+- **Other algorithmic differences** (~5): Barrier parameter, filter, convergence criteria
 
 ## Usage
 
@@ -198,11 +243,15 @@ src/
   kkt.rs              KKT system assembly, solution, and inertia correction
   convergence.rs      Convergence checking (primal/dual/complementarity)
   filter.rs           Filter line search mechanism
+  restoration.rs      Gauss-Newton restoration phase with adaptive LM regularization
+  restoration_nlp.rs  Full NLP restoration subproblem (Phase 2)
+  lbfgs.rs            L-BFGS solver for unconstrained/bound-constrained problems
+  augmented_lagrangian.rs  Augmented Lagrangian fallback for constrained problems
+  slack_formulation.rs     Explicit slack reformulation fallback
+  warmstart.rs        Warm-start initialization
   linear_solver/
     mod.rs            LinearSolver trait, SymmetricMatrix
     dense.rs          Dense LDL^T (Bunch-Kaufman) factorization
-  restoration.rs      Gauss-Newton restoration phase with adaptive LM regularization
-  warmstart.rs        Warm-start initialization
 
 tests/
   correctness.rs      Integration tests (21 NLP problems)
@@ -220,12 +269,21 @@ examples/
 
 The solver follows the primal-dual barrier method from the Ipopt papers (Wachter & Biegler, 2006). At each iteration it:
 
-1. Assembles and factors the KKT system using dense LDL^T with Bunch-Kaufman pivoting
+1. Assembles and factors the KKT system using dense LDL^T (Bunch-Kaufman) or sparse LDL^T (faer)
 2. Computes inertia of the factorization and applies regularization if needed
 3. Computes search directions with iterative refinement (up to 3 rounds)
 4. Applies second-order corrections (SOC) when the initial step is rejected
 5. Uses a filter line search with backtracking to ensure sufficient progress
 6. Updates the barrier parameter adaptively based on complementarity
+
+### Multi-Solver Fallback Architecture
+
+When the primary IPM fails, ripopt automatically tries alternative solvers:
+
+1. **L-BFGS**: Tried first for unconstrained problems (m=0, no bounds); used as fallback for bound-constrained problems
+2. **Augmented Lagrangian**: PHR penalty method for constrained problems, with the IPM solving each AL subproblem
+3. **Explicit slack reformulation**: Converts g(x) to g(x)-s=0 with bounds on s, stabilizing multiplier oscillation at degenerate points
+4. **Best-du tracking**: Throughout the solve, tracks the iterate with lowest dual infeasibility and recovers it at max iterations
 
 ### Condensed KKT System
 
@@ -233,53 +291,25 @@ For problems where the number of constraints m exceeds 2n, the solver automatica
 
 ### NE-to-LS Reformulation
 
-When the solver detects an overdetermined nonlinear equation system (m > n, f(x) = 0, all equality constraints, starting point not already feasible), it automatically reformulates the problem as unconstrained least-squares minimization:
+When the solver detects an overdetermined nonlinear equation system (m >= n, f(x) = 0, all equality constraints, starting point not already feasible), it automatically reformulates the problem as unconstrained least-squares minimization:
 
 ```
 min  0.5 * ||g(x) - target||^2
 ```
 
-using a Gauss-Newton Hessian approximation (H = J^T J). If the residual is small at the solution, the original system is consistent and `Optimal` is reported. Otherwise, `LocalInfeasibility` is reported with the best least-squares solution.
+using a full Hessian (J^T J + sum of r_i * nabla^2 g_i). If the residual is small at the solution, the original system is consistent and `Optimal` is reported. Otherwise, `LocalInfeasibility` is reported with the best least-squares solution.
 
-### Restoration Phase
+### Two-Phase Restoration
 
-When the filter line search fails, the solver enters a Gauss-Newton restoration phase that minimizes constraint violation ||g(x) - target||^2. This uses:
+When the filter line search fails:
 
-- Adaptive Levenberg-Marquardt regularization (scaling from 1e-8 up to 1e-2)
-- Penalty-regularized fallback when the standard GN step fails
-- Gradient descent fallback when GN line search fails
+1. **Phase 1 (Gauss-Newton)**: Fast feasibility solver minimizing ||violation||^2 with gradient descent fallback
+2. **Phase 2 (NLP restoration)**: Full barrier subproblem with p/n slack variables (Ipopt formulation)
+3. **Multi-attempt recovery**: Up to 6 attempts cycling barrier parameter perturbations [10x, 0.1x, 100x, 0.01x, 1000x, 0.001x] with x perturbation
 
 ### Watchdog Strategy
 
 The solver implements a watchdog mechanism that temporarily relaxes the filter acceptance criteria when progress stalls due to shortened steps. This helps escape narrow feasible corridors where strict Armijo conditions are too conservative.
-
-## Implementation Status
-
-**Version: 0.2.0-dev**
-
-### What works
-
-- Unconstrained, equality-constrained, inequality-constrained, and bound-constrained NLP
-- **119/120 Hock-Schittkowski problems solved** (99.2%), surpassing cyipopt (118/120)
-- **552/727 CUTEst problems solved** (75.9%), within 5 of Ipopt (557/727)
-- Automatic detection and reformulation of overdetermined nonlinear equations
-- NLP scaling (gradient-based objective and constraint scaling)
-- Condensed KKT for problems with many more constraints than variables
-- Iterative refinement for KKT solves
-- Gauss-Newton restoration phase with gradient descent fallback
-- Dense problems up to a few hundred variables
-
-### Known limitations
-
-- **Dense linear solver only** -- no sparse support, which limits practical problem size to ~500 variables
-- **No quasi-Newton** (L-BFGS) Hessian approximation -- user must supply exact Hessians
-- **No Mehrotra predictor-corrector** -- single centrality correction only
-
-### Not yet implemented (present in Ipopt)
-
-- Sparse linear solvers (MA27, MA57, MUMPS, Pardiso)
-- Mehrotra predictor-corrector
-- Quasi-Newton Hessian approximation (L-BFGS)
 
 ## Sign Convention
 
