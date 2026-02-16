@@ -748,6 +748,8 @@ fn detect_ne_problem<P: NlpProblem>(problem: &P) -> bool {
 
 /// Solve the NLP using the interior point method.
 pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult {
+    let solve_start = Instant::now();
+
     // --- NE-to-LS Detection and Reformulation ---
     // Detect overdetermined nonlinear equation problems (m > n, f≡0, all equalities)
     // and reformulate as least-squares: min 0.5*||g(x)-target||^2.
@@ -761,7 +763,13 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             );
         }
         let ls_problem = LeastSquaresProblem::new(problem);
-        let ls_result = solve_ipm(&ls_problem, options);
+        // For square systems (m == n), cap LS iterations — they often fail the LS
+        // approach because there are no "extra" equations to drive residuals down.
+        let mut ls_opts = options.clone();
+        if m == n {
+            ls_opts.max_iter = options.max_iter.min(100).max(options.max_iter / 10);
+        }
+        let ls_result = solve_ipm(&ls_problem, &ls_opts);
 
         // Evaluate original constraint violation at the LS solution
         let mut g_final = vec![0.0; m];
@@ -806,7 +814,24 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     theta, ls_result.status
                 );
             }
-            return solve_ipm(problem, options);
+            let mut fallback_opts = options.clone();
+            if options.max_wall_time > 0.0 {
+                let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
+                if remaining <= 0.1 {
+                    return SolveResult {
+                        x: ls_result.x,
+                        objective: 0.0,
+                        constraint_multipliers: vec![0.0; m],
+                        bound_multipliers_lower: ls_result.bound_multipliers_lower,
+                        bound_multipliers_upper: ls_result.bound_multipliers_upper,
+                        constraint_values: g_out,
+                        status: SolveStatus::MaxIterations,
+                        iterations: ls_result.iterations,
+                    };
+                }
+                fallback_opts.max_wall_time = remaining;
+            }
+            return solve_ipm(problem, &fallback_opts);
         }
 
         // L-BFGS retry on LS problem when IPM found a local min with nonzero residual
@@ -912,7 +937,17 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 result.status
             );
         }
-        let al_result = crate::augmented_lagrangian::solve(problem, options);
+        let mut al_opts = options.clone();
+        // Cap fallback iterations — if it hasn't converged in 500 iters, it likely won't in 3000
+        al_opts.max_iter = options.max_iter.min(500).max(options.max_iter / 3);
+        if options.max_wall_time > 0.0 {
+            let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
+            if remaining <= 0.1 {
+                return result;
+            }
+            al_opts.max_wall_time = remaining;
+        }
+        let al_result = crate::augmented_lagrangian::solve(problem, &al_opts);
         let al_better = matches!(
             al_result.status,
             SolveStatus::Optimal | SolveStatus::Acceptable
@@ -955,6 +990,15 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         let slack_prob = SlackFormulation::new(problem, &result.x);
         let mut slack_opts = options.clone();
         slack_opts.enable_slack_fallback = false; // prevent recursion
+        // Cap fallback iterations
+        slack_opts.max_iter = options.max_iter.min(500).max(options.max_iter / 3);
+        if options.max_wall_time > 0.0 {
+            let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
+            if remaining <= 0.1 {
+                return result;
+            }
+            slack_opts.max_wall_time = remaining;
+        }
 
         let slack_result = solve_ipm(&slack_prob, &slack_opts);
 

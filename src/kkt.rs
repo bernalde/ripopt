@@ -537,52 +537,105 @@ pub fn assemble_condensed_kkt(
     _v_l: &[f64],
     _v_u: &[f64],
 ) -> CondensedKktSystem {
-    // First assemble the full KKT to get the (2,2) block and RHS
-    // Always use dense here since we need to extract entries for condensed system
-    let full = assemble_kkt(
-        n, m, hess_rows, hess_cols, hess_vals,
-        jac_rows, jac_cols, jac_vals, sigma, grad_f,
-        g, g_l, g_u, y, z_l, z_u, x, x_l, x_u, mu,
-        false, _v_l, _v_u,
-    );
+    // Build the condensed system directly from problem data without assembling
+    // the full (n+m)×(n+m) KKT matrix. This saves O((n+m)^2) memory and work.
 
-    let rhs_primal = full.rhs[..n].to_vec();
-    let rhs_constraint = full.rhs[n..].to_vec();
-
-    // Extract D_c diagonal from the (2,2) block
-    let mut d_c = vec![0.0; m];
-    for i in 0..m {
-        d_c[i] = full.matrix.get(n + i, n + i);
-    }
-
-    // Build the condensed matrix: S = (1,1) block + J^T · (-D_c)^{-1} · J
+    // --- (1,1) block: H + Sigma (n×n dense symmetric) ---
     let mut matrix = SymmetricMatrix::zeros(n);
 
-    // Copy (1,1) block from full KKT
+    // Hessian entries
+    for (idx, (&row, &col)) in hess_rows.iter().zip(hess_cols.iter()).enumerate() {
+        matrix.add(row, col, hess_vals[idx]);
+    }
+
+    // Barrier diagonal Sigma for variable bounds
     for i in 0..n {
-        for j in 0..=i {
-            matrix.set(i, j, full.matrix.get(i, j));
+        matrix.add(i, i, sigma[i]);
+    }
+
+    // --- RHS: dual residual r_d (n-vector) ---
+    let mut rhs_primal = vec![0.0; n];
+    for i in 0..n {
+        let mut rd = -grad_f[i];
+        rd += z_l[i];
+        rd -= z_u[i];
+        if x_l[i].is_finite() {
+            rd += mu / (x[i] - x_l[i]);
+        }
+        if x_u[i].is_finite() {
+            rd -= mu / (x_u[i] - x[i]);
+        }
+        rhs_primal[i] = rd;
+    }
+    // Subtract J^T * y
+    for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
+        rhs_primal[col] -= jac_vals[idx] * y[row];
+    }
+
+    // --- (2,2) block diagonal D_c and constraint RHS r_p (m-vectors) ---
+    let mut d_c = vec![0.0; m];
+    let mut rhs_constraint = vec![0.0; m];
+
+    for i in 0..m {
+        let is_equality = g_l[i].is_finite() && g_u[i].is_finite() && (g_l[i] - g_u[i]).abs() < 1e-15;
+        if is_equality {
+            rhs_constraint[i] = -(g[i] - g_l[i]);
+            // d_c[i] = 0.0 for equalities (no (2,2) block entry)
+            continue;
+        }
+
+        let mut sigma_s = 0.0;
+        let mut rhs_correction = y[i];
+        let mut any_feasible = false;
+        let mut rhs_infeasible = 0.0;
+
+        if g_l[i].is_finite() {
+            let slack = g[i] - g_l[i];
+            if slack >= -1e-8 {
+                let safe_slack = slack.max(mu.max(1e-10));
+                let z_sl = if y[i] < -1e-20 { -y[i] } else { mu / safe_slack };
+                sigma_s += z_sl / safe_slack;
+                rhs_correction += mu / safe_slack;
+                any_feasible = true;
+            } else {
+                rhs_infeasible += -(g[i] - g_l[i]);
+            }
+        }
+        if g_u[i].is_finite() {
+            let slack = g_u[i] - g[i];
+            if slack >= -1e-8 {
+                let safe_slack = slack.max(mu.max(1e-10));
+                let z_su = if y[i] > 1e-20 { y[i] } else { mu / safe_slack };
+                sigma_s += z_su / safe_slack;
+                rhs_correction -= mu / safe_slack;
+                any_feasible = true;
+            } else {
+                rhs_infeasible += -(g[i] - g_u[i]);
+            }
+        }
+
+        if any_feasible && sigma_s > 1e-20 {
+            let sigma_s_inv = (1.0 / sigma_s).min(1e20);
+            d_c[i] = -sigma_s_inv;
+            rhs_constraint[i] = sigma_s_inv * rhs_correction + rhs_infeasible;
+        } else {
+            rhs_constraint[i] = rhs_infeasible;
         }
     }
 
-    // Add J^T · (-D_c)^{-1} · J
-    // For each constraint i, if D_c[i] != 0, add (1/(-D_c[i])) * J[i,:] ⊗ J[i,:]
-    // Build dense J rows for efficiency
+    // --- Build condensed matrix: S = (1,1) block + J^T · (-D_c)^{-1} · J ---
     let mut j_dense = vec![0.0; m * n];
     for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
         j_dense[row * n + col] += jac_vals[idx];
     }
 
     for i in 0..m {
-        // For equality constraints (d_c ≈ 0), use a large penalty instead of
-        // skipping — dropping equalities from the Schur complement corrupts
-        // the solution for mixed equality/inequality problems.
         let d_c_eff = if d_c[i].abs() < 1e-20 {
             -1e-16  // equality: very stiff spring (inv = -1e16)
         } else {
             d_c[i]
         };
-        let inv_neg_dc = 1.0 / (-d_c_eff); // -D_c is positive for inequalities
+        let inv_neg_dc = 1.0 / (-d_c_eff);
         for p in 0..n {
             let jp = j_dense[i * n + p];
             if jp == 0.0 {
@@ -597,7 +650,7 @@ pub fn assemble_condensed_kkt(
         }
     }
 
-    // Build condensed RHS: r_d + J^T · (-D_c)^{-1} · r_p
+    // --- Build condensed RHS: r_d + J^T · (-D_c)^{-1} · r_p ---
     let mut rhs = rhs_primal.clone();
     for i in 0..m {
         let d_c_eff = if d_c[i].abs() < 1e-20 {

@@ -140,7 +140,7 @@ impl Default for SolverOptions {
             acceptable_compl_inf_tol: 1e-2,
             watchdog_shortened_iter_trigger: 10,
             watchdog_trial_iter_max: 3,
-            sparse_threshold: 100,
+            sparse_threshold: 110,
             barrier_tol_factor: 10.0,
             adaptive_mu_monotone_init_factor: 0.8,
             restoration_max_iter: 200,
