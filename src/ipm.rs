@@ -1006,9 +1006,26 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     // has inequality constraints, retry with explicit slacks (g(x)-s=0, bounds on s).
     // Also try when only Acceptable was achieved — slack formulation may find a better solution
     // (e.g. ACOPR14 where AL gives Acceptable at a suboptimal local minimum).
+    // For Acceptable results, only try slack if the problem is small enough
+    // that the slack formulation (n + n_ineq variables) won't be too expensive.
+    // For failure statuses, always try (the original behavior).
+    let is_failure = matches!(
+        result.status,
+        SolveStatus::RestorationFailed | SolveStatus::MaxIterations | SolveStatus::NumericalError
+    );
+    let n_ineq = if !is_failure {
+        let m = problem.num_constraints();
+        let mut g_l = vec![0.0; m];
+        let mut g_u = vec![0.0; m];
+        problem.constraint_bounds(&mut g_l, &mut g_u);
+        (0..m).filter(|&i| (g_l[i] - g_u[i]).abs() > 0.0).count()
+    } else { 0 };
+    let slack_too_large = !is_failure && problem.num_variables() + n_ineq > 200;
+
     if options.enable_slack_fallback
         && has_inequality_constraints(problem)
         && !matches!(result.status, SolveStatus::Optimal)
+        && !slack_too_large
     {
         if options.print_level >= 5 {
             eprintln!(
