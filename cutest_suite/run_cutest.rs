@@ -211,6 +211,7 @@ struct IpoptResult {
     x: Vec<f64>,
     constraint_violation: f64,
     iterations: i32,
+    solve_time: f64, // Time for IpoptSolve only (excludes setup/teardown)
 }
 
 fn solve_with_ipopt(problem: &dyn NlpProblem) -> IpoptResult {
@@ -260,6 +261,7 @@ fn solve_with_ipopt(problem: &dyn NlpProblem) -> IpoptResult {
             return IpoptResult {
                 status: -199, objective: f64::NAN, x: vec![],
                 constraint_violation: f64::NAN, iterations: 0,
+                solve_time: 0.0,
             };
         }
 
@@ -281,12 +283,15 @@ fn solve_with_ipopt(problem: &dyn NlpProblem) -> IpoptResult {
 
         let user_data = &mut wrapper as *mut ProblemWrapper as *mut c_void;
 
+        // Time only the IpoptSolve call (excludes setup/teardown)
+        let t0 = Instant::now();
         let status = IpoptSolve(
             ipopt_problem,
             x.as_mut_ptr(), g.as_mut_ptr(), &mut obj_val,
             mult_g.as_mut_ptr(), mult_x_l.as_mut_ptr(), mult_x_u.as_mut_ptr(),
             user_data,
         );
+        let solve_time = t0.elapsed().as_secs_f64();
 
         let iterations = wrapper.iterations;
         FreeIpoptProblem(ipopt_problem);
@@ -309,6 +314,7 @@ fn solve_with_ipopt(problem: &dyn NlpProblem) -> IpoptResult {
             x,
             constraint_violation: cv,
             iterations,
+            solve_time,
         }
     }
 }
@@ -454,15 +460,13 @@ fn run_single_problem(name: &str) {
     };
     println!("{}", serde_json::to_string(&r1).unwrap());
 
-    // Solve with Ipopt
+    // Solve with Ipopt — use internal solve_time (IpoptSolve only, excludes setup/teardown)
     let mut best_ipopt_time = f64::MAX;
     let mut ipopt_result = None;
     for run in 0..n_timing_runs {
-        let t0 = Instant::now();
         let r = solve_with_ipopt(&problem);
-        let elapsed = t0.elapsed().as_secs_f64();
-        if elapsed < best_ipopt_time {
-            best_ipopt_time = elapsed;
+        if r.solve_time < best_ipopt_time {
+            best_ipopt_time = r.solve_time;
         }
         if run == 0 {
             ipopt_result = Some(r);
