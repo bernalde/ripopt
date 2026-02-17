@@ -831,7 +831,40 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 }
                 fallback_opts.max_wall_time = remaining;
             }
-            return solve_ipm(problem, &fallback_opts);
+            let ipm_result = solve_ipm(problem, &fallback_opts);
+            if matches!(ipm_result.status, SolveStatus::Optimal | SolveStatus::Acceptable) {
+                return ipm_result;
+            }
+            // IPM fallback failed too — try AL fallback for square NE systems
+            // (e.g. HEART6 where both LS and constrained IPM fail)
+            if options.enable_al_fallback {
+                if options.print_level >= 5 {
+                    eprintln!(
+                        "ripopt: NE constrained IPM fallback failed ({:?}), trying AL",
+                        ipm_result.status
+                    );
+                }
+                let mut al_opts = options.clone();
+                al_opts.max_iter = options.max_iter.min(500).max(options.max_iter / 3);
+                if options.max_wall_time > 0.0 {
+                    let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
+                    if remaining <= 0.1 {
+                        return ipm_result;
+                    }
+                    al_opts.max_wall_time = remaining;
+                }
+                let al_result = crate::augmented_lagrangian::solve(problem, &al_opts);
+                if matches!(al_result.status, SolveStatus::Optimal | SolveStatus::Acceptable) {
+                    if options.print_level >= 5 {
+                        eprintln!(
+                            "ripopt: NE AL fallback succeeded ({:?}, obj={:.6e})",
+                            al_result.status, al_result.objective
+                        );
+                    }
+                    return al_result;
+                }
+            }
+            return ipm_result;
         }
 
         // L-BFGS retry on LS problem when IPM found a local min with nonzero residual
