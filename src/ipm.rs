@@ -1012,7 +1012,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     {
         if options.print_level >= 5 {
             eprintln!(
-                "ripopt: Initial solve failed ({:?}), retrying with explicit slack variables",
+                "ripopt: Trying slack fallback (result was {:?})",
                 result.status
             );
         }
@@ -1038,10 +1038,13 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         );
 
         // Only use slack result if it's strictly better than current result:
-        // - Slack is Optimal when current is not, OR
+        // - Slack solved (Optimal/Acceptable) when current failed, OR
+        // - Slack is Optimal when current is only Acceptable, OR
         // - Both are same status but slack has lower objective
+        let current_solved = matches!(result.status, SolveStatus::Optimal | SolveStatus::Acceptable);
         let slack_strictly_better = slack_improved && (
-            matches!(slack_result.status, SolveStatus::Optimal) && !matches!(result.status, SolveStatus::Optimal)
+            !current_solved  // any solve beats a failure
+            || matches!(slack_result.status, SolveStatus::Optimal) && !matches!(result.status, SolveStatus::Optimal)
             || slack_result.status == result.status && slack_result.objective < result.objective
         );
         if slack_strictly_better {
@@ -1081,7 +1084,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             };
         } else if options.print_level >= 5 {
             eprintln!(
-                "ripopt: Slack fallback also failed ({:?}), returning original result",
+                "ripopt: Slack fallback did not improve ({:?}), returning original result",
                 slack_result.status
             );
         }
