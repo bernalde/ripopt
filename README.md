@@ -42,12 +42,11 @@ It implements a primal-dual interior point method with a barrier formulation, si
 
 ### Hock-Schittkowski Test Suite (120 problems)
 
-| Metric                 | ripopt             | Ipopt (native, MUMPS) |
-|------------------------|--------------------|-----------------------|
-| Problems solved        | **120/120 (100%)** | 118/120 (98.3%)       |
-| Optimal                | 98                 | 118                   |
-| Acceptable             | 22                 | 0                     |
-| Geometric mean speedup | **124x faster**    | --                    |
+| Metric          | ripopt             | Ipopt (native, MUMPS) |
+|-----------------|--------------------|-----------------------|
+| Problems solved | **120/120 (100%)** | 118/120 (98.3%)       |
+| Optimal         | 97                 | 118                   |
+| Acceptable      | 23                 | 0                     |
 
 ripopt solves all 120 problems. Ipopt fails on TP214 (`InvalidNumberDetected`) and TP223 (declared infeasible despite being feasible -- ripopt solves it in 4 iterations).
 
@@ -55,34 +54,53 @@ ripopt solves all 120 problems. Ipopt fails on TP214 (`InvalidNumberDetected`) a
 
 | Metric        | ripopt              | Ipopt (C++ with MUMPS) |
 |---------------|---------------------|------------------------|
-| Total solved  | **597/727 (82.1%)** | 555/727 (76.3%)        |
-| Constrained   | **376/493**         | 340/493                |
-| Unconstrained | **221/234**         | 215/234                |
-| Both solve    | 554                 | 554                    |
-| ripopt only   | **42**              | --                     |
-| Ipopt only    | --                  | **1**                  |
-| Both fail     | 129                 | 129                    |
+| Total solved  | **599/727 (82.4%)** | 556/727 (76.5%)        |
+| Constrained   | **377/493**         | 340/493                |
+| Unconstrained | **222/234**         | 216/234                |
+| Both solve    | 556                 | 556                    |
+| ripopt only   | **43**              | --                     |
+| Ipopt only    | --                  | **0**                  |
+| Both fail     | 128                 | 128                    |
 
-ripopt solves **42 more problems** than Ipopt.
+ripopt solves **43 more problems** than Ipopt, and solves everything Ipopt solves.
 
-#### Speed (554 commonly-solved problems)
+#### Speed comparison
 
-| Metric                               | Value     |
-|--------------------------------------|-----------|
-| Median speedup (ripopt faster)       | **38.8x** |
-| Problems where ripopt is faster      | 85.2%     |
-| Problems where ripopt is 10x+ faster | 66.6%     |
+**Methodology.** Both solvers are timed on the same CUTEst problems using the same evaluation callbacks. For Ipopt, only the `IpoptSolve` call is timed (excluding `CreateIpoptProblem`, option setting, and `FreeIpoptProblem`). For ripopt, the full `solve()` API is timed (including internal scaling, NE-to-LS detection, and all fallbacks). Each problem runs 3 times with the best time reported. Both use adaptive mu, tol=1e-8, max_iter=3000.
 
-Speed by problem size:
+**On 272 problems where both solvers take >= 0.1ms** (excluding trivially fast sub-0.1ms solves where measurement noise dominates):
 
-| Problem size          | Median speedup |
-|-----------------------|----------------|
-| Small (n <= 10)       | **49.9x**      |
-| Medium (10 < n <= 50) | **5.3x**       |
-| Large (n > 50)        | **1.6x**       |
+| Metric                          | Value            |
+|---------------------------------|------------------|
+| Median speedup (ripopt faster)  | **3.3x**         |
+| Geometric mean speedup          | **2.2x**         |
+| Problems where ripopt is faster | 186/272 (68%)    |
+| Problems where Ipopt is faster  | 86/272 (32%)     |
+| ripopt 10x+ faster              | 76/272 (28%)     |
 
+Speed by problem size (problems >= 0.1ms):
 
-#### Large Problems (n+m >= 100)
+| Problem size          | Count | Median speedup |
+|-----------------------|-------|----------------|
+| Small (n <= 10)       | 176   | **4.3x**       |
+| Medium (10 < n <= 50) | 64    | **3.7x**       |
+| Large (n > 50)        | 32    | **1.6x**       |
+
+**Interpreting the speed numbers.** The raw median across all 556 mutually-solved problems is 30x, but this is misleading. Most CUTEst problems are small (n < 10) and solve in microseconds for ripopt, while Ipopt has a ~1-3ms floor from internal initialization (MA27 symbolic analysis, TNLP setup) that dominates for trivial problems. The 3.3x median on non-trivial problems is a more meaningful comparison.
+
+The speed advantage comes from three sources:
+
+1. **Lower per-iteration overhead.** ripopt's dense Bunch-Kaufman factorization avoids sparse symbolic analysis and has minimal allocation. For small-to-medium problems (n < 50), this gives 2-5x per-iteration speedup.
+2. **Condensed KKT for over-constrained problems.** When m >> n, ripopt reduces an (n+m)x(n+m) factorization to nxn, giving dramatic speedups on problems like PT (67x, n=2, m=501) and SIPOW (5-8x, n=2-4, m=2000).
+3. **Fewer iterations on some problems.** NE-to-LS reformulation, better restoration recovery, and adaptive strategies sometimes converge in fewer iterations.
+
+Where Ipopt is faster:
+
+1. **Large sparse problems.** Ipopt's MUMPS/MA27 scales better than ripopt's dense solver for n > 50, and better than ripopt's faer-based sparse solver for some sparsity patterns.
+2. **Problems requiring many iterations.** When both take 100+ iterations, Ipopt's mature sparse linear algebra can win on per-iteration cost for larger systems.
+3. **Some difficult nonlinear problems.** Ipopt's extensive tuning of barrier parameter updates and restoration gives it an edge on specific hard problems.
+
+#### Large problems (n+m >= 100)
 
 On 48 problems with n+m >= 100 (exercising the sparse LDL solver):
 
@@ -91,8 +109,6 @@ On 48 problems with n+m >= 100 (exercising the sparse LDL solver):
 | Both solve     | 48/48 (100%) |
 | ripopt faster  | 29/48 (60%)  |
 | Median speedup | 1.6x         |
-
-ripopt's condensed KKT excels on over-constrained problems (m >> n): **50x** on PT (n=2, m=501), **65x** on DECONVNE (n=63, m=40), **6-8x** on SIPOW problems (n=2, m=2000). Key speedups from lazy condensed KKT: GOFFIN now **3x faster** (was 1800x slower), EXPFITC **2.5x faster** (was 12x slower).
 
 #### Attribution of ripopt-only solves (43 problems)
 
@@ -227,8 +243,8 @@ cargo run --release --example benchmark
 cargo test
 ```
 
-113 tests total:
-- **77 unit tests**: Dense LDL factorization, convergence checking, filter line search, fraction-to-boundary, KKT assembly, restoration
+138 tests total:
+- **102 unit tests**: Dense LDL factorization, convergence checking, filter line search, fraction-to-boundary, KKT assembly, restoration, linear solver
 - **21 integration tests**: Rosenbrock, SimpleQP, HS071, HS035, PureBoundConstrained, MultipleEqualityConstraints, NE-to-LS reformulation, and more
 - **15 HS regression tests**: Selected Hock-Schittkowski problems for regression checking
 
