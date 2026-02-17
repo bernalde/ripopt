@@ -1002,16 +1002,13 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
     }
 
-    // Slack variable fallback: if the initial solve failed and the problem has
-    // inequality constraints, retry with explicit slacks (g(x)-s=0, bounds on s).
+    // Slack variable fallback: if the solve didn't reach Optimal and the problem
+    // has inequality constraints, retry with explicit slacks (g(x)-s=0, bounds on s).
+    // Also try when only Acceptable was achieved — slack formulation may find a better solution
+    // (e.g. ACOPR14 where AL gives Acceptable at a suboptimal local minimum).
     if options.enable_slack_fallback
         && has_inequality_constraints(problem)
-        && matches!(
-            result.status,
-            SolveStatus::RestorationFailed
-                | SolveStatus::MaxIterations
-                | SolveStatus::NumericalError
-        )
+        && !matches!(result.status, SolveStatus::Optimal)
     {
         if options.print_level >= 5 {
             eprintln!(
@@ -1040,7 +1037,14 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             SolveStatus::Optimal | SolveStatus::Acceptable
         );
 
-        if slack_improved {
+        // Only use slack result if it's strictly better than current result:
+        // - Slack is Optimal when current is not, OR
+        // - Both are same status but slack has lower objective
+        let slack_strictly_better = slack_improved && (
+            matches!(slack_result.status, SolveStatus::Optimal) && !matches!(result.status, SolveStatus::Optimal)
+            || slack_result.status == result.status && slack_result.objective < result.objective
+        );
+        if slack_strictly_better {
             let n = problem.num_variables();
             let m = problem.num_constraints();
 
@@ -1247,6 +1251,13 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let mut best_du_zl: Option<Vec<f64>> = None;
     let mut best_du_zu: Option<Vec<f64>> = None;
 
+    // Dual stagnation detection: track best du improvement.
+    // If du hasn't improved significantly over many iterations and we have a
+    // best feasible point, restore it and restart with fresh parameters.
+    let mut dual_stall_last_good_du: f64 = f64::INFINITY;
+    let mut dual_stall_last_good_iter: usize = 0;
+    let mut dual_stall_triggered: bool = false;
+
     // Initial evaluation
     state.evaluate(problem, 1.0);
 
@@ -1346,6 +1357,86 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         if iteration % 10 == 0 && options.max_wall_time > 0.0 {
             if start_time.elapsed().as_secs_f64() >= options.max_wall_time {
                 return make_result(&state, SolveStatus::MaxIterations);
+            }
+        }
+
+        // --- Dual stagnation detection (runs every iteration, including restoration) ---
+        // Track best du seen. If du hasn't improved for 500+ iterations and we have a
+        // best feasible point, restore it with fresh filter/mu.
+        // This catches problems like ACOPR14 where restoration cycling pushes the solver
+        // off a good region and it gets stuck for thousands of iterations.
+        if iteration > 0 {
+            let current_du = convergence::dual_infeasibility(
+                &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+                &state.y, &state.z_l, &state.z_u, n,
+            );
+            if current_du < 0.5 * dual_stall_last_good_du {
+                dual_stall_last_good_du = current_du;
+                dual_stall_last_good_iter = iteration;
+            }
+
+            let stall_iters = iteration.saturating_sub(dual_stall_last_good_iter);
+            if stall_iters >= 500
+                && !dual_stall_triggered
+                && current_du > options.acceptable_tol
+                && best_x.is_some()
+            {
+                // Dual stagnation detected. Restore the best-du point (which had
+                // du=best_du_val with stored x, y, z). This point was near-converged
+                // but got disrupted by restoration cycling.
+                if let Some(ref bdx) = best_du_x {
+                    log::debug!(
+                        "Dual stagnation at iter {}: du={:.2e}, restoring best-du point (du={:.2e} at iter {})",
+                        iteration, current_du, dual_stall_last_good_du, dual_stall_last_good_iter
+                    );
+                    state.x.copy_from_slice(bdx);
+                    if let Some(ref bdy) = best_du_y { state.y.copy_from_slice(bdy); }
+                    if let Some(ref bdzl) = best_du_zl { state.z_l.copy_from_slice(bdzl); }
+                    if let Some(ref bdzu) = best_du_zu { state.z_u.copy_from_slice(bdzu); }
+                    state.evaluate(problem, 1.0);
+
+                    // Reset filter and bump mu for a fresh start from the good point.
+                    filter.reset();
+                    let theta_restart = state.constraint_violation();
+                    filter.set_theta_min_from_initial(theta_restart);
+                    state.mu = (state.mu * 100.0).max(1e-4).min(1e-1);
+                    mu_state.mode = MuMode::Free;
+                    mu_state.first_iter_in_mode = true;
+                    mu_state.consecutive_restoration_failures = 0;
+                    inertia_params.delta_w_last = 0.0;
+
+                    // Check if the restored point meets acceptable convergence.
+                    // The point had du=best_du_val which may already be excellent.
+                    let rest_pr = state.constraint_violation();
+                    let rest_du = convergence::dual_infeasibility(
+                        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+                        &state.y, &state.z_l, &state.z_u, n,
+                    );
+                    let rest_co = convergence::complementarity_error(
+                        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
+                    );
+                    // Use relaxed tolerances (acceptable level)
+                    let s_max = 100.0_f64;
+                    let mult_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
+                        + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
+                        + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
+                    let s_d = if (m + 2 * n) > 0 {
+                        (s_max.max(mult_sum / (m + 2 * n) as f64) / s_max).min(1e4)
+                    } else { 1.0 };
+                    let du_tol = (options.acceptable_tol * s_d).max(1e-2);
+                    let co_tol = (options.acceptable_tol * s_d).max(1e-2);
+                    let pr_tol = options.acceptable_tol.max(options.acceptable_constr_viol_tol);
+                    if rest_pr <= pr_tol && rest_du <= du_tol && rest_co <= co_tol {
+                        log::debug!(
+                            "Restored best-du point passes acceptable (pr={:.2e}, du={:.2e}, co={:.2e})",
+                            rest_pr, rest_du, rest_co
+                        );
+                        return make_result(&state, SolveStatus::Acceptable);
+                    }
+
+                    dual_stall_triggered = true;
+                    // Fall through to normal iteration from good point
+                }
             }
         }
 
