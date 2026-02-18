@@ -26,6 +26,10 @@ path = "hs_suite/run_ipopt_native.rs"
 required-features = ["ipopt-native"]
 
 [[bin]]
+name = "ripopt"
+path = "src/bin/ripopt_ampl.rs"
+
+[[bin]]
 name = "cutest_suite"
 path = "cutest_suite/run_cutest.rs"
 required-features = ["cutest", "ipopt-native"]
