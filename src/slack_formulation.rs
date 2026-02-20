@@ -53,6 +53,7 @@ impl<'a> SlackFormulation<'a> {
         for i in 0..m {
             let lo = if g_l[i].is_finite() { g_l[i] } else { f64::NEG_INFINITY };
             let hi = if g_u[i].is_finite() { g_u[i] } else { f64::INFINITY };
+            debug_assert!(lo <= hi, "Inconsistent constraint bounds: g_l[{}]={} > g_u[{}]={}", i, lo, i, hi);
             s_init[i] = g_val[i].clamp(lo, hi);
         }
 
@@ -81,21 +82,12 @@ impl NlpProblem for SlackFormulation<'_> {
 
     fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
         let n = self.n_orig;
-        let m = self.m_orig;
 
-        // First n: original variable bounds
-        let mut orig_xl = vec![0.0; n];
-        let mut orig_xu = vec![0.0; n];
-        self.inner.bounds(&mut orig_xl, &mut orig_xu);
-        x_l[..n].copy_from_slice(&orig_xl);
-        x_u[..n].copy_from_slice(&orig_xu);
+        // First n: original variable bounds (fill output slices directly)
+        self.inner.bounds(&mut x_l[..n], &mut x_u[..n]);
 
         // Next m: slack bounds = original constraint bounds
-        let mut g_l = vec![0.0; m];
-        let mut g_u = vec![0.0; m];
-        self.inner.constraint_bounds(&mut g_l, &mut g_u);
-        x_l[n..n + m].copy_from_slice(&g_l);
-        x_u[n..n + m].copy_from_slice(&g_u);
+        self.inner.constraint_bounds(&mut x_l[n..], &mut x_u[n..]);
     }
 
     fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {

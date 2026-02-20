@@ -159,12 +159,8 @@ impl NlpProblem for RestorationNlp<'_> {
         let n = self.n_orig;
         let m = self.m_orig;
 
-        // First n: original variable bounds
-        let mut orig_xl = vec![0.0; n];
-        let mut orig_xu = vec![0.0; n];
-        self.inner.bounds(&mut orig_xl, &mut orig_xu);
-        x_l[..n].copy_from_slice(&orig_xl);
-        x_u[..n].copy_from_slice(&orig_xu);
+        // First n: original variable bounds (fill output slices directly)
+        self.inner.bounds(&mut x_l[..n], &mut x_u[..n]);
 
         // Next 2m: p and n slacks, lower=0, upper=+inf
         for i in 0..2 * m {

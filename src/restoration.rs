@@ -95,10 +95,7 @@ impl RestorationPhase {
             let mut violation = vec![0.0; m];
             let mut active = vec![false; m];
             for i in 0..m {
-                let is_equality = g_l[i].is_finite()
-                    && g_u[i].is_finite()
-                    && (g_l[i] - g_u[i]).abs() < 1e-15;
-                if is_equality {
+                if convergence::is_equality_constraint(g_l[i], g_u[i]) {
                     violation[i] = g[i] - g_l[i];
                     active[i] = true;
                 } else if g_l[i].is_finite() && g[i] < g_l[i] {
@@ -289,9 +286,7 @@ impl RestorationPhase {
                     let mut violation_pen = vec![0.0; m];
                     let mut any_active = false;
                     for i in 0..m {
-                        let is_eq = g_l[i].is_finite() && g_u[i].is_finite()
-                            && (g_l[i] - g_u[i]).abs() < 1e-15;
-                        if is_eq {
+                        if convergence::is_equality_constraint(g_l[i], g_u[i]) {
                             violation_pen[i] = g[i] - g_l[i];
                             any_active = true;
                         } else if g_l[i].is_finite() && g[i] < g_l[i] {

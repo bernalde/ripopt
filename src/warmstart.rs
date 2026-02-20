@@ -26,8 +26,32 @@ impl WarmStartInitializer {
         let frac = options.warm_start_bound_frac;
         let mult_push = options.warm_start_mult_bound_push;
 
+        // Ensure multipliers are positive before computing complementarity
         for i in 0..n {
-            // Push x away from bounds
+            z_l[i] = z_l[i].max(mult_push);
+            z_u[i] = z_u[i].max(mult_push);
+        }
+
+        // Compute initial mu from average complementarity at the original warm-start point,
+        // BEFORE pushing x away from bounds. This gives a mu that reflects the actual
+        // warm-start state rather than the artificially modified point.
+        let mut sum_compl = 0.0;
+        let mut count = 0;
+        for i in 0..n {
+            if x_l[i].is_finite() {
+                let slack = (x[i] - x_l[i]).max(1e-20);
+                sum_compl += slack * z_l[i];
+                count += 1;
+            }
+            if x_u[i].is_finite() {
+                let slack = (x_u[i] - x[i]).max(1e-20);
+                sum_compl += slack * z_u[i];
+                count += 1;
+            }
+        }
+
+        // Now push x away from bounds
+        for i in 0..n {
             if x_l[i].is_finite() {
                 let bound_dist = if x_u[i].is_finite() {
                     push.min(frac * (x_u[i] - x_l[i]))
@@ -43,24 +67,6 @@ impl WarmStartInitializer {
                     push
                 };
                 x[i] = x[i].min(x_u[i] - bound_dist);
-            }
-
-            // Ensure multipliers are positive
-            z_l[i] = z_l[i].max(mult_push);
-            z_u[i] = z_u[i].max(mult_push);
-        }
-
-        // Compute initial mu from average complementarity
-        let mut sum_compl = 0.0;
-        let mut count = 0;
-        for i in 0..n {
-            if x_l[i].is_finite() {
-                sum_compl += (x[i] - x_l[i]) * z_l[i];
-                count += 1;
-            }
-            if x_u[i].is_finite() {
-                sum_compl += (x_u[i] - x[i]) * z_u[i];
-                count += 1;
             }
         }
 

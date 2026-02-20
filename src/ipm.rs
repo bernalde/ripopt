@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::convergence::{self, check_convergence, ConvergenceInfo, ConvergenceStatus};
 use crate::filter::{self, Filter, FilterEntry};
@@ -337,9 +337,7 @@ impl SolverState {
                     //   g_l <= g <= g_u: sign depends on active bound
                     // Only apply LS init for equality constraints or when sign is correct.
                     for i in 0..m {
-                        let is_eq = g_l[i].is_finite() && g_u[i].is_finite()
-                            && (g_l[i] - g_u[i]).abs() < 1e-15;
-                        if is_eq {
+                        if convergence::is_equality_constraint(g_l[i], g_u[i]) {
                             continue; // LS init fine for equalities
                         }
                         let has_lower = g_l[i].is_finite();
@@ -524,12 +522,6 @@ struct LeastSquaresProblem<'a, P: NlpProblem> {
     /// Hessian structure: lower triangle of J^T*J + ∑ r_i ∇²g_i.
     hess_rows: Vec<usize>,
     hess_cols: Vec<usize>,
-    /// Inner problem's hessian row indices for second-order terms.
-    #[allow(dead_code)]
-    inner_hess_rows: Vec<usize>,
-    /// Inner problem's hessian col indices (kept for symmetry with rows).
-    #[allow(dead_code)]
-    inner_hess_cols: Vec<usize>,
     /// Mapping from inner hessian entries to our dense lower triangle index.
     /// inner_hess_map[k] = index into our vals[] for inner hessian entry k.
     inner_hess_map: Vec<usize>,
@@ -576,8 +568,6 @@ impl<P: NlpProblem> LeastSquaresProblem<'_, P> {
             jac_cols,
             hess_rows,
             hess_cols,
-            inner_hess_rows,
-            inner_hess_cols,
             inner_hess_map,
         }
     }
@@ -679,7 +669,7 @@ impl<P: NlpProblem> NlpProblem for LeastSquaresProblem<'_, P> {
 
         // Part 2: ∑ r_i * ∇²g_i (second-order correction)
         // inner.hessian_values(x, 0.0, r, hess) gives ∑ r_i * ∇²g_i
-        let inner_hess_nnz = self.inner_hess_rows.len();
+        let inner_hess_nnz = self.inner_hess_map.len();
         if inner_hess_nnz > 0 {
             let mut inner_hess_vals = vec![0.0; inner_hess_nnz];
             self.inner.hessian_values(x, 0.0, &r, &mut inner_hess_vals);
@@ -726,10 +716,7 @@ fn detect_ne_problem<P: NlpProblem>(problem: &P) -> bool {
     let mut g_u = vec![0.0; m];
     problem.constraint_bounds(&mut g_l, &mut g_u);
     for i in 0..m {
-        let is_eq = g_l[i].is_finite()
-            && g_u[i].is_finite()
-            && (g_l[i] - g_u[i]).abs() < 1e-15;
-        if !is_eq {
+        if !convergence::is_equality_constraint(g_l[i], g_u[i]) {
             return false;
         }
     }
@@ -1122,6 +1109,52 @@ fn has_inequality_constraints<P: NlpProblem>(problem: &P) -> bool {
     (0..m).any(|i| (g_l[i] - g_u[i]).abs() > 0.0)
 }
 
+/// Accumulates wall-clock time spent in each phase of the IPM loop.
+/// Printed as a summary table at the end of `solve_ipm` when `print_level >= 5`.
+struct PhaseTimings {
+    problem_eval: Duration,
+    kkt_assembly: Duration,
+    factorization: Duration,
+    direction_solve: Duration,
+    line_search: Duration,
+}
+
+impl PhaseTimings {
+    fn new() -> Self {
+        PhaseTimings {
+            problem_eval: Duration::ZERO,
+            kkt_assembly: Duration::ZERO,
+            factorization: Duration::ZERO,
+            direction_solve: Duration::ZERO,
+            line_search: Duration::ZERO,
+        }
+    }
+
+    fn print_summary(&self, iterations: usize, total: Duration) {
+        let total_secs = total.as_secs_f64();
+        let phases = [
+            ("Problem eval", self.problem_eval),
+            ("KKT assembly", self.kkt_assembly),
+            ("Factorization", self.factorization),
+            ("Direction solve", self.direction_solve),
+            ("Line search", self.line_search),
+        ];
+        let accounted: Duration = phases.iter().map(|(_, d)| *d).sum();
+        let other = total.saturating_sub(accounted);
+
+        eprintln!("\nPhase breakdown ({} iterations):", iterations);
+        for (name, dur) in &phases {
+            let secs = dur.as_secs_f64();
+            let pct = if total_secs > 0.0 { 100.0 * secs / total_secs } else { 0.0 };
+            eprintln!("  {:<20} {:>8.3}s ({:>5.1}%)", name, secs, pct);
+        }
+        let other_secs = other.as_secs_f64();
+        let other_pct = if total_secs > 0.0 { 100.0 * other_secs / total_secs } else { 0.0 };
+        eprintln!("  {:<20} {:>8.3}s ({:>5.1}%)", "Other", other_secs, other_pct);
+        eprintln!("  {:<20} {:>8.3}s", "Total", total_secs);
+    }
+}
+
 /// Core IPM solver implementation.
 fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult {
     // --- NLP Scaling (gradient-based, matching Ipopt's nlp_scaling_method) ---
@@ -1236,6 +1269,10 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
     // Wall-clock time limit
     let start_time = Instant::now();
+
+    // Phase timing instrumentation
+    let mut timings = PhaseTimings::new();
+    let ipm_start = Instant::now();
 
     // Watchdog mechanism state
     let mut consecutive_shortened: usize = 0;
@@ -1564,9 +1601,15 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
         match check_convergence(&conv_info, options, state.consecutive_acceptable) {
             ConvergenceStatus::Converged => {
+                if options.print_level >= 5 {
+                    timings.print_summary(iteration + 1, ipm_start.elapsed());
+                }
                 return make_result(&state, SolveStatus::Optimal);
             }
             ConvergenceStatus::Acceptable => {
+                if options.print_level >= 5 {
+                    timings.print_summary(iteration + 1, ipm_start.elapsed());
+                }
                 return make_result(&state, SolveStatus::Acceptable);
             }
             ConvergenceStatus::Diverging => {
@@ -1639,6 +1682,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
         // Build condensed KKT when applicable (skip full KKT assembly — saves O((n+m)^2)
         // assembly + O((n+m)^3) factorization with up to 15 inertia correction attempts).
+        let t_kkt = Instant::now();
         let condensed_system = if use_condensed {
             Some(kkt::assemble_condensed_kkt(
                 n, m,
@@ -1668,11 +1712,14 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         } else {
             None
         };
+        timings.kkt_assembly += t_kkt.elapsed();
 
         // Factor with inertia correction (only for non-condensed path)
         if let Some(ref mut kkt_system) = kkt_system_opt {
+        let t_fact = Instant::now();
         let inertia_result =
             kkt::factor_with_inertia_correction(kkt_system, lin_solver.as_mut(), &mut inertia_params);
+        timings.factorization += t_fact.elapsed();
 
         if let Err(e) = inertia_result {
             log::warn!("KKT factorization failed: {}", e);
@@ -1832,6 +1879,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         } // end: if let Some(ref mut kkt_system) = kkt_system_opt
 
         // Solve for search direction
+        let t_dir = Instant::now();
         let mut cond_solver_for_soc: Option<DenseLdl> = None;
         let (dx, dy) = if let Some(ref cond) = condensed_system {
             // Try condensed solve first (faster for m >> n)
@@ -1931,6 +1979,8 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             }
         };
 
+        timings.direction_solve += t_dir.elapsed();
+
         // Recover bound multiplier steps
         let (dz_l, dz_u) =
             kkt::recover_dz(&state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, &dx, state.mu);
@@ -2003,6 +2053,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
 
         // Line search
+        let t_ls = Instant::now();
         let theta_current = primal_inf;
         let phi_current = state.barrier_objective(options);
         let grad_phi_step = state.barrier_directional_derivative(options);
@@ -2407,6 +2458,8 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             }
         }
 
+        timings.line_search += t_ls.elapsed();
+
         // Update dual variables
         let alpha_d = alpha_dual_max;
         for i in 0..m {
@@ -2440,7 +2493,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         state.alpha_dual = alpha_d;
 
         // Re-evaluate at new point
+        let t_eval = Instant::now();
         state.evaluate(problem, 1.0);
+        timings.problem_eval += t_eval.elapsed();
 
         // Reset v_l, v_u from barrier equilibrium v = mu_ks / slack.
         // Simple reset rather than Newton update (our dv is approximate since we
@@ -2555,7 +2610,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     } else {
                         mu_state.first_iter_in_mode = false;
                         // Check if subproblem is solved (barrier error small enough)
-                        let barrier_err = compute_barrier_error(&state, options);
+                        let barrier_err = compute_barrier_error(&state);
                         if barrier_err <= options.barrier_tol_factor * state.mu || mu_state.tiny_step {
                             let new_mu = (options.mu_linear_decrease_factor * state.mu)
                                 .min(state.mu.powf(options.mu_superlinear_decrease_power))
@@ -2918,6 +2973,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 return make_result(&state, SolveStatus::Infeasible);
             }
         }
+    }
+    if options.print_level >= 5 {
+        timings.print_summary(options.max_iter, ipm_start.elapsed());
     }
     make_result(&state, SolveStatus::MaxIterations)
 }
@@ -3470,7 +3528,7 @@ fn compute_avg_complementarity(state: &SolverState) -> f64 {
 
 /// Compute barrier error for fixed-mode subproblem convergence check.
 /// This is the optimality error of the current barrier subproblem (for fixed mu).
-fn compute_barrier_error(state: &SolverState, options: &SolverOptions) -> f64 {
+fn compute_barrier_error(state: &SolverState) -> f64 {
     let n = state.n;
 
     // Dual infeasibility of barrier problem:
@@ -3513,7 +3571,6 @@ fn compute_barrier_error(state: &SolverState, options: &SolverOptions) -> f64 {
     // Primal infeasibility
     let primal_err = state.constraint_violation();
 
-    let _ = options; // reserved for future use
     dual_err.max(compl_err).max(primal_err)
 }
 

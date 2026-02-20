@@ -1,3 +1,4 @@
+use crate::convergence::is_equality_constraint;
 use crate::linear_solver::{KktMatrix, LinearSolver, SolverError, SymmetricMatrix};
 
 /// Information about the KKT system structure.
@@ -135,8 +136,7 @@ pub fn assemble_kkt(
     // For equality constraints: no slack, (2,2) = 0, r_c = -(g - g_l).
     // For infeasible inequality constraints: no barrier, r_c = -(g - bound).
     for i in 0..m {
-        let is_equality = g_l[i].is_finite() && g_u[i].is_finite() && (g_l[i] - g_u[i]).abs() < 1e-15;
-        if is_equality {
+        if is_equality_constraint(g_l[i], g_u[i]) {
             rhs[n + i] = -(g[i] - g_l[i]);
             continue;
         }
@@ -577,8 +577,7 @@ pub fn assemble_condensed_kkt(
     let mut rhs_constraint = vec![0.0; m];
 
     for i in 0..m {
-        let is_equality = g_l[i].is_finite() && g_u[i].is_finite() && (g_l[i] - g_u[i]).abs() < 1e-15;
-        if is_equality {
+        if is_equality_constraint(g_l[i], g_u[i]) {
             rhs_constraint[i] = -(g[i] - g_l[i]);
             // d_c[i] = 0.0 for equalities (no (2,2) block entry)
             continue;

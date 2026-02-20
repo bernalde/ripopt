@@ -57,7 +57,7 @@ pub struct SymmetricMatrix {
     pub n: usize,
     /// Lower triangle entries stored column-major.
     /// For column j, rows j..n are stored.
-    /// Entry (i,j) where i >= j is at index: j*n - j*(j-1)/2 + (i-j)
+    /// Entry (i,j) where i >= j is at index: j*n - j*(j+1)/2 + i
     pub data: Vec<f64>,
 }
 
@@ -139,7 +139,11 @@ impl SymmetricMatrix {
         }
     }
 
-    /// Convert to full dense matrix (row-major) for debugging.
+}
+
+#[cfg(test)]
+impl SymmetricMatrix {
+    /// Convert to full dense matrix (row-major) for debugging/testing.
     pub fn to_full(&self) -> Vec<Vec<f64>> {
         let mut m = vec![vec![0.0; self.n]; self.n];
         for i in 0..self.n {
@@ -151,9 +155,7 @@ impl SymmetricMatrix {
         }
         m
     }
-}
 
-impl SymmetricMatrix {
     /// Compute eigenvalues using the Jacobi eigenvalue algorithm.
     /// Only suitable for small matrices (n <= ~50).
     /// Returns eigenvalues sorted in ascending order.

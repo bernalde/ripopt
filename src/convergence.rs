@@ -1,5 +1,11 @@
 use crate::options::SolverOptions;
 
+/// Check if constraint `i` is an equality constraint (g_l ≈ g_u).
+#[inline]
+pub fn is_equality_constraint(g_l: f64, g_u: f64) -> bool {
+    g_l.is_finite() && g_u.is_finite() && (g_l - g_u).abs() < 1e-15
+}
+
 /// Result of a convergence check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConvergenceStatus {
@@ -204,10 +210,7 @@ pub fn complementarity_error_full(
     // Add constraint slack complementarity for inequality constraints
     let m = g.len();
     for i in 0..m {
-        let is_equality = g_l[i].is_finite()
-            && g_u[i].is_finite()
-            && (g_l[i] - g_u[i]).abs() < 1e-15;
-        if is_equality {
+        if is_equality_constraint(g_l[i], g_u[i]) {
             continue;
         }
         if g_l[i].is_finite() {
