@@ -328,6 +328,44 @@ When the filter line search fails:
 
 The solver implements a watchdog mechanism that temporarily relaxes the filter acceptance criteria when progress stalls due to shortened steps. This helps escape narrow feasible corridors where strict Armijo conditions are too conservative.
 
+## Profiling
+
+### Built-in Phase Timing
+
+ripopt includes per-iteration phase timing instrumentation. When `print_level >= 5` (the default), a summary table is printed at the end of each solve showing where CPU time is spent:
+
+```
+Phase breakdown (47 iterations):
+  Problem eval           0.234s (45.2%)
+  KKT assembly           0.089s (17.2%)
+  Factorization          0.156s (30.1%)
+  Direction solve        0.012s  (2.3%)
+  Line search            0.021s  (4.1%)
+  Other                  0.006s  (1.1%)
+  Total                  0.518s
+```
+
+To suppress timing output, set `print_level: 0` in `SolverOptions`.
+
+### External Profiling with samply
+
+Release builds include debug symbols (`debug = true` in `[profile.release]`), so external profilers can show function names. [samply](https://github.com/mstange/samply) provides flamegraph visualization on macOS and Linux:
+
+```bash
+cargo install samply
+cargo build --release --bin hs_suite
+samply record target/release/hs_suite
+```
+
+This opens a Firefox Profiler UI in the browser with a full call tree and flamegraph. Look for wide bars under `solve_ipm` to identify dominant functions.
+
+On macOS, Instruments (Xcode) also works without any additional setup:
+
+```bash
+cargo build --release --bin hs_suite
+xcrun xctrace record --template "Time Profiler" --launch target/release/hs_suite
+```
+
 ## Sign Convention
 
 ripopt uses the Ipopt convention where the Lagrangian is:

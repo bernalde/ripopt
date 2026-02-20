@@ -34,6 +34,9 @@ name = "cutest_suite"
 path = "cutest_suite/run_cutest.rs"
 required-features = ["cutest", "ipopt-native"]
 
+[profile.release]
+debug = true
+
 [dev-dependencies]
 approx = "0.5"
 serde = { version = "1", features = ["derive"] }
