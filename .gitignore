@@ -36,3 +36,6 @@ Makefile
 
 # Install scripts
 install_cutest.sh
+
+# Python build artifacts
+*.egg-info/
