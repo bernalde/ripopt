@@ -1,0 +1,161 @@
+/**
+ * ripopt.h — C API for the ripopt nonlinear optimizer.
+ *
+ * Mirrors the Ipopt C interface so that existing Ipopt C code can be
+ * adapted with minimal changes.
+ *
+ * Usage:
+ *   1. Create a problem handle with ripopt_create().
+ *   2. Optionally tune options with ripopt_add_num/int/str_option().
+ *   3. Call ripopt_solve() with an initial point.
+ *   4. Free the handle with ripopt_free().
+ *
+ * Compile & link example (macOS):
+ *   cargo build --release
+ *   cc examples/c_api_test.c -I. -Ltarget/release -lripopt \
+ *       -Wl,-rpath,target/release -o c_api_test
+ *   ./c_api_test
+ */
+
+#ifndef RIPOPT_H
+#define RIPOPT_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Opaque handle to a ripopt problem. */
+typedef void* RipoptProblem;
+
+/* -------------------------------------------------------------------------
+ * Callback signatures (identical to Ipopt C API)
+ * -------------------------------------------------------------------------
+ * All callbacks return 1 (true) on success, 0 on error.
+ * new_x / new_lambda: 1 if x/lambda changed since the last call, 0 otherwise.
+ * Ripopt currently passes 1 for every call (conservative / correct).
+ *
+ * Jacobian / Hessian callbacks are called in two modes:
+ *   - values == NULL  → fill iRow/jCol with the sparsity pattern (0-based)
+ *   - values != NULL  → fill values in the same element order as the pattern
+ * ------------------------------------------------------------------------- */
+
+typedef int (*Eval_F_CB)(
+    int n, const double *x, int new_x,
+    double *obj_value,
+    void *user_data);
+
+typedef int (*Eval_Grad_F_CB)(
+    int n, const double *x, int new_x,
+    double *grad_f,
+    void *user_data);
+
+typedef int (*Eval_G_CB)(
+    int n, const double *x, int new_x,
+    int m, double *g,
+    void *user_data);
+
+typedef int (*Eval_Jac_G_CB)(
+    int n, const double *x, int new_x,
+    int m, int nele_jac,
+    int *iRow, int *jCol,
+    double *values,
+    void *user_data);
+
+typedef int (*Eval_H_CB)(
+    int n, const double *x, int new_x,
+    double obj_factor,
+    int m, const double *lambda, int new_lambda,
+    int nele_hess,
+    int *iRow, int *jCol,
+    double *values,
+    void *user_data);
+
+/* -------------------------------------------------------------------------
+ * Return status codes
+ * ------------------------------------------------------------------------- */
+typedef enum {
+    RIPOPT_SOLVE_SUCCEEDED              =  0,
+    RIPOPT_ACCEPTABLE_LEVEL             =  1,
+    RIPOPT_INFEASIBLE_PROBLEM           =  2,
+    RIPOPT_MAXITER_EXCEEDED             =  5,
+    RIPOPT_RESTORATION_FAILED           =  6,
+    RIPOPT_ERROR_IN_STEP_COMPUTATION    =  7,
+    RIPOPT_NOT_ENOUGH_DEGREES_OF_FREEDOM = 10,
+    RIPOPT_INVALID_PROBLEM_DEFINITION   = 11,
+    RIPOPT_INTERNAL_ERROR               = -1
+} RipoptReturnStatus;
+
+/* -------------------------------------------------------------------------
+ * Lifecycle
+ * -------------------------------------------------------------------------
+ * ripopt_create — allocate and return a new problem handle.
+ *
+ *   n          number of primal variables
+ *   x_l/x_u   variable lower/upper bounds (length n; use ±1e30 for ±∞)
+ *   m          number of constraints
+ *   g_l/g_u   constraint lower/upper bounds (length m)
+ *   nele_jac  number of nonzeros in the Jacobian
+ *   nele_hess number of nonzeros in the lower-triangular Hessian
+ *   eval_*    callback function pointers (must remain valid until ripopt_free)
+ *
+ * Returns NULL on allocation failure.
+ * ------------------------------------------------------------------------- */
+RipoptProblem ripopt_create(
+    int n, const double *x_l, const double *x_u,
+    int m, const double *g_l, const double *g_u,
+    int nele_jac, int nele_hess,
+    Eval_F_CB      eval_f,
+    Eval_Grad_F_CB eval_grad_f,
+    Eval_G_CB      eval_g,
+    Eval_Jac_G_CB  eval_jac_g,
+    Eval_H_CB      eval_h);
+
+/** Free a problem handle obtained from ripopt_create(). */
+void ripopt_free(RipoptProblem problem);
+
+/* -------------------------------------------------------------------------
+ * Options (key/value, mirrors Ipopt option names)
+ * All functions return 1 on success, 0 if the keyword is unknown.
+ * ------------------------------------------------------------------------- */
+
+/** Set a numeric (double) option, e.g. "tol" = 1e-8. */
+int ripopt_add_num_option(RipoptProblem problem,
+                          const char *keyword, double val);
+
+/** Set an integer option, e.g. "max_iter" = 500. */
+int ripopt_add_int_option(RipoptProblem problem,
+                          const char *keyword, int val);
+
+/** Set a string option, e.g. "mu_strategy" = "adaptive". */
+int ripopt_add_str_option(RipoptProblem problem,
+                          const char *keyword, const char *val);
+
+/* -------------------------------------------------------------------------
+ * Solve
+ *
+ *   problem   handle from ripopt_create()
+ *   x         [in/out] initial point (length n) → primal solution
+ *   g         [out]    constraint values g(x*) at solution, or NULL
+ *   obj_val   [out]    objective f(x*) at solution, or NULL
+ *   mult_g    [out]    constraint multipliers λ (length m), or NULL
+ *   mult_x_L  [out]    lower bound multipliers z_L (length n), or NULL
+ *   mult_x_U  [out]    upper bound multipliers z_U (length n), or NULL
+ *   user_data arbitrary pointer forwarded to every callback
+ *
+ * Returns a RipoptReturnStatus code (cast to int).
+ * ------------------------------------------------------------------------- */
+int ripopt_solve(
+    RipoptProblem problem,
+    double *x,
+    double *g,
+    double *obj_val,
+    double *mult_g,
+    double *mult_x_L,
+    double *mult_x_U,
+    void   *user_data);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* RIPOPT_H */

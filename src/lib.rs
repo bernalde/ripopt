@@ -1,4 +1,5 @@
 pub mod augmented_lagrangian;
+pub mod c_api;
 pub mod convergence;
 pub mod filter;
 pub mod ipm;
