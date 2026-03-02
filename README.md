@@ -37,6 +37,8 @@ It implements a primal-dual interior point method with a barrier formulation, si
 - Condensed KKT system for problems with many more constraints than variables
 - Local infeasibility detection for inconsistent constraint systems
 - **Multi-solver fallback architecture**: L-BFGS, Augmented Lagrangian, and explicit slack reformulation
+- **C API** mirroring the Ipopt C interface for direct linking from C/C++/Python/Julia
+- **AMPL NL interface** with Pyomo integration via `SolverFactory('ripopt')`
 
 ## Benchmarks
 
@@ -224,6 +226,98 @@ Key options (all have Ipopt-matching defaults):
 - `status` -- one of: `Optimal`, `Acceptable`, `Infeasible`, `LocalInfeasibility`, `MaxIterations`, `NumericalError`, `Unbounded`, `RestorationFailed`, `InternalError`
 - `iterations` -- number of IPM iterations
 
+## C API
+
+ripopt also exposes a C API that mirrors the [Ipopt C interface](https://coin-or.github.io/Ipopt/INTERFACES.html#INTERFACE_C), enabling direct linking from C, C++, Python (`ctypes`/`cffi`), Julia, and any language with C FFI support — without the subprocess/file overhead of the NL interface.
+
+### Build the shared library
+
+```bash
+cargo build --release
+# produces target/release/libripopt.dylib (macOS) or libripopt.so (Linux)
+```
+
+### C header
+
+Include `ripopt.h` (repo root) in your C project.
+
+### Callback signatures
+
+The five callback types are identical to the Ipopt C interface:
+
+```c
+typedef int (*Eval_F_CB)   (int n, const double *x, int new_x,
+                             double *obj_value, void *user_data);
+typedef int (*Eval_Grad_F_CB)(int n, const double *x, int new_x,
+                              double *grad_f, void *user_data);
+typedef int (*Eval_G_CB)   (int n, const double *x, int new_x,
+                             int m, double *g, void *user_data);
+typedef int (*Eval_Jac_G_CB)(int n, const double *x, int new_x,
+                              int m, int nele_jac,
+                              int *iRow, int *jCol, double *values,
+                              void *user_data);
+typedef int (*Eval_H_CB)   (int n, const double *x, int new_x,
+                             double obj_factor,
+                             int m, const double *lambda, int new_lambda,
+                             int nele_hess,
+                             int *iRow, int *jCol, double *values,
+                             void *user_data);
+```
+
+Jacobian and Hessian callbacks use the standard two-call protocol: when `values == NULL` fill `iRow`/`jCol` with the sparsity pattern (0-based); when `values != NULL` fill numerical values in the same order.
+
+### Lifecycle
+
+```c
+#include "ripopt.h"
+
+// 1. Create handle
+RipoptProblem nlp = ripopt_create(
+    n, x_l, x_u,
+    m, g_l, g_u,
+    nele_jac, nele_hess,
+    eval_f, eval_grad_f, eval_g, eval_jac_g, eval_h);
+
+// 2. Set options (Ipopt-compatible key names)
+ripopt_add_int_option(nlp, "print_level", 5);
+ripopt_add_num_option(nlp, "tol",         1e-8);
+ripopt_add_str_option(nlp, "mu_strategy", "adaptive");
+
+// 3. Solve  (x: in = initial point, out = solution)
+double obj_val;
+int status = ripopt_solve(nlp, x, NULL, &obj_val,
+                          NULL, NULL, NULL, NULL);
+// status == 0  →  RIPOPT_SOLVE_SUCCEEDED
+
+// 4. Free
+ripopt_free(nlp);
+```
+
+### Return status
+
+| Code | Meaning |
+|------|---------|
+| 0  | `RIPOPT_SOLVE_SUCCEEDED` |
+| 1  | `RIPOPT_ACCEPTABLE_LEVEL` |
+| 2  | `RIPOPT_INFEASIBLE_PROBLEM` |
+| 5  | `RIPOPT_MAXITER_EXCEEDED` |
+| 6  | `RIPOPT_RESTORATION_FAILED` |
+| 7  | `RIPOPT_ERROR_IN_STEP_COMPUTATION` |
+| -1 | `RIPOPT_INTERNAL_ERROR` |
+
+### Compile and run the HS071 example
+
+```bash
+cargo build --release
+cc examples/c_api_test.c -I. -Ltarget/release -lripopt \
+   -Wl,-rpath,$(pwd)/target/release -o c_api_test
+./c_api_test
+# Status : 0  (0 = Optimal)
+# Obj    : 17.0140172956  (expected ~17.0140173)
+# x      : [1.000000, 4.743000, 3.821150, 1.379408]
+# Test   : PASSED
+```
+
 ## Examples
 
 ```bash
@@ -253,6 +347,7 @@ cargo test
 ```
 src/
   lib.rs              Public API (solve function, re-exports)
+  c_api.rs            C FFI layer (extern "C" functions, ripopt.h)
   problem.rs          NlpProblem trait definition
   options.rs          SolverOptions with Ipopt-matching defaults
   result.rs           SolveResult and SolveStatus
@@ -278,6 +373,7 @@ examples/
   rosenbrock.rs       Unconstrained optimization
   hs071.rs            Constrained NLP
   benchmark.rs        Timing benchmark
+  c_api_test.c        HS071 via the C API
 ```
 
 ## Algorithm Details
