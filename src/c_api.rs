@@ -321,13 +321,21 @@ pub unsafe extern "C" fn ripopt_create(
 ) -> *mut CApiProblem {
     let n = n as usize;
     let m = m as usize;
+    let (g_l_vec, g_u_vec) = if m > 0 {
+        (
+            std::slice::from_raw_parts(g_l, m).to_vec(),
+            std::slice::from_raw_parts(g_u, m).to_vec(),
+        )
+    } else {
+        (vec![], vec![])
+    };
     let problem = Box::new(CApiProblem {
         n,
         m,
         x_l: std::slice::from_raw_parts(x_l, n).to_vec(),
         x_u: std::slice::from_raw_parts(x_u, n).to_vec(),
-        g_l: std::slice::from_raw_parts(g_l, m).to_vec(),
-        g_u: std::slice::from_raw_parts(g_u, m).to_vec(),
+        g_l: g_l_vec,
+        g_u: g_u_vec,
         nele_jac: nele_jac as usize,
         nele_hess: nele_hess as usize,
         eval_f,

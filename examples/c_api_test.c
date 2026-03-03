@@ -148,7 +148,7 @@ int main(void)
     double x_l[4] = {1.0, 1.0, 1.0, 1.0};
     double x_u[4] = {5.0, 5.0, 5.0, 5.0};
     double g_l[2] = {25.0, 40.0};
-    double g_u[2] = {1e30, 40.0};   /* g0 >= 25  (upper = +inf), g1 == 40 */
+    double g_u[2] = {HUGE_VAL, 40.0};  /* g0 >= 25  (upper = +inf), g1 == 40 */
 
     int nele_jac  = 8;
     int nele_hess = 10;

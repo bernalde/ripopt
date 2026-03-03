@@ -20,6 +20,12 @@
 #ifndef RIPOPT_H
 #define RIPOPT_H
 
+/* Version information — keep in sync with Cargo.toml */
+#define RIPOPT_VERSION_MAJOR 0
+#define RIPOPT_VERSION_MINOR 2
+#define RIPOPT_VERSION_PATCH 0
+#define RIPOPT_VERSION "0.2.0"
+
 #ifdef __cplusplus
 extern "C" {
 #endif

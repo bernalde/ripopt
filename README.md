@@ -228,7 +228,7 @@ Key options (all have Ipopt-matching defaults):
 
 ## C API
 
-ripopt also exposes a C API that mirrors the [Ipopt C interface](https://coin-or.github.io/Ipopt/INTERFACES.html#INTERFACE_C), enabling direct linking from C, C++, Python (`ctypes`/`cffi`), Julia, and any language with C FFI support — without the subprocess/file overhead of the NL interface.
+ripopt exposes a C API that mirrors the [Ipopt C interface](https://coin-or.github.io/Ipopt/INTERFACES.html#INTERFACE_C), enabling direct linking from C, C++, Python (`ctypes`/`cffi`), Julia, and any language with C FFI support — without the subprocess/file overhead of the NL interface. If you have existing Ipopt C code, migrating to ripopt requires only header/function renaming; the callback signatures are identical.
 
 ### Build the shared library
 
@@ -239,11 +239,18 @@ cargo build --release
 
 ### C header
 
-Include `ripopt.h` (repo root) in your C project.
+Include `ripopt.h` (repo root) in your C project. It defines version macros, callback typedefs, return status codes, and all public functions:
+
+```c
+#include "ripopt.h"
+
+// Check version at compile time
+printf("ripopt %s\n", RIPOPT_VERSION);  // "0.2.0"
+```
 
 ### Callback signatures
 
-The five callback types are identical to the Ipopt C interface:
+The five callback types are identical to the Ipopt C interface. All callbacks return `1` on success, `0` on error (the solver will abort if a callback returns `0`):
 
 ```c
 typedef int (*Eval_F_CB)   (int n, const double *x, int new_x,
@@ -264,7 +271,9 @@ typedef int (*Eval_H_CB)   (int n, const double *x, int new_x,
                              void *user_data);
 ```
 
-Jacobian and Hessian callbacks use the standard two-call protocol: when `values == NULL` fill `iRow`/`jCol` with the sparsity pattern (0-based); when `values != NULL` fill numerical values in the same order.
+**Two-call protocol for Jacobian and Hessian:** When `values == NULL`, fill `iRow`/`jCol` with the sparsity pattern (0-based indexing); when `values != NULL`, fill numerical values in the same element order as the pattern. The Hessian uses the **lower triangle** only.
+
+**Sign convention:** ripopt uses the Ipopt convention L = f(x) + y^T g(x). The Hessian callback receives `obj_factor` and `lambda` and should compute `obj_factor * ∇²f + Σ lambda[i] * ∇²g_i`.
 
 ### Lifecycle
 
@@ -273,9 +282,9 @@ Jacobian and Hessian callbacks use the standard two-call protocol: when `values 
 
 // 1. Create handle
 RipoptProblem nlp = ripopt_create(
-    n, x_l, x_u,
-    m, g_l, g_u,
-    nele_jac, nele_hess,
+    n, x_l, x_u,          // variable bounds (use ±1e30 for ±∞)
+    m, g_l, g_u,           // constraint bounds (g_l == g_u for equality)
+    nele_jac, nele_hess,   // number of nonzeros
     eval_f, eval_grad_f, eval_g, eval_jac_g, eval_h);
 
 // 2. Set options (Ipopt-compatible key names)
@@ -293,32 +302,155 @@ int status = ripopt_solve(nlp, x, NULL, &obj_val,
 ripopt_free(nlp);
 ```
 
+For unconstrained problems, pass `m=0` and `NULL` for `g_l`/`g_u`.
+
+**Infinity bounds:** Use `HUGE_VAL` (from `<math.h>`) for "no bound". Internally, any value beyond `±1e19` is treated as unbounded. Avoid using finite large values like `1e30` — they may cause numerical issues.
+
+### Extracting multipliers
+
+All output pointers except `x` are optional (pass `NULL` to skip). Here is how to extract the full solution including Lagrange multipliers and bound multipliers:
+
+```c
+double x[4]      = {1.0, 5.0, 5.0, 1.0};  // initial point
+double obj_val   = 0.0;
+double g[2]      = {0.0, 0.0};              // constraint values at solution
+double mult_g[2] = {0.0, 0.0};              // constraint multipliers (lambda)
+double mult_xl[4]= {0.0, 0.0, 0.0, 0.0};   // lower bound multipliers (z_L)
+double mult_xu[4]= {0.0, 0.0, 0.0, 0.0};   // upper bound multipliers (z_U)
+
+int status = ripopt_solve(nlp, x, g, &obj_val,
+                          mult_g, mult_xl, mult_xu,
+                          NULL);  // user_data
+
+// At the solution:
+// - x[]       contains the optimal primal variables
+// - obj_val   is f(x*)
+// - g[]       contains g(x*) — verify constraints are satisfied
+// - mult_g[]  contains the Lagrange multipliers for constraints
+//             (nonzero for active constraints)
+// - mult_xl[] contains z_L (positive when x is at its lower bound)
+// - mult_xu[] contains z_U (positive when x is at its upper bound)
+```
+
+The `user_data` pointer is forwarded to every callback unchanged — use it to pass problem-specific data (e.g., model parameters) without globals.
+
 ### Return status
 
-| Code | Meaning |
-|------|---------|
-| 0  | `RIPOPT_SOLVE_SUCCEEDED` |
-| 1  | `RIPOPT_ACCEPTABLE_LEVEL` |
-| 2  | `RIPOPT_INFEASIBLE_PROBLEM` |
-| 5  | `RIPOPT_MAXITER_EXCEEDED` |
-| 6  | `RIPOPT_RESTORATION_FAILED` |
-| 7  | `RIPOPT_ERROR_IN_STEP_COMPUTATION` |
-| -1 | `RIPOPT_INTERNAL_ERROR` |
+| Code | Enum constant | Meaning |
+|------|---------------|---------|
+| 0  | `RIPOPT_SOLVE_SUCCEEDED` | Converged to optimal solution |
+| 1  | `RIPOPT_ACCEPTABLE_LEVEL` | Converged to acceptable (less strict) tolerance |
+| 2  | `RIPOPT_INFEASIBLE_PROBLEM` | Problem is locally infeasible |
+| 5  | `RIPOPT_MAXITER_EXCEEDED` | Reached iteration limit |
+| 6  | `RIPOPT_RESTORATION_FAILED` | Feasibility restoration failed |
+| 7  | `RIPOPT_ERROR_IN_STEP_COMPUTATION` | Numerical difficulties |
+| 10 | `RIPOPT_NOT_ENOUGH_DEGREES_OF_FREEDOM` | Problem has too few free variables |
+| 11 | `RIPOPT_INVALID_PROBLEM_DEFINITION` | Problem appears unbounded |
+| -1 | `RIPOPT_INTERNAL_ERROR` | Internal error |
 
-### Compile and run the HS071 example
+Status 0 and 1 indicate a successful solve. All others indicate failure — check your problem formulation, initial point, or try adjusting options.
+
+### Options reference
+
+Option-setting functions return `1` on success, `0` if the keyword is unknown. All option keywords match Ipopt naming conventions.
+
+**Numeric options** (`ripopt_add_num_option`):
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `tol` | 1e-8 | Convergence tolerance |
+| `acceptable_tol` | 1e-4 | Acceptable convergence tolerance |
+| `acceptable_constr_viol_tol` | 1e-2 | Acceptable constraint violation |
+| `acceptable_dual_inf_tol` | 1e10 | Acceptable dual infeasibility |
+| `acceptable_compl_inf_tol` | 1e-2 | Acceptable complementarity |
+| `mu_init` | 0.1 | Initial barrier parameter |
+| `mu_min` | 1e-11 | Minimum barrier parameter |
+| `bound_push` | 1e-2 | Initial bound push |
+| `bound_frac` | 1e-2 | Initial bound fraction |
+| `constr_viol_tol` | 1e-4 | Constraint violation tolerance |
+| `dual_inf_tol` | 100.0 | Dual infeasibility tolerance |
+| `compl_inf_tol` | 1e-4 | Complementarity tolerance |
+| `max_wall_time` | 0.0 | Wall-clock time limit in seconds (0 = no limit) |
+| `warm_start_bound_push` | 1e-3 | Warm-start bound push |
+| `warm_start_bound_frac` | 1e-3 | Warm-start bound fraction |
+| `warm_start_mult_bound_push` | 1e-3 | Warm-start multiplier push |
+| `nlp_lower_bound_inf` | -1e19 | Threshold for -infinity bounds |
+| `nlp_upper_bound_inf` | 1e19 | Threshold for +infinity bounds |
+| `kappa` | 10.0 | Adaptive mu divisor |
+| `constr_mult_init_max` | 1000.0 | Max initial constraint multiplier |
+| `barrier_tol_factor` | 10.0 | Barrier tolerance factor |
+
+**Integer options** (`ripopt_add_int_option`):
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `max_iter` | 3000 | Maximum iterations |
+| `print_level` | 5 | Output verbosity (0 = silent, 5 = verbose, 12 = debug) |
+| `acceptable_iter` | 10 | Consecutive acceptable iterations for convergence |
+| `max_soc` | 4 | Maximum second-order correction steps |
+| `sparse_threshold` | 110 | KKT dimension threshold for sparse solver |
+| `restoration_max_iter` | 200 | Max iterations in NLP restoration subproblem |
+
+**String options** (`ripopt_add_str_option`):
+
+| Option | Default | Values | Description |
+|--------|---------|--------|-------------|
+| `mu_strategy` | `"adaptive"` | `"adaptive"`, `"monotone"` | Barrier parameter update strategy |
+| `warm_start_init_point` | `"no"` | `"yes"`, `"no"` | Enable warm-start initialization |
+| `mu_allow_increase` | `"yes"` | `"yes"`, `"no"` | Allow barrier parameter increase |
+| `least_squares_mult_init` | `"yes"` | `"yes"`, `"no"` | LS estimate for initial multipliers |
+| `enable_slack_fallback` | `"yes"` | `"yes"`, `"no"` | Slack reformulation fallback |
+| `enable_lbfgs_fallback` | `"yes"` | `"yes"`, `"no"` | L-BFGS fallback for unconstrained |
+| `enable_al_fallback` | `"yes"` | `"yes"`, `"no"` | Augmented Lagrangian fallback |
+
+### Error handling
+
+- **Callback errors:** If any callback returns `0`, the solver aborts and returns `RIPOPT_ERROR_IN_STEP_COMPUTATION` (7). Always return `1` from callbacks unless you detect a problem (e.g., NaN in inputs).
+- **Unknown options:** `ripopt_add_*_option` returns `0` for unrecognized keywords. Check the return value if you want to detect typos.
+- **NULL safety:** `ripopt_free(NULL)` is a no-op (safe to call). All output pointers in `ripopt_solve` except `x` may be `NULL`.
+- **Memory:** The problem handle owns all internal memory. Call `ripopt_free()` once when done. Do not use the handle after freeing.
+
+### Migrating from Ipopt
+
+If you have existing Ipopt C code, the migration is straightforward:
+
+1. **Header:** `#include "IpStdCInterface.h"` → `#include "ripopt.h"`
+2. **Handle type:** `IpoptProblem` → `RipoptProblem` (both are `void*`)
+3. **Functions:** Rename `CreateIpoptProblem` → `ripopt_create`, `FreeIpoptProblem` → `ripopt_free`, `AddIpoptNumOption` → `ripopt_add_num_option`, etc.
+4. **Callbacks:** No changes required — signatures are identical
+5. **Status codes:** Similar semantics but different enum names (e.g., `Solve_Succeeded` → `RIPOPT_SOLVE_SUCCEEDED`)
+6. **Infinity:** Ipopt uses ±2e19 by default; ripopt uses ±1e30 in bounds and ±1e19 for `nlp_*_bound_inf`
+7. **Linking:** `-lipopt` → `-lripopt`
+
+### Compile and run the examples
 
 ```bash
 cargo build --release
+
+# HS071 — constrained NLP with inequality + equality constraints
 cc examples/c_api_test.c -I. -Ltarget/release -lripopt \
-   -Wl,-rpath,$(pwd)/target/release -o c_api_test
+   -Wl,-rpath,$(pwd)/target/release -o c_api_test -lm
 ./c_api_test
-# Status : 0  (0 = Optimal)
-# Obj    : 17.0140172956  (expected ~17.0140173)
-# x      : [1.000000, 4.743000, 3.821150, 1.379408]
-# Test   : PASSED
+
+# Rosenbrock — unconstrained optimization
+cc examples/c_rosenbrock.c -I. -Ltarget/release -lripopt \
+   -Wl,-rpath,$(pwd)/target/release -o c_rosenbrock -lm
+./c_rosenbrock
+
+# HS035 — bound-constrained QP with inequality
+cc examples/c_hs035.c -I. -Ltarget/release -lripopt \
+   -Wl,-rpath,$(pwd)/target/release -o c_hs035 -lm
+./c_hs035
+
+# Full multiplier extraction and options demonstration
+cc examples/c_example_with_options.c -I. -Ltarget/release -lripopt \
+   -Wl,-rpath,$(pwd)/target/release -o c_example_with_options -lm
+./c_example_with_options
 ```
 
 ## Examples
+
+### Rust
 
 ```bash
 # Rosenbrock function (unconstrained with bounds)
@@ -330,6 +462,17 @@ cargo run --example hs071
 # Benchmark timing across 5 problems
 cargo run --release --example benchmark
 ```
+
+### C
+
+See [Compile and run the examples](#compile-and-run-the-examples) above for build instructions. The C examples are:
+
+| Example | Problem type | Demonstrates |
+|---------|-------------|-------------|
+| `c_api_test.c` | HS071 (constrained) | Basic usage, all 5 callbacks |
+| `c_rosenbrock.c` | Rosenbrock (unconstrained) | No constraints, no bounds |
+| `c_hs035.c` | HS035 (bounds + inequality) | Bound multipliers, constraint multiplier |
+| `c_example_with_options.c` | HS071 (multiple solves) | Options tuning, multiplier extraction, status interpretation |
 
 ## Tests
 
@@ -368,12 +511,16 @@ src/
 tests/
   correctness.rs      Integration tests (21 NLP problems)
   hs_regression.rs    HS suite regression tests (15 problems)
+  c_api.rs            C API integration tests (11 tests via FFI)
 
 examples/
   rosenbrock.rs       Unconstrained optimization
   hs071.rs            Constrained NLP
   benchmark.rs        Timing benchmark
   c_api_test.c        HS071 via the C API
+  c_rosenbrock.c      Unconstrained Rosenbrock via C API
+  c_hs035.c           Bound-constrained QP via C API
+  c_example_with_options.c  Options and multiplier extraction demo
 ```
 
 ## Algorithm Details

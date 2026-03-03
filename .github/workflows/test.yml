@@ -16,3 +16,25 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test
+
+  c-api-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build shared library
+        run: cargo build --release
+      - name: Compile and run C API examples
+        run: |
+          cc examples/c_api_test.c -I. -Ltarget/release -lripopt \
+             -Wl,-rpath,$(pwd)/target/release -o c_api_test -lm
+          ./c_api_test
+          cc examples/c_rosenbrock.c -I. -Ltarget/release -lripopt \
+             -Wl,-rpath,$(pwd)/target/release -o c_rosenbrock -lm
+          ./c_rosenbrock
+          cc examples/c_hs035.c -I. -Ltarget/release -lripopt \
+             -Wl,-rpath,$(pwd)/target/release -o c_hs035 -lm
+          ./c_hs035
+          cc examples/c_example_with_options.c -I. -Ltarget/release -lripopt \
+             -Wl,-rpath,$(pwd)/target/release -o c_example_with_options -lm
+          ./c_example_with_options
