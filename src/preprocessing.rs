@@ -796,4 +796,131 @@ mod tests {
         let prep = PreprocessedProblem::new(&prob as &dyn NlpProblem);
         assert!(!prep.did_reduce());
     }
+
+    /// Problem: 1 free variable, 1 linear constraint 2*x >= 4
+    struct BoundTightenPositive;
+
+    impl NlpProblem for BoundTightenPositive {
+        fn num_variables(&self) -> usize { 1 }
+        fn num_constraints(&self) -> usize { 1 }
+        fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+            x_l[0] = f64::NEG_INFINITY;
+            x_u[0] = f64::INFINITY;
+        }
+        fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+            g_l[0] = 4.0;
+            g_u[0] = f64::INFINITY;
+        }
+        fn initial_point(&self, x0: &mut [f64]) { x0[0] = 5.0; }
+        fn objective(&self, x: &[f64]) -> f64 { x[0] * x[0] }
+        fn gradient(&self, x: &[f64], grad: &mut [f64]) { grad[0] = 2.0 * x[0]; }
+        fn constraints(&self, x: &[f64], g: &mut [f64]) { g[0] = 2.0 * x[0]; }
+        fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+            (vec![0], vec![0])
+        }
+        fn jacobian_values(&self, _x: &[f64], vals: &mut [f64]) { vals[0] = 2.0; }
+        fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+            (vec![0], vec![0])
+        }
+        fn hessian_values(&self, _x: &[f64], obj_factor: f64, _lambda: &[f64], vals: &mut [f64]) {
+            vals[0] = 2.0 * obj_factor;
+        }
+    }
+
+    #[test]
+    fn test_bound_tightening_positive_coeff() {
+        let prob = BoundTightenPositive;
+        let prep = PreprocessedProblem::new(&prob as &dyn NlpProblem);
+
+        // Constraint 2*x >= 4 => x >= 2.0
+        let mut xl = vec![0.0; 1];
+        let mut xu = vec![0.0; 1];
+        prep.bounds(&mut xl, &mut xu);
+        assert!(xl[0] >= 2.0 - 1e-10, "expected x_l >= 2.0, got {}", xl[0]);
+    }
+
+    /// Problem: 1 free variable, 1 linear constraint -3*x <= -6
+    struct BoundTightenNegative;
+
+    impl NlpProblem for BoundTightenNegative {
+        fn num_variables(&self) -> usize { 1 }
+        fn num_constraints(&self) -> usize { 1 }
+        fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+            x_l[0] = f64::NEG_INFINITY;
+            x_u[0] = f64::INFINITY;
+        }
+        fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+            g_l[0] = f64::NEG_INFINITY;
+            g_u[0] = -6.0;
+        }
+        fn initial_point(&self, x0: &mut [f64]) { x0[0] = 5.0; }
+        fn objective(&self, x: &[f64]) -> f64 { x[0] * x[0] }
+        fn gradient(&self, x: &[f64], grad: &mut [f64]) { grad[0] = 2.0 * x[0]; }
+        fn constraints(&self, x: &[f64], g: &mut [f64]) { g[0] = -3.0 * x[0]; }
+        fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+            (vec![0], vec![0])
+        }
+        fn jacobian_values(&self, _x: &[f64], vals: &mut [f64]) { vals[0] = -3.0; }
+        fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+            (vec![0], vec![0])
+        }
+        fn hessian_values(&self, _x: &[f64], obj_factor: f64, _lambda: &[f64], vals: &mut [f64]) {
+            vals[0] = 2.0 * obj_factor;
+        }
+    }
+
+    #[test]
+    fn test_bound_tightening_negative_coeff() {
+        let prob = BoundTightenNegative;
+        let prep = PreprocessedProblem::new(&prob as &dyn NlpProblem);
+
+        // Constraint -3*x <= -6 => x >= 2.0 (divide by -3, flip)
+        let mut xl = vec![0.0; 1];
+        let mut xu = vec![0.0; 1];
+        prep.bounds(&mut xl, &mut xu);
+        assert!(xl[0] >= 2.0 - 1e-10, "expected x_l >= 2.0, got {}", xl[0]);
+    }
+
+    /// Problem: 1 free variable, 1 linear constraint 1 <= 2*x <= 6 (both-sided)
+    struct BoundTightenBothSided;
+
+    impl NlpProblem for BoundTightenBothSided {
+        fn num_variables(&self) -> usize { 1 }
+        fn num_constraints(&self) -> usize { 1 }
+        fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+            x_l[0] = f64::NEG_INFINITY;
+            x_u[0] = f64::INFINITY;
+        }
+        fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+            g_l[0] = 1.0;
+            g_u[0] = 6.0;
+        }
+        fn initial_point(&self, x0: &mut [f64]) { x0[0] = 1.0; }
+        fn objective(&self, x: &[f64]) -> f64 { x[0] * x[0] }
+        fn gradient(&self, x: &[f64], grad: &mut [f64]) { grad[0] = 2.0 * x[0]; }
+        fn constraints(&self, x: &[f64], g: &mut [f64]) { g[0] = 2.0 * x[0]; }
+        fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+            (vec![0], vec![0])
+        }
+        fn jacobian_values(&self, _x: &[f64], vals: &mut [f64]) { vals[0] = 2.0; }
+        fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+            (vec![0], vec![0])
+        }
+        fn hessian_values(&self, _x: &[f64], obj_factor: f64, _lambda: &[f64], vals: &mut [f64]) {
+            vals[0] = 2.0 * obj_factor;
+        }
+    }
+
+    #[test]
+    fn test_bound_tightening_both_sided() {
+        let prob = BoundTightenBothSided;
+        let prep = PreprocessedProblem::new(&prob as &dyn NlpProblem);
+
+        // Constraint 1 <= 2*x <= 6 => 0.5 <= x <= 3.0
+        let mut xl = vec![0.0; 1];
+        let mut xu = vec![0.0; 1];
+        prep.bounds(&mut xl, &mut xu);
+        assert!(xl[0] >= 0.5 - 1e-10, "expected x_l >= 0.5, got {}", xl[0]);
+        assert!(xu[0] <= 3.0 + 1e-10, "expected x_u <= 3.0, got {}", xu[0]);
+    }
 }

@@ -292,4 +292,101 @@ mod tests {
         let flags = detect_linear_constraints(&prob, &x0);
         assert!(flags.is_empty());
     }
+
+    /// Problem with 1 variable with very tight bounds, 1 nonlinear constraint.
+    /// Variable can't be perturbed enough, so constraint_well_tested = false.
+    struct BoundedVarProblem;
+
+    impl NlpProblem for BoundedVarProblem {
+        fn num_variables(&self) -> usize { 1 }
+        fn num_constraints(&self) -> usize { 1 }
+        fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+            x_l[0] = 1.0;
+            x_u[0] = 1.0 + 1e-6; // very tight bounds
+        }
+        fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+            g_l[0] = 0.0;
+            g_u[0] = 10.0;
+        }
+        fn initial_point(&self, x0: &mut [f64]) { x0[0] = 1.0; }
+        fn objective(&self, x: &[f64]) -> f64 { x[0] }
+        fn gradient(&self, _x: &[f64], grad: &mut [f64]) { grad[0] = 1.0; }
+        fn constraints(&self, x: &[f64], g: &mut [f64]) {
+            g[0] = x[0] * x[0]; // nonlinear, but perturbation too small to detect
+        }
+        fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+            (vec![0], vec![0])
+        }
+        fn jacobian_values(&self, x: &[f64], vals: &mut [f64]) {
+            vals[0] = 2.0 * x[0];
+        }
+        fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+            (vec![0], vec![0])
+        }
+        fn hessian_values(&self, _x: &[f64], _obj_factor: f64, lambda: &[f64], vals: &mut [f64]) {
+            vals[0] = 2.0 * lambda[0];
+        }
+    }
+
+    #[test]
+    fn test_bounded_var_prevents_detection() {
+        let prob = BoundedVarProblem;
+        let x0 = vec![1.0];
+        let flags = detect_linear_constraints(&prob, &x0);
+        assert_eq!(flags.len(), 1);
+        // Variable can't be perturbed well, so conservative: won't claim linear
+        assert!(!flags[0], "expected false (conservative) due to tight bounds");
+    }
+
+    /// Problem: 2 variables, 1 linear constraint involving only x0.
+    /// x1 has tight bounds but its Jacobian entry is 0, so it doesn't block detection.
+    struct ZeroJacEntryProblem;
+
+    impl NlpProblem for ZeroJacEntryProblem {
+        fn num_variables(&self) -> usize { 2 }
+        fn num_constraints(&self) -> usize { 1 }
+        fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+            x_l[0] = 0.0;
+            x_u[0] = 10.0;
+            x_l[1] = 1.0;
+            x_u[1] = 1.0 + 1e-6; // very tight bounds on x1
+        }
+        fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+            g_l[0] = 0.0;
+            g_u[0] = 10.0;
+        }
+        fn initial_point(&self, x0: &mut [f64]) {
+            x0[0] = 1.0;
+            x0[1] = 1.0;
+        }
+        fn objective(&self, x: &[f64]) -> f64 { x[0] + x[1] }
+        fn gradient(&self, _x: &[f64], grad: &mut [f64]) {
+            grad[0] = 1.0;
+            grad[1] = 1.0;
+        }
+        fn constraints(&self, x: &[f64], g: &mut [f64]) {
+            g[0] = 2.0 * x[0]; // linear, only depends on x0
+        }
+        fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+            (vec![0, 0], vec![0, 1])
+        }
+        fn jacobian_values(&self, _x: &[f64], vals: &mut [f64]) {
+            vals[0] = 2.0; // dg/dx0
+            vals[1] = 0.0; // dg/dx1 = 0
+        }
+        fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+            (vec![], vec![])
+        }
+        fn hessian_values(&self, _x: &[f64], _obj_factor: f64, _lambda: &[f64], _vals: &mut [f64]) {}
+    }
+
+    #[test]
+    fn test_zero_jac_entry_not_blocking() {
+        let prob = ZeroJacEntryProblem;
+        let x0 = vec![1.0, 1.0];
+        let flags = detect_linear_constraints(&prob, &x0);
+        assert_eq!(flags.len(), 1);
+        // Zero Jacobian entry for x1 doesn't block linearity detection
+        assert!(flags[0], "expected true: zero jac entry should not block detection");
+    }
 }

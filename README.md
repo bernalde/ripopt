@@ -488,11 +488,54 @@ See [Compile and run the examples](#compile-and-run-the-examples) above for buil
 cargo test
 ```
 
-162 tests total:
-- **114 unit tests**: Dense LDL factorization, convergence checking, filter line search, fraction-to-boundary, KKT assembly, restoration, preprocessing, linearity detection, SQP, linear solver
+193 tests total:
+- **125 unit tests**: Dense LDL factorization, convergence checking, filter line search, fraction-to-boundary, KKT assembly, restoration, preprocessing, linearity detection, SQP, linear solver, autodiff, L-BFGS
 - **12 C API tests**: FFI integration tests
-- **21 integration tests**: Rosenbrock, SimpleQP, HS071, HS035, PureBoundConstrained, MultipleEqualityConstraints, NE-to-LS reformulation, and more
+- **27 integration tests**: Rosenbrock, SimpleQP, HS071, HS035, PureBoundConstrained, MultipleEqualityConstraints, NE-to-LS reformulation, augmented Lagrangian, NL file parsing, IPM code paths, and more
 - **15 HS regression tests**: Selected Hock-Schittkowski problems for regression checking
+- **14 new coverage tests**: Augmented Lagrangian convergence paths, NL parser/solver pipeline, autodiff tape operations, IPM preprocessing/condensed KKT/unbounded detection
+
+## Code Coverage
+
+ripopt uses `cargo-llvm-cov` for code coverage measurement:
+
+```bash
+# Run tests with coverage and print summary
+cargo llvm-cov test
+
+# Detailed line-by-line report
+cargo llvm-cov test --text
+
+# HTML report (opens in browser)
+cargo llvm-cov test --html && open target/llvm-cov/html/index.html
+```
+
+Current coverage by module:
+
+| Module | Line Coverage |
+|--------|-------------|
+| slack_formulation.rs | 99% |
+| kkt.rs | 96% |
+| filter.rs | 96% |
+| restoration_nlp.rs | 96% |
+| sqp.rs | 92% |
+| nl/header.rs | 92% |
+| convergence.rs | 90% |
+| preprocessing.rs | 90% |
+| restoration.rs | 90% |
+| dense.rs (linear solver) | 90% |
+| c_api.rs | 92% |
+| nl/sol.rs | 77% |
+| lbfgs.rs | 76% |
+| nl/parser.rs | 72% |
+| augmented_lagrangian.rs | 70% |
+| nl/autodiff.rs | 62% |
+| linearity.rs | 58% |
+| ipm.rs | 58% |
+| nl/problem_impl.rs | 47% |
+| nl/expr.rs | 38% |
+
+**Overall: 45% line coverage** (193 tests)
 
 ## Architecture
 

@@ -406,3 +406,140 @@ fn build_recursive(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::expr::*;
+
+    #[test]
+    fn tape_build_and_eval_polynomial() {
+        // 3*x0^2 + 2*x1
+        let expr = ExprNode::Binary(
+            BinaryOp::Add,
+            Box::new(ExprNode::Binary(
+                BinaryOp::Mul,
+                Box::new(ExprNode::Const(3.0)),
+                Box::new(ExprNode::Binary(
+                    BinaryOp::Pow,
+                    Box::new(ExprNode::Var(0)),
+                    Box::new(ExprNode::Const(2.0)),
+                )),
+            )),
+            Box::new(ExprNode::Binary(
+                BinaryOp::Mul,
+                Box::new(ExprNode::Const(2.0)),
+                Box::new(ExprNode::Var(1)),
+            )),
+        );
+        let tape = Tape::build(&expr, &[], 2);
+        let val = tape.eval(&[2.0, 3.0]);
+        assert!((val - 18.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn tape_gradient_polynomial() {
+        // 3*x0^2 + 2*x1
+        let expr = ExprNode::Binary(
+            BinaryOp::Add,
+            Box::new(ExprNode::Binary(
+                BinaryOp::Mul,
+                Box::new(ExprNode::Const(3.0)),
+                Box::new(ExprNode::Binary(
+                    BinaryOp::Pow,
+                    Box::new(ExprNode::Var(0)),
+                    Box::new(ExprNode::Const(2.0)),
+                )),
+            )),
+            Box::new(ExprNode::Binary(
+                BinaryOp::Mul,
+                Box::new(ExprNode::Const(2.0)),
+                Box::new(ExprNode::Var(1)),
+            )),
+        );
+        let tape = Tape::build(&expr, &[], 2);
+        let mut grad = vec![0.0; 2];
+        tape.gradient(&[2.0, 3.0], &mut grad);
+        // d/dx0 = 6*x0 = 12.0, d/dx1 = 2.0
+        assert!((grad[0] - 12.0).abs() < 1e-10);
+        assert!((grad[1] - 2.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn tape_gradient_transcendental() {
+        // exp(x0) + sin(x1) + log(x0) + sqrt(x1)
+        let expr = ExprNode::Binary(
+            BinaryOp::Add,
+            Box::new(ExprNode::Binary(
+                BinaryOp::Add,
+                Box::new(ExprNode::Unary(UnaryOp::Exp, Box::new(ExprNode::Var(0)))),
+                Box::new(ExprNode::Unary(UnaryOp::Sin, Box::new(ExprNode::Var(1)))),
+            )),
+            Box::new(ExprNode::Binary(
+                BinaryOp::Add,
+                Box::new(ExprNode::Unary(UnaryOp::Log, Box::new(ExprNode::Var(0)))),
+                Box::new(ExprNode::Unary(UnaryOp::Sqrt, Box::new(ExprNode::Var(1)))),
+            )),
+        );
+        let tape = Tape::build(&expr, &[], 2);
+        let x = [1.0, 1.0];
+        let val = tape.eval(&x);
+        let expected_val = 1.0_f64.exp() + 1.0_f64.sin() + 0.0 + 1.0;
+        assert!((val - expected_val).abs() < 1e-10);
+
+        let mut grad = vec![0.0; 2];
+        tape.gradient(&x, &mut grad);
+        // grad[0] = exp(1) + 1/1
+        let expected_g0 = 1.0_f64.exp() + 1.0;
+        // grad[1] = cos(1) + 0.5/sqrt(1)
+        let expected_g1 = 1.0_f64.cos() + 0.5;
+        assert!((grad[0] - expected_g0).abs() < 1e-10);
+        assert!((grad[1] - expected_g1).abs() < 1e-10);
+    }
+
+    #[test]
+    fn tape_common_expr_inlining() {
+        // common_exprs[0] = x0 + x1 (ce0)
+        // expr = Var(2)^2, where Var(2) refers to ce0 since n_vars=2
+        let common_exprs = vec![ExprNode::Binary(
+            BinaryOp::Add,
+            Box::new(ExprNode::Var(0)),
+            Box::new(ExprNode::Var(1)),
+        )];
+        let expr = ExprNode::Binary(
+            BinaryOp::Pow,
+            Box::new(ExprNode::Var(2)),
+            Box::new(ExprNode::Const(2.0)),
+        );
+        let tape = Tape::build(&expr, &common_exprs, 2);
+        let val = tape.eval(&[3.0, 4.0]);
+        assert!((val - 49.0).abs() < 1e-10);
+
+        let mut grad = vec![0.0; 2];
+        tape.gradient(&[3.0, 4.0], &mut grad);
+        // d/dx0 = 2*(x0+x1) = 14, d/dx1 = 2*(x0+x1) = 14
+        assert!((grad[0] - 14.0).abs() < 1e-10);
+        assert!((grad[1] - 14.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn tape_nary_max_min() {
+        // max(1, x0, 2) at x0=3 => 3
+        let expr_max = ExprNode::Nary(
+            NaryOp::Max,
+            vec![ExprNode::Const(1.0), ExprNode::Var(0), ExprNode::Const(2.0)],
+        );
+        let tape_max = Tape::build(&expr_max, &[], 1);
+        let val_max = tape_max.eval(&[3.0]);
+        assert!((val_max - 3.0).abs() < 1e-10);
+
+        // min(5, x0, 2) at x0=3 => 2
+        let expr_min = ExprNode::Nary(
+            NaryOp::Min,
+            vec![ExprNode::Const(5.0), ExprNode::Var(0), ExprNode::Const(2.0)],
+        );
+        let tape_min = Tape::build(&expr_min, &[], 1);
+        let val_min = tape_min.eval(&[3.0]);
+        assert!((val_min - 2.0).abs() < 1e-10);
+    }
+}
