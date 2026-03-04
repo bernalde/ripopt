@@ -398,15 +398,30 @@ impl SolverState {
         }
     }
 
-    /// Evaluate all functions at the current point.
-    fn evaluate<P: NlpProblem>(&mut self, problem: &P, obj_factor: f64) {
+    /// Evaluate all functions, zeroing Hessian lambda for linear constraints.
+    fn evaluate_with_linear<P: NlpProblem>(
+        &mut self,
+        problem: &P,
+        obj_factor: f64,
+        linear_constraints: Option<&[bool]>,
+    ) {
         self.obj = problem.objective(&self.x);
         problem.gradient(&self.x, &mut self.grad_f);
         if self.m > 0 {
             problem.constraints(&self.x, &mut self.g);
             problem.jacobian_values(&self.x, &mut self.jac_vals);
         }
-        problem.hessian_values(&self.x, obj_factor, &self.y, &mut self.hess_vals);
+        if let Some(flags) = linear_constraints {
+            let mut lambda_for_hess = self.y.clone();
+            for (i, &is_lin) in flags.iter().enumerate() {
+                if is_lin {
+                    lambda_for_hess[i] = 0.0;
+                }
+            }
+            problem.hessian_values(&self.x, obj_factor, &lambda_for_hess, &mut self.hess_vals);
+        } else {
+            problem.hessian_values(&self.x, obj_factor, &self.y, &mut self.hess_vals);
+        }
     }
 
     /// Compute the barrier objective:
@@ -737,6 +752,36 @@ fn detect_ne_problem<P: NlpProblem>(problem: &P) -> bool {
 pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult {
     let solve_start = Instant::now();
 
+    // --- Preprocessing: eliminate fixed variables and redundant constraints ---
+    if options.enable_preprocessing {
+        let prep = crate::preprocessing::PreprocessedProblem::new(problem as &dyn NlpProblem);
+        if prep.did_reduce() {
+            if options.print_level >= 5 {
+                eprintln!(
+                    "ripopt: Preprocessing reduced problem: {} fixed vars, {} redundant constraints ({}x{} -> {}x{})",
+                    prep.num_fixed(), prep.num_redundant(),
+                    problem.num_variables(), problem.num_constraints(),
+                    prep.num_variables(), prep.num_constraints(),
+                );
+            }
+            let mut prep_opts = options.clone();
+            prep_opts.enable_preprocessing = false; // prevent re-preprocessing
+            let reduced_result = solve(&prep, &prep_opts);
+            let result = prep.unmap_solution(&reduced_result);
+            // If preprocessing made things worse, fall back to solving without it
+            if matches!(result.status, SolveStatus::Optimal | SolveStatus::Acceptable) {
+                return result;
+            }
+            if options.print_level >= 5 {
+                eprintln!(
+                    "ripopt: Preprocessed solve failed ({:?}), retrying without preprocessing",
+                    result.status
+                );
+            }
+            // Fall through to solve without preprocessing
+        }
+    }
+
     // --- NE-to-LS Detection and Reformulation ---
     // Detect overdetermined nonlinear equation problems (m > n, f≡0, all equalities)
     // and reformulate as least-squares: min 0.5*||g(x)-target||^2.
@@ -989,6 +1034,56 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
     }
 
+    // SQP fallback: try SQP when IPM didn't reach Optimal and problem has constraints
+    if options.enable_sqp_fallback
+        && problem.num_constraints() > 0
+        && !matches!(result.status, SolveStatus::Optimal)
+    {
+        if options.print_level >= 5 {
+            eprintln!(
+                "ripopt: Trying SQP fallback (result was {:?})",
+                result.status
+            );
+        }
+        let mut sqp_opts = options.clone();
+        sqp_opts.max_iter = options.max_iter.min(500).max(options.max_iter / 3);
+        if options.max_wall_time > 0.0 {
+            let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
+            if remaining <= 0.1 {
+                return result;
+            }
+            sqp_opts.max_wall_time = remaining;
+        }
+        let sqp_result = crate::sqp::solve(problem, &sqp_opts);
+        let sqp_better = matches!(
+            sqp_result.status,
+            SolveStatus::Optimal | SolveStatus::Acceptable
+        );
+        let current_solved = matches!(
+            result.status,
+            SolveStatus::Optimal | SolveStatus::Acceptable
+        );
+        let sqp_strictly_better = sqp_better
+            && (!current_solved
+                || matches!(sqp_result.status, SolveStatus::Optimal)
+                    && !matches!(result.status, SolveStatus::Optimal)
+                || sqp_result.status == result.status && sqp_result.objective < result.objective);
+        if sqp_strictly_better {
+            if options.print_level >= 5 {
+                eprintln!(
+                    "ripopt: SQP fallback succeeded ({:?}, obj={:.6e})",
+                    sqp_result.status, sqp_result.objective
+                );
+            }
+            result = sqp_result;
+        } else if options.print_level >= 5 {
+            eprintln!(
+                "ripopt: SQP fallback did not improve ({:?})",
+                sqp_result.status
+            );
+        }
+    }
+
     // Slack variable fallback: if the solve didn't reach Optimal and the problem
     // has inequality constraints, retry with explicit slacks (g(x)-s=0, bounds on s).
     // Also try when only Acceptable was achieved — slack formulation may find a better solution
@@ -1225,6 +1320,25 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         );
     }
 
+    // --- Linear constraint detection (on original unscaled problem for accuracy) ---
+    let linear_constraints: Option<Vec<bool>> = if options.detect_linear_constraints && m_sc > 0 {
+        let flags = crate::linearity::detect_linear_constraints(problem, &x0);
+        let n_linear = flags.iter().filter(|&&f| f).count();
+        if n_linear > 0 {
+            if options.print_level >= 5 {
+                eprintln!(
+                    "ripopt: Detected {}/{} linear constraints (Hessian contribution skipped)",
+                    n_linear, m_sc
+                );
+            }
+            Some(flags)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let scaled = ScaledProblem {
         inner: problem,
         obj_scaling,
@@ -1316,7 +1430,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let mut dual_stall_triggered: bool = false;
 
     // Initial evaluation
-    state.evaluate(problem, 1.0);
+    state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref());
 
     // NaN/Inf guard on initial evaluation — try perturbation before giving up
     if state.obj.is_nan() || state.obj.is_infinite()
@@ -1355,7 +1469,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     state.z_u[i] = options.mu_init / slack;
                 }
             }
-            state.evaluate(problem, 1.0);
+            state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref());
             if !state.obj.is_nan() && !state.obj.is_infinite()
                 && !state.grad_f.iter().any(|v| v.is_nan() || v.is_infinite())
             {
@@ -1450,7 +1564,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     if let Some(ref bdy) = best_du_y { state.y.copy_from_slice(bdy); }
                     if let Some(ref bdzl) = best_du_zl { state.z_l.copy_from_slice(bdzl); }
                     if let Some(ref bdzu) = best_du_zu { state.z_u.copy_from_slice(bdzu); }
-                    state.evaluate(problem, 1.0);
+                    state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref());
 
                     // Reset filter and bump mu for a fresh start from the good point.
                     filter.reset();
@@ -1758,7 +1872,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             state.z_u[i] = state.mu / slack;
                         }
                     }
-                    state.evaluate(problem, 1.0);
+                    state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref());
                     if !state.obj.is_nan() && !state.obj.is_infinite()
                         && !state.grad_f.iter().any(|v| v.is_nan() || v.is_infinite())
                     {
@@ -1829,7 +1943,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     alpha_fb *= 0.5;
                 }
                 if fb_accepted {
-                    state.evaluate(problem, 1.0);
+                    state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref());
                     continue;
                 }
             }
@@ -1845,7 +1959,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             if success {
                 state.x = x_rest;
                 state.alpha_primal = 0.0;
-                state.evaluate(problem, 1.0);
+                state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref());
                 continue;
             }
             // Last resort: perturb x and retry factorization
@@ -1862,7 +1976,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         state.x[i] = state.x[i].min(state.x_u[i] - 1e-14);
                     }
                 }
-                state.evaluate(problem, 1.0);
+                state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref());
                 if !state.obj.is_nan() && !state.obj.is_infinite() {
                     recovered_from_perturb = true;
                     break;
@@ -1919,7 +2033,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     if success {
                         state.x = x_rest;
                         state.alpha_primal = 0.0;
-                        state.evaluate(problem, 1.0);
+                        state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref());
                         continue;
                     }
                     return make_result(&state, SolveStatus::NumericalError);
@@ -1942,7 +2056,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         if success {
                             state.x = x_rest;
                             state.alpha_primal = 0.0;
-                            state.evaluate(problem, 1.0);
+                            state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref());
                             continue;
                         }
                         return make_result(&state, SolveStatus::NumericalError);
@@ -1970,7 +2084,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         if success {
                             state.x = x_rest;
                             state.alpha_primal = 0.0;
-                            state.evaluate(problem, 1.0);
+                            state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref());
                             continue;
                         }
                         return make_result(&state, SolveStatus::NumericalError);
@@ -2231,6 +2345,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 // GN restoration succeeded — apply standard restoration success handling
                 apply_restoration_success(
                     &mut state, &mut filter, &mut mu_state, options, n, m, problem, &x_rest,
+                    linear_constraints.as_deref(),
                 );
                 continue;
             }
@@ -2252,6 +2367,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             apply_restoration_success(
                                 &mut state, &mut filter, &mut mu_state, options, n, m,
                                 problem, &x_nlp,
+                                linear_constraints.as_deref(),
                             );
                             continue;
                         }
@@ -2361,7 +2477,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             state.x[i] = state.x[i].min(state.x_u[i] - 1e-14);
                         }
                     }
-                    state.evaluate(problem, 1.0);
+                    state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref());
                 }
                 continue;
             }
@@ -2448,7 +2564,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     state.obj = saved.obj;
                     state.g = saved.g.clone();
                     state.grad_f = saved.grad_f.clone();
-                    state.evaluate(problem, 1.0);
+                    state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref());
 
                     watchdog_active = false;
                     watchdog_trial_count = 0;
@@ -2494,7 +2610,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
         // Re-evaluate at new point
         let t_eval = Instant::now();
-        state.evaluate(problem, 1.0);
+        state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref());
         timings.problem_eval += t_eval.elapsed();
 
         // Reset v_l, v_u from barrier equilibrium v = mu_ks / slack.
@@ -2525,7 +2641,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             if success {
                 state.x = x_rest;
                 state.alpha_primal = 0.0;
-                state.evaluate(problem, 1.0);
+                state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref());
                 if !state.obj.is_nan() && !state.obj.is_infinite() {
                     continue;
                 }
@@ -2834,7 +2950,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         if let Some(ref by) = best_y { state.y = by.clone(); }
         if let Some(ref bzl) = best_z_l { state.z_l = bzl.clone(); }
         if let Some(ref bzu) = best_z_u { state.z_u = bzu.clone(); }
-        state.evaluate(problem, 1.0);
+        state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref());
 
         // Re-check acceptable convergence at the best point with relaxed tolerance floor
         let bp_primal = state.constraint_violation();
@@ -2922,7 +3038,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             if let Some(ref bdy) = best_du_y { state.y.copy_from_slice(bdy); }
             if let Some(ref bdzl) = best_du_zl { state.z_l.copy_from_slice(bdzl); }
             if let Some(ref bdzu) = best_du_zu { state.z_u.copy_from_slice(bdzu); }
-            state.evaluate(problem, 1.0);
+            state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref());
             let bd_pr = state.constraint_violation();
             let bd_pr_tol = options.acceptable_tol.max(options.acceptable_constr_viol_tol);
             if bd_pr <= bd_pr_tol {
@@ -3270,10 +3386,11 @@ fn apply_restoration_success<P: NlpProblem>(
     m: usize,
     problem: &P,
     x_new: &[f64],
+    linear_constraints: Option<&[bool]>,
 ) {
     state.x.copy_from_slice(x_new);
     state.alpha_primal = 0.0;
-    state.evaluate(problem, 1.0);
+    state.evaluate_with_linear(problem, 1.0, linear_constraints);
 
     // Reset multipliers after restoration (Ipopt-style).
     let bound_mult_reset_threshold = 1000.0;

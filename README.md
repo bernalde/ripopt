@@ -16,7 +16,7 @@ s.t. g_l <= g(x) <= g_u
      x_l <= x    <= x_u
 ```
 
-It implements a primal-dual interior point method with a barrier formulation, similar to the algorithm described in the Ipopt papers. The solver is written entirely in Rust (~9,800 lines) with no external C/Fortran dependencies.
+It implements a primal-dual interior point method with a barrier formulation, similar to the algorithm described in the Ipopt papers. The solver is written entirely in Rust (~14,200 lines) with no external C/Fortran dependencies.
 
 ## Features
 
@@ -36,7 +36,9 @@ It implements a primal-dual interior point method with a barrier formulation, si
 - NLP scaling (gradient-based objective and constraint scaling)
 - Condensed KKT system for problems with many more constraints than variables
 - Local infeasibility detection for inconsistent constraint systems
-- **Multi-solver fallback architecture**: L-BFGS, Augmented Lagrangian, and explicit slack reformulation
+- **Preprocessing**: Automatic elimination of fixed variables, redundant constraints, and bound tightening from single-variable linear constraints
+- **Near-linear constraint detection**: Automatically identifies linear constraints and skips their Hessian contribution
+- **Multi-solver fallback architecture**: L-BFGS, Augmented Lagrangian, SQP, and explicit slack reformulation
 - **C API** mirroring the Ipopt C interface for direct linking from C/C++/Python/Julia
 - **AMPL NL interface** with Pyomo integration via `SolverFactory('ripopt')`
 
@@ -56,15 +58,15 @@ ripopt solves all 120 problems. Ipopt fails on TP214 (`InvalidNumberDetected`) a
 
 | Metric        | ripopt              | Ipopt (C++ with MUMPS) |
 |---------------|---------------------|------------------------|
-| Total solved  | **599/727 (82.4%)** | 556/727 (76.5%)        |
-| Constrained   | **377/493**         | 340/493                |
+| Total solved  | **598/727 (82.3%)** | 555/727 (76.3%)        |
+| Constrained   | **376/493**         | 339/493                |
 | Unconstrained | **222/234**         | 216/234                |
-| Both solve    | 556                 | 556                    |
+| Both solve    | 555                 | 555                    |
 | ripopt only   | **43**              | --                     |
 | Ipopt only    | --                  | **0**                  |
-| Both fail     | 128                 | 128                    |
+| Both fail     | 129                 | 129                    |
 
-ripopt solves **43 more problems** than Ipopt, and solves everything Ipopt solves.
+ripopt solves **43 more problems** than Ipopt, and solves everything Ipopt solves. (Counts vary ±2 between runs due to timing sensitivity on borderline problems.)
 
 #### Speed comparison
 
@@ -88,7 +90,7 @@ Speed by problem size (problems >= 0.1ms):
 | Medium (10 < n <= 50) | 64    | **3.7x**       |
 | Large (n > 50)        | 32    | **1.6x**       |
 
-**Interpreting the speed numbers.** The raw median across all 556 mutually-solved problems is 30x, but this is misleading. Most CUTEst problems are small (n < 10) and solve in microseconds for ripopt, while Ipopt has a ~1-3ms floor from internal initialization (MA27 symbolic analysis, TNLP setup) that dominates for trivial problems. The 3.3x median on non-trivial problems is a more meaningful comparison.
+**Interpreting the speed numbers.** The raw median across all 555 mutually-solved problems is 30x, but this is misleading. Most CUTEst problems are small (n < 10) and solve in microseconds for ripopt, while Ipopt has a ~1-3ms floor from internal initialization (MA27 symbolic analysis, TNLP setup) that dominates for trivial problems. The 3.3x median on non-trivial problems is a more meaningful comparison.
 
 The speed advantage comes from three sources:
 
@@ -213,6 +215,9 @@ Key options (all have Ipopt-matching defaults):
 | `warm_start` | false | Enable warm-start initialization |
 | `constr_viol_tol` | 1e-4 | Constraint violation tolerance |
 | `dual_inf_tol` | 1.0 | Dual infeasibility tolerance |
+| `enable_preprocessing` | true | Eliminate fixed variables and redundant constraints |
+| `detect_linear_constraints` | true | Skip Hessian for linear constraints |
+| `enable_sqp_fallback` | true | SQP fallback for constrained problems |
 
 ### Result
 
@@ -402,6 +407,9 @@ Option-setting functions return `1` on success, `0` if the keyword is unknown. A
 | `enable_slack_fallback` | `"yes"` | `"yes"`, `"no"` | Slack reformulation fallback |
 | `enable_lbfgs_fallback` | `"yes"` | `"yes"`, `"no"` | L-BFGS fallback for unconstrained |
 | `enable_al_fallback` | `"yes"` | `"yes"`, `"no"` | Augmented Lagrangian fallback |
+| `enable_preprocessing` | `"yes"` | `"yes"`, `"no"` | Preprocessing (fixed vars, redundant constraints) |
+| `detect_linear_constraints` | `"yes"` | `"yes"`, `"no"` | Skip Hessian for linear constraints |
+| `enable_sqp_fallback` | `"yes"` | `"yes"`, `"no"` | SQP fallback for constrained problems |
 
 ### Error handling
 
@@ -480,8 +488,9 @@ See [Compile and run the examples](#compile-and-run-the-examples) above for buil
 cargo test
 ```
 
-138 tests total:
-- **102 unit tests**: Dense LDL factorization, convergence checking, filter line search, fraction-to-boundary, KKT assembly, restoration, linear solver
+162 tests total:
+- **114 unit tests**: Dense LDL factorization, convergence checking, filter line search, fraction-to-boundary, KKT assembly, restoration, preprocessing, linearity detection, SQP, linear solver
+- **12 C API tests**: FFI integration tests
 - **21 integration tests**: Rosenbrock, SimpleQP, HS071, HS035, PureBoundConstrained, MultipleEqualityConstraints, NE-to-LS reformulation, and more
 - **15 HS regression tests**: Selected Hock-Schittkowski problems for regression checking
 
@@ -502,7 +511,10 @@ src/
   restoration_nlp.rs  Full NLP restoration subproblem (Phase 2)
   lbfgs.rs            L-BFGS solver for unconstrained/bound-constrained problems
   augmented_lagrangian.rs  Augmented Lagrangian fallback for constrained problems
+  sqp.rs              SQP fallback for constrained problems
   slack_formulation.rs     Explicit slack reformulation fallback
+  preprocessing.rs    Fixed variable elimination, redundant constraint removal, bound tightening
+  linearity.rs        Near-linear constraint detection
   warmstart.rs        Warm-start initialization
   linear_solver/
     mod.rs            LinearSolver trait, SymmetricMatrix
@@ -525,6 +537,20 @@ examples/
 
 ## Algorithm Details
 
+### Preprocessing
+
+Before solving, ripopt automatically analyzes the problem to reduce its size:
+
+1. **Fixed variable elimination**: Variables with `x_l == x_u` are removed and set to their fixed values in all evaluations
+2. **Redundant constraint removal**: Duplicate constraints (same Jacobian structure, values, and bounds) are eliminated
+3. **Bound tightening**: Single-variable linear constraints are used to tighten variable bounds
+
+The reduced problem is solved and the solution is mapped back to the original dimensions. Disable with `enable_preprocessing: false`.
+
+### Near-Linear Constraint Detection
+
+The Jacobian is evaluated at two points to identify linear constraints (where all Jacobian entries remain constant). For linear constraints, the Hessian contribution `lambda[i] * nabla^2 g_i` is exactly zero and is skipped, reducing computation in the Hessian evaluation.
+
 ### Core Interior Point Method
 
 The solver follows the primal-dual barrier method from the Ipopt papers (Wachter & Biegler, 2006). At each iteration it:
@@ -542,8 +568,9 @@ When the primary IPM fails, ripopt automatically tries alternative solvers:
 
 1. **L-BFGS**: Tried first for unconstrained problems (m=0, no bounds); used as fallback for bound-constrained problems
 2. **Augmented Lagrangian**: PHR penalty method for constrained problems, with the IPM solving each AL subproblem
-3. **Explicit slack reformulation**: Converts g(x) to g(x)-s=0 with bounds on s, stabilizing multiplier oscillation at degenerate points
-4. **Best-du tracking**: Throughout the solve, tracks the iterate with lowest dual infeasibility and recovers it at max iterations
+3. **SQP**: Equality-constrained Sequential Quadratic Programming with l1 merit function line search
+4. **Explicit slack reformulation**: Converts g(x) to g(x)-s=0 with bounds on s, stabilizing multiplier oscillation at degenerate points
+5. **Best-du tracking**: Throughout the solve, tracks the iterate with lowest dual infeasibility and recovers it at max iterations
 
 ### Condensed KKT System
 

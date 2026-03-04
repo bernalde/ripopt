@@ -99,6 +99,15 @@ pub struct SolverOptions {
     /// Enable Augmented Lagrangian fallback for equality-only problems. When IPM
     /// fails, retry with AL method using L-BFGS inner solver. Default: true.
     pub enable_al_fallback: bool,
+    /// Enable preprocessing to eliminate fixed variables and redundant constraints.
+    /// Default: true.
+    pub enable_preprocessing: bool,
+    /// Detect linear constraints and skip their Hessian contribution.
+    /// Default: true.
+    pub detect_linear_constraints: bool,
+    /// Enable SQP fallback for constrained problems when IPM/AL/slack fail.
+    /// Default: true.
+    pub enable_sqp_fallback: bool,
 }
 
 impl Default for SolverOptions {
@@ -148,6 +157,9 @@ impl Default for SolverOptions {
             enable_slack_fallback: true,
             enable_lbfgs_fallback: true,
             enable_al_fallback: true,
+            enable_preprocessing: true,
+            detect_linear_constraints: true,
+            enable_sqp_fallback: true,
         }
     }
 }

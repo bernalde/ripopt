@@ -493,6 +493,15 @@ pub unsafe extern "C" fn ripopt_add_str_option(
         "enable_al_fallback" => {
             p.options.enable_al_fallback = value == "yes";
         }
+        "enable_preprocessing" => {
+            p.options.enable_preprocessing = value == "yes";
+        }
+        "detect_linear_constraints" => {
+            p.options.detect_linear_constraints = value == "yes";
+        }
+        "enable_sqp_fallback" => {
+            p.options.enable_sqp_fallback = value == "yes";
+        }
         _ => return 0,
     }
     1

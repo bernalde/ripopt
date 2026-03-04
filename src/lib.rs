@@ -5,14 +5,17 @@ pub mod filter;
 pub mod ipm;
 pub mod kkt;
 pub mod lbfgs;
+pub mod linearity;
 pub mod linear_solver;
 pub mod nl;
 pub mod options;
+pub mod preprocessing;
 pub mod problem;
 pub mod restoration;
 pub mod restoration_nlp;
 pub mod result;
 pub mod slack_formulation;
+pub mod sqp;
 pub mod warmstart;
 
 pub use options::SolverOptions;
