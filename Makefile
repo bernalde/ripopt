@@ -20,7 +20,21 @@ install:
 	@echo "  ripopt binary      -> ~/.cargo/bin/ripopt"
 	@echo "  libripopt.$(DYLIB_EXT)  -> ~/.local/lib/libripopt.$(DYLIB_EXT)"
 	@echo ""
-	@echo "Verify: ripopt --version"
+	@if echo "$$PATH" | tr ':' '\n' | grep -qx "$$HOME/.cargo/bin"; then \
+		echo "Verify: ripopt --version"; \
+	else \
+		echo "WARNING: ~/.cargo/bin is not on your PATH."; \
+		echo "Add it by appending this to your shell profile (~/.bashrc, ~/.zshrc, etc.):"; \
+		echo "  export PATH=\"\$$HOME/.cargo/bin:\$$PATH\""; \
+		echo "Then restart your shell or run: source ~/.bashrc"; \
+	fi
+	@if echo "$$LD_LIBRARY_PATH:$$DYLD_LIBRARY_PATH" | tr ':' '\n' | grep -qx "$$HOME/.local/lib"; then \
+		true; \
+	else \
+		echo ""; \
+		echo "NOTE: To use the shared library, ensure ~/.local/lib is in your library path:"; \
+		echo "  export LD_LIBRARY_PATH=\"\$$HOME/.local/lib:\$$LD_LIBRARY_PATH\""; \
+	fi
 
 # Uninstall ripopt binary and shared library
 uninstall:

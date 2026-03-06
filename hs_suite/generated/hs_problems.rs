@@ -9424,6 +9424,7 @@ impl NlpProblem for HsTp376 {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct HsProblemEntry {
     pub number: usize,
     pub name: &'static str,
