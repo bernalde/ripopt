@@ -38,6 +38,7 @@ It implements a primal-dual interior point method with a barrier formulation, si
 - Local infeasibility detection for inconsistent constraint systems
 - **Preprocessing**: Automatic elimination of fixed variables, redundant constraints, and bound tightening from single-variable linear constraints
 - **Near-linear constraint detection**: Automatically identifies linear constraints and skips their Hessian contribution
+- **Limited-memory Hessian approximation**: L-BFGS-in-IPM mode (`hessian_approximation_lbfgs`) replaces exact Hessian with L-BFGS curvature pairs, eliminating the need for second-derivative callbacks
 - **Multi-solver fallback architecture**: L-BFGS, Augmented Lagrangian, SQP, and explicit slack reformulation
 - **C API** mirroring the Ipopt C interface for direct linking from C/C++/Python/Julia
 - **AMPL NL interface** with Pyomo integration via `SolverFactory('ripopt')`
@@ -175,7 +176,13 @@ ripopt --version
 
 ### Using ripopt with Pyomo
 
-Once `ripopt` is on your `$PATH` (the `make install` step above handles this), Pyomo can find it automatically via the AMPL solver interface:
+Once `ripopt` is on your `$PATH` (the `make install` step above handles this), install the Pyomo solver plugin:
+
+```bash
+pip install ./pyomo-ripopt
+```
+
+This registers `ripopt` as a named solver with Pyomo's `SolverFactory`:
 
 ```python
 from pyomo.environ import *
@@ -187,7 +194,7 @@ solver = SolverFactory('ripopt')
 result = solver.solve(model, tee=True)
 ```
 
-No additional Python packages or configuration are needed — Pyomo discovers AMPL-compatible solvers by looking for executables on your `$PATH`.
+> **Note:** If you skip the `pip install` step, you can still use ripopt via the generic AMPL interface with `SolverFactory('asl:ripopt')`, as long as the `ripopt` binary is on your `$PATH`.
 
 ### Using ripopt as a Rust library
 
@@ -315,6 +322,7 @@ Key options (all have Ipopt-matching defaults):
 | `enable_preprocessing` | true | Eliminate fixed variables and redundant constraints |
 | `detect_linear_constraints` | true | Skip Hessian for linear constraints |
 | `enable_sqp_fallback` | true | SQP fallback for constrained problems |
+| `hessian_approximation_lbfgs` | false | Use L-BFGS Hessian approximation (no exact Hessian needed) |
 
 ### Result
 
@@ -507,6 +515,7 @@ Option-setting functions return `1` on success, `0` if the keyword is unknown. A
 | `enable_preprocessing` | `"yes"` | `"yes"`, `"no"` | Preprocessing (fixed vars, redundant constraints) |
 | `detect_linear_constraints` | `"yes"` | `"yes"`, `"no"` | Skip Hessian for linear constraints |
 | `enable_sqp_fallback` | `"yes"` | `"yes"`, `"no"` | SQP fallback for constrained problems |
+| `hessian_approximation` | `"exact"` | `"exact"`, `"limited-memory"` | Use L-BFGS Hessian approximation |
 
 ### Error handling
 

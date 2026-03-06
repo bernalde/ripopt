@@ -28,6 +28,16 @@ install:
 		echo "  export PATH=\"\$$HOME/.cargo/bin:\$$PATH\""; \
 		echo "Then restart your shell or run: source ~/.bashrc"; \
 	fi
+	@if command -v pip >/dev/null 2>&1; then \
+		echo ""; \
+		echo "Installing Pyomo solver plugin..."; \
+		pip install ./pyomo-ripopt && \
+		echo "  pyomo-ripopt       -> installed via pip"; \
+	else \
+		echo ""; \
+		echo "NOTE: pip not found. To install the Pyomo solver plugin later, run:"; \
+		echo "  pip install ./pyomo-ripopt"; \
+	fi
 	@if echo "$$LD_LIBRARY_PATH:$$DYLD_LIBRARY_PATH" | tr ':' '\n' | grep -qx "$$HOME/.local/lib"; then \
 		true; \
 	else \
@@ -39,6 +49,7 @@ install:
 # Uninstall ripopt binary and shared library
 uninstall:
 	cargo uninstall ripopt 2>/dev/null || true
+	pip uninstall -y pyomo-ripopt 2>/dev/null || true
 	rm -f ~/.local/lib/libripopt.$(DYLIB_EXT)
 	@echo "Uninstalled ripopt binary and shared library."
 
