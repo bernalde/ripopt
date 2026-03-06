@@ -1,4 +1,5 @@
 use super::{Inertia, KktMatrix, LinearSolver, SolverError};
+use faer::Index;
 use faer::sparse::linalg::cholesky::{
     factorize_symbolic_cholesky, LdltRef, SymbolicCholesky,
 };
@@ -9,10 +10,13 @@ use faer::Parallelism;
 use faer::Mat;
 use faer::Conj;
 
-/// Sparse LDL^T factorization using faer's simplicial solver with AMD ordering.
+/// Sparse LDL^T factorization using faer with AMD ordering.
 ///
 /// Uses COO assembly → CSC conversion → symbolic factorization (cached) →
 /// numeric LDLT factorization each iteration. Extracts D diagonal for inertia.
+/// Automatically selects simplicial or supernodal mode based on fill-in analysis.
+/// Supernodal mode uses dense BLAS operations on column groups for better cache
+/// efficiency on large problems.
 pub struct SparseLdl {
     /// Dimension of the factored matrix.
     n: usize,
@@ -43,18 +47,16 @@ impl SparseLdl {
         }
     }
 
-    /// Extract inertia from D diagonal of simplicial LDLT factorization.
+    /// Extract inertia from D diagonal of LDLT factorization.
     ///
-    /// In faer's simplicial LDLT, the values array stores L entries in CSC format
-    /// where the first entry of each column is the D diagonal value:
-    ///   values[col_ptrs[j]] = D[j,j]
+    /// Handles both simplicial mode (D stored as first entry per CSC column)
+    /// and supernodal mode (D stored as diagonal of dense supernode blocks).
     fn compute_inertia(&self) -> Inertia {
         let symbolic = self.symbolic.as_ref().unwrap();
         let mut positive = 0;
         let mut negative = 0;
         let mut zero = 0;
 
-        // Access the simplicial structure to get column pointers
         match symbolic.raw() {
             faer::sparse::linalg::cholesky::SymbolicCholeskyRaw::Simplicial(ref s) => {
                 let col_ptrs = s.col_ptrs();
@@ -69,14 +71,29 @@ impl SparseLdl {
                     }
                 }
             }
-            faer::sparse::linalg::cholesky::SymbolicCholeskyRaw::Supernodal(_) => {
-                // Should not happen since we force simplicial mode.
-                // Fall back to reporting unknown inertia.
-                return Inertia {
-                    positive: 0,
-                    negative: 0,
-                    zero: self.n,
-                };
+            faer::sparse::linalg::cholesky::SymbolicCholeskyRaw::Supernodal(ref s) => {
+                let n_supernodes = s.n_supernodes();
+                for sn in 0..n_supernodes {
+                    let sn_start = s.supernode_begin()[sn].zx();
+                    let sn_end = s.supernode_begin()[sn + 1].zx();
+                    let sn_ncols = sn_end - sn_start;
+                    let pattern_len = s.col_ptrs_for_row_indices()[sn + 1].zx()
+                        - s.col_ptrs_for_row_indices()[sn].zx();
+                    let sn_nrows = pattern_len + sn_ncols;
+                    let val_start = s.col_ptrs_for_values()[sn].zx();
+
+                    // D diagonal is at position (j, j) in the dense column-major block
+                    for j in 0..sn_ncols {
+                        let d_j = self.l_values[val_start + j * sn_nrows + j];
+                        if d_j > self.zero_pivot_tol {
+                            positive += 1;
+                        } else if d_j < -self.zero_pivot_tol {
+                            negative += 1;
+                        } else {
+                            zero += 1;
+                        }
+                    }
+                }
             }
         }
 
@@ -115,11 +132,16 @@ impl LinearSolver for SparseLdl {
 
         // Compute symbolic factorization on first call (sparsity pattern is fixed for NLP)
         if self.symbolic.is_none() {
+            use faer::sparse::linalg::cholesky::CholeskySymbolicParams;
+            use faer::sparse::linalg::SupernodalThreshold;
             let symbolic = factorize_symbolic_cholesky(
                 csc.symbolic(),
                 Side::Upper,
                 Default::default(), // AMD ordering
-                Default::default(), // CholeskySymbolicParams with simplicial threshold
+                CholeskySymbolicParams {
+                    supernodal_flop_ratio_threshold: SupernodalThreshold::AUTO,
+                    ..Default::default()
+                },
             )
             .map_err(|e| SolverError::NumericalFailure(format!("symbolic factorization: {:?}", e)))?;
 
@@ -130,8 +152,9 @@ impl LinearSolver for SparseLdl {
         let symbolic = self.symbolic.as_ref().unwrap();
 
         // Compute required stack size for numeric factorization
+        let par = Parallelism::Rayon(0); // use all available cores
         let req = symbolic
-            .factorize_numeric_ldlt_req::<f64>(false, Parallelism::None)
+            .factorize_numeric_ldlt_req::<f64>(false, par)
             .map_err(|e| SolverError::NumericalFailure(format!("stack req: {:?}", e)))?;
         let mut mem = GlobalPodBuffer::new(req);
         let stack = PodStack::new(&mut mem);
@@ -149,7 +172,7 @@ impl LinearSolver for SparseLdl {
             csc.as_ref(),
             Side::Upper,
             reg,
-            Parallelism::None,
+            par,
             stack,
         );
 
@@ -191,7 +214,7 @@ impl LinearSolver for SparseLdl {
         let mut mem = GlobalPodBuffer::new(req);
         let stack = PodStack::new(&mut mem);
 
-        ldlt.solve_in_place_with_conj(Conj::No, rhs_mat.as_mut(), Parallelism::None, stack);
+        ldlt.solve_in_place_with_conj(Conj::No, rhs_mat.as_mut(), Parallelism::Rayon(0), stack);
 
         for i in 0..self.n {
             solution[i] = rhs_mat[(i, 0)];
@@ -210,17 +233,31 @@ impl LinearSolver for SparseLdl {
         }
 
         let symbolic = self.symbolic.as_ref()?;
+        let mut min_d = f64::INFINITY;
         match symbolic.raw() {
             faer::sparse::linalg::cholesky::SymbolicCholeskyRaw::Simplicial(ref s) => {
                 let col_ptrs = s.col_ptrs();
-                let mut min_d = f64::INFINITY;
                 for j in 0..self.n {
                     min_d = min_d.min(self.l_values[col_ptrs[j]]);
                 }
-                Some(min_d)
             }
-            _ => None,
+            faer::sparse::linalg::cholesky::SymbolicCholeskyRaw::Supernodal(ref s) => {
+                let n_supernodes = s.n_supernodes();
+                for sn in 0..n_supernodes {
+                    let sn_start = s.supernode_begin()[sn].zx();
+                    let sn_end = s.supernode_begin()[sn + 1].zx();
+                    let sn_ncols = sn_end - sn_start;
+                    let pattern_len = s.col_ptrs_for_row_indices()[sn + 1].zx()
+                        - s.col_ptrs_for_row_indices()[sn].zx();
+                    let sn_nrows = pattern_len + sn_ncols;
+                    let val_start = s.col_ptrs_for_values()[sn].zx();
+                    for j in 0..sn_ncols {
+                        min_d = min_d.min(self.l_values[val_start + j * sn_nrows + j]);
+                    }
+                }
+            }
         }
+        Some(min_d)
     }
 }
 
