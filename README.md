@@ -168,6 +168,17 @@ This does three things:
 2. Installs the `ripopt` AMPL solver binary to `~/.cargo/bin/` (which rustup already added to your `$PATH`)
 3. Copies the shared library (`libripopt.dylib` on macOS, `libripopt.so` on Linux) to `~/.local/lib/`
 
+> **PATH check:** The `ripopt` binary is installed to `~/.cargo/bin/`. If `ripopt --version` doesn't work after installation, make sure `~/.cargo/bin` is on your `$PATH` by adding this to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.):
+> ```bash
+> export PATH="$HOME/.cargo/bin:$PATH"
+> ```
+> Then restart your shell or run `source ~/.bashrc` (or `~/.zshrc`).
+
+> **Shared library:** If you use the C API, ensure `~/.local/lib` is in your library path:
+> ```bash
+> export LD_LIBRARY_PATH="$HOME/.local/lib:$LD_LIBRARY_PATH"
+> ```
+
 After installation, verify it works:
 
 ```bash
