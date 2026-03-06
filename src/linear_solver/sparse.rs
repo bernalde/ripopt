@@ -28,6 +28,8 @@ pub struct SparseLdl {
     factored: bool,
     /// Tolerance for determining zero pivots.
     zero_pivot_tol: f64,
+    /// Force supernodal mode (for testing).
+    force_supernodal: bool,
 }
 
 impl Default for SparseLdl {
@@ -44,6 +46,7 @@ impl SparseLdl {
             l_values: Vec::new(),
             factored: false,
             zero_pivot_tol: 1e-12,
+            force_supernodal: false,
         }
     }
 
@@ -108,6 +111,14 @@ impl SparseLdl {
     }
 }
 
+impl SparseLdl {
+    /// Force supernodal mode for testing. Must be called before first `factor()`.
+    #[cfg(test)]
+    fn force_supernodal(&mut self) {
+        self.force_supernodal = true;
+    }
+}
+
 impl LinearSolver for SparseLdl {
     fn factor(&mut self, matrix: &KktMatrix) -> Result<Option<Inertia>, SolverError> {
         let sparse = match matrix {
@@ -137,12 +148,17 @@ impl LinearSolver for SparseLdl {
         if self.symbolic.is_none() {
             use faer::sparse::linalg::cholesky::CholeskySymbolicParams;
             use faer::sparse::linalg::SupernodalThreshold;
+            let threshold = if self.force_supernodal {
+                SupernodalThreshold::FORCE_SUPERNODAL
+            } else {
+                SupernodalThreshold::AUTO
+            };
             let symbolic = factorize_symbolic_cholesky(
                 csc.symbolic(),
                 Side::Upper,
                 Default::default(), // AMD ordering
                 CholeskySymbolicParams {
-                    supernodal_flop_ratio_threshold: SupernodalThreshold::AUTO,
+                    supernodal_flop_ratio_threshold: threshold,
                     ..Default::default()
                 },
             )
@@ -396,5 +412,101 @@ mod tests {
             "Dense inertia {:?} != Sparse inertia {:?}",
             dense_inertia, sparse_inertia
         );
+    }
+
+    #[test]
+    fn test_supernodal_kkt_matrix() {
+        // KKT-shaped matrix that exercises the supernodal code path.
+        // Structure: [H, A^T; A, 0] with n=5 vars and m=3 constraints.
+        let n = 5;
+        let m = 3;
+        let dim = n + m;
+        let mut s = SparseSymmetricMatrix::zeros(dim);
+
+        // H block: positive definite diagonal + some off-diagonal
+        for i in 0..n {
+            s.add(i, i, 10.0 + i as f64);
+        }
+        s.add(1, 0, 1.0);
+        s.add(2, 0, 0.5);
+        s.add(2, 1, 0.5);
+
+        // A block (rows n..n+m, cols 0..n): constraint Jacobian
+        s.add(n, 0, 1.0);
+        s.add(n, 1, 2.0);
+        s.add(n + 1, 1, 1.0);
+        s.add(n + 1, 2, 3.0);
+        s.add(n + 2, 3, 1.0);
+        s.add(n + 2, 4, 1.0);
+
+        // Small negative perturbation on (2,2) block (like IPM inertia correction)
+        for i in n..dim {
+            s.add(i, i, -1e-8);
+        }
+
+        let matrix = KktMatrix::Sparse(s.clone());
+
+        // First verify with simplicial (known working)
+        let mut simp_solver = SparseLdl::new();
+        let simp_inertia = simp_solver.factor(&KktMatrix::Sparse(s)).unwrap().unwrap();
+
+        // Solve with forced supernodal mode
+        let mut solver = SparseLdl::new();
+        solver.force_supernodal();
+        let inertia = solver.factor(&matrix).unwrap().unwrap();
+
+        // Supernodal inertia should match simplicial
+        assert_eq!(inertia, simp_inertia,
+            "Supernodal {:?} != Simplicial {:?}", inertia, simp_inertia);
+
+        // Solve and verify
+        let rhs: Vec<f64> = (1..=dim).map(|i| i as f64).collect();
+        let mut sol = vec![0.0; dim];
+        solver.solve(&rhs, &mut sol).unwrap();
+
+        let mut ax = vec![0.0; dim];
+        matrix.matvec(&sol, &mut ax);
+        for i in 0..dim {
+            assert!(
+                (ax[i] - rhs[i]).abs() < 1e-4,
+                "Row {}: Ax={}, b={}, err={}",
+                i, ax[i], rhs[i], (ax[i] - rhs[i]).abs()
+            );
+        }
+    }
+
+    #[test]
+    fn test_supernodal_positive_definite() {
+        // Positive definite banded matrix, forced supernodal
+        let n = 20;
+        let mut s = SparseSymmetricMatrix::zeros(n);
+        for i in 0..n {
+            s.add(i, i, 4.0);
+            if i > 0 { s.add(i, i - 1, -1.0); }
+            if i > 1 { s.add(i, i - 2, -0.5); }
+        }
+
+        let matrix = KktMatrix::Sparse(s);
+        let mut solver = SparseLdl::new();
+        solver.force_supernodal();
+        let inertia = solver.factor(&matrix).unwrap().unwrap();
+
+        assert_eq!(inertia.positive, n);
+        assert_eq!(inertia.negative, 0);
+        assert_eq!(inertia.zero, 0);
+
+        let rhs: Vec<f64> = (0..n).map(|i| (i + 1) as f64).collect();
+        let mut sol = vec![0.0; n];
+        solver.solve(&rhs, &mut sol).unwrap();
+
+        let mut ax = vec![0.0; n];
+        matrix.matvec(&sol, &mut ax);
+        for i in 0..n {
+            assert!(
+                (ax[i] - rhs[i]).abs() < 1e-8,
+                "Row {}: Ax={}, b={}",
+                i, ax[i], rhs[i]
+            );
+        }
     }
 }
