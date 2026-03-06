@@ -73,14 +73,17 @@ impl SparseLdl {
             }
             faer::sparse::linalg::cholesky::SymbolicCholeskyRaw::Supernodal(ref s) => {
                 let n_supernodes = s.n_supernodes();
+                let sn_begin = s.supernode_begin();
+                let sn_end_slice = s.supernode_end();
+                let col_ptrs_ri = s.col_ptrs_for_row_indices();
+                let col_ptrs_val = s.col_ptrs_for_values();
                 for sn in 0..n_supernodes {
-                    let sn_start = s.supernode_begin()[sn].zx();
-                    let sn_end = s.supernode_begin()[sn + 1].zx();
+                    let sn_start = sn_begin[sn].zx();
+                    let sn_end = sn_end_slice[sn].zx();
                     let sn_ncols = sn_end - sn_start;
-                    let pattern_len = s.col_ptrs_for_row_indices()[sn + 1].zx()
-                        - s.col_ptrs_for_row_indices()[sn].zx();
+                    let pattern_len = col_ptrs_ri[sn + 1].zx() - col_ptrs_ri[sn].zx();
                     let sn_nrows = pattern_len + sn_ncols;
-                    let val_start = s.col_ptrs_for_values()[sn].zx();
+                    let val_start = col_ptrs_val[sn].zx();
 
                     // D diagonal is at position (j, j) in the dense column-major block
                     for j in 0..sn_ncols {
@@ -243,14 +246,17 @@ impl LinearSolver for SparseLdl {
             }
             faer::sparse::linalg::cholesky::SymbolicCholeskyRaw::Supernodal(ref s) => {
                 let n_supernodes = s.n_supernodes();
+                let sn_begin = s.supernode_begin();
+                let sn_end_slice = s.supernode_end();
+                let col_ptrs_ri = s.col_ptrs_for_row_indices();
+                let col_ptrs_val = s.col_ptrs_for_values();
                 for sn in 0..n_supernodes {
-                    let sn_start = s.supernode_begin()[sn].zx();
-                    let sn_end = s.supernode_begin()[sn + 1].zx();
+                    let sn_start = sn_begin[sn].zx();
+                    let sn_end = sn_end_slice[sn].zx();
                     let sn_ncols = sn_end - sn_start;
-                    let pattern_len = s.col_ptrs_for_row_indices()[sn + 1].zx()
-                        - s.col_ptrs_for_row_indices()[sn].zx();
+                    let pattern_len = col_ptrs_ri[sn + 1].zx() - col_ptrs_ri[sn].zx();
                     let sn_nrows = pattern_len + sn_ncols;
-                    let val_start = s.col_ptrs_for_values()[sn].zx();
+                    let val_start = col_ptrs_val[sn].zx();
                     for j in 0..sn_ncols {
                         min_d = min_d.min(self.l_values[val_start + j * sn_nrows + j]);
                     }
