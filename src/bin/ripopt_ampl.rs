@@ -4,6 +4,7 @@ use std::fs;
 use std::io::BufWriter;
 
 fn main() {
+    env_logger::init();
     let args: Vec<String> = std::env::args().collect();
 
     // Handle -v / --version flag for AMPL solver protocol
