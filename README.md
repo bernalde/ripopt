@@ -124,14 +124,111 @@ On 48 problems with n+m >= 100 (exercising the sparse LDL solver):
 - **Best-du tracking** (~5): Recovers acceptable solutions from cycling/stalling at max iterations
 - **Other algorithmic differences** (~5): Barrier parameter, filter, convergence criteria
 
-## Usage
+## Installation
 
-Add to your `Cargo.toml`:
+### Prerequisites: Rust and Cargo
+
+ripopt is written in Rust. You need the Rust toolchain (compiler + Cargo build tool) installed.
+
+**Install Rust via rustup** (the official installer, works on macOS, Linux, and WSL):
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Follow the prompts (the defaults are fine). Then restart your shell or run:
+
+```bash
+source "$HOME/.cargo/env"
+```
+
+Verify the installation:
+
+```bash
+rustc --version
+cargo --version
+```
+
+For other installation methods (Homebrew, distro packages, Windows), see the [official Rust installation guide](https://www.rust-lang.org/tools/install).
+
+### Install ripopt
+
+Clone the repository and run `make install`:
+
+```bash
+git clone https://github.com/jkitchin/ripopt.git
+cd ripopt
+make install
+```
+
+This does three things:
+
+1. Builds the optimized release binary and shared library
+2. Installs the `ripopt` AMPL solver binary to `~/.cargo/bin/` (which rustup already added to your `$PATH`)
+3. Copies the shared library (`libripopt.dylib` on macOS, `libripopt.so` on Linux) to `~/.local/lib/`
+
+After installation, verify it works:
+
+```bash
+ripopt --version
+```
+
+### Using ripopt with Pyomo
+
+Once `ripopt` is on your `$PATH` (the `make install` step above handles this), Pyomo can find it automatically via the AMPL solver interface:
+
+```python
+from pyomo.environ import *
+
+model = ConcreteModel()
+# ... define your model ...
+
+solver = SolverFactory('ripopt')
+result = solver.solve(model, tee=True)
+```
+
+No additional Python packages or configuration are needed — Pyomo discovers AMPL-compatible solvers by looking for executables on your `$PATH`.
+
+### Using ripopt as a Rust library
+
+Add to your project's `Cargo.toml`:
 
 ```toml
 [dependencies]
-ripopt = { path = "." }
+ripopt = { git = "https://github.com/jkitchin/ripopt" }
 ```
+
+Or for a local checkout:
+
+```toml
+[dependencies]
+ripopt = { path = "/path/to/ripopt" }
+```
+
+### Using the shared library (C/Python ctypes/Julia FFI)
+
+After `make install`, the shared library is at `~/.local/lib/libripopt.dylib` (macOS) or `~/.local/lib/libripopt.so` (Linux). The C header `ripopt.h` is in the repository root.
+
+```bash
+# Compile a C program against the installed library
+cc my_program.c -I/path/to/ripopt -L~/.local/lib -lripopt -lm
+```
+
+Or link directly from the build directory without installing:
+
+```bash
+cargo build --release
+cc my_program.c -I. -Ltarget/release -lripopt \
+   -Wl,-rpath,$(pwd)/target/release -o my_program -lm
+```
+
+### Uninstall
+
+```bash
+make uninstall
+```
+
+## Usage
 
 ### Defining a Problem
 

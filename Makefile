@@ -1,5 +1,32 @@
 SHELL = /bin/bash
-.PHONY: test test-c cutest-prepare cutest-run cutest-report cutest cutest-maxiter cutest-smoke cutest-large
+.PHONY: test test-c install uninstall cutest-prepare cutest-run cutest-report cutest cutest-maxiter cutest-smoke cutest-large
+
+# Detect shared library extension
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+  DYLIB_EXT := dylib
+else
+  DYLIB_EXT := so
+endif
+
+# Install ripopt binary and shared library
+install:
+	cargo build --release
+	cargo install --path . --bin ripopt
+	mkdir -p ~/.local/lib
+	cp target/release/libripopt.$(DYLIB_EXT) ~/.local/lib/
+	@echo ""
+	@echo "Installed:"
+	@echo "  ripopt binary      -> ~/.cargo/bin/ripopt"
+	@echo "  libripopt.$(DYLIB_EXT)  -> ~/.local/lib/libripopt.$(DYLIB_EXT)"
+	@echo ""
+	@echo "Verify: ripopt --version"
+
+# Uninstall ripopt binary and shared library
+uninstall:
+	cargo uninstall ripopt 2>/dev/null || true
+	rm -f ~/.local/lib/libripopt.$(DYLIB_EXT)
+	@echo "Uninstalled ripopt binary and shared library."
 
 # Run unit/integration tests (including C API tests via Rust FFI)
 test:
