@@ -502,6 +502,16 @@ pub unsafe extern "C" fn ripopt_add_str_option(
         "enable_sqp_fallback" => {
             p.options.enable_sqp_fallback = value == "yes";
         }
+        "hessian_approximation" => {
+            match value {
+                "limited-memory" => p.options.hessian_approximation_lbfgs = true,
+                "exact" => p.options.hessian_approximation_lbfgs = false,
+                _ => return 0,
+            }
+        }
+        "enable_lbfgs_hessian_fallback" => {
+            p.options.enable_lbfgs_hessian_fallback = value == "yes";
+        }
         _ => return 0,
     }
     1

@@ -108,6 +108,17 @@ pub struct SolverOptions {
     /// Enable SQP fallback for constrained problems when IPM/AL/slack fail.
     /// Default: true.
     pub enable_sqp_fallback: bool,
+    /// Use L-BFGS Hessian approximation inside the IPM instead of exact Hessian.
+    /// When enabled, `hessian_structure()` and `hessian_values()` are never called.
+    /// Equivalent to Ipopt's `hessian_approximation = "limited-memory"`.
+    /// Default: false.
+    pub hessian_approximation_lbfgs: bool,
+    /// Automatic L-BFGS Hessian fallback. When the exact-Hessian IPM fails
+    /// (MaxIterations, NumericalError, or RestorationFailed), retry with
+    /// L-BFGS Hessian approximation. Useful when the user-provided Hessian
+    /// is ill-conditioned, buggy, or overly sparse.
+    /// Default: true.
+    pub enable_lbfgs_hessian_fallback: bool,
 }
 
 impl Default for SolverOptions {
@@ -160,6 +171,8 @@ impl Default for SolverOptions {
             enable_preprocessing: true,
             detect_linear_constraints: true,
             enable_sqp_fallback: true,
+            hessian_approximation_lbfgs: false,
+            enable_lbfgs_hessian_fallback: true,
         }
     }
 }

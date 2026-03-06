@@ -323,6 +323,7 @@ Key options (all have Ipopt-matching defaults):
 | `detect_linear_constraints` | true | Skip Hessian for linear constraints |
 | `enable_sqp_fallback` | true | SQP fallback for constrained problems |
 | `hessian_approximation_lbfgs` | false | Use L-BFGS Hessian approximation (no exact Hessian needed) |
+| `enable_lbfgs_hessian_fallback` | true | Auto-retry with L-BFGS Hessian when exact Hessian fails |
 
 ### Result
 
@@ -516,6 +517,7 @@ Option-setting functions return `1` on success, `0` if the keyword is unknown. A
 | `detect_linear_constraints` | `"yes"` | `"yes"`, `"no"` | Skip Hessian for linear constraints |
 | `enable_sqp_fallback` | `"yes"` | `"yes"`, `"no"` | SQP fallback for constrained problems |
 | `hessian_approximation` | `"exact"` | `"exact"`, `"limited-memory"` | Use L-BFGS Hessian approximation |
+| `enable_lbfgs_hessian_fallback` | `"yes"` | `"yes"`, `"no"` | Auto-retry with L-BFGS Hessian on failure |
 
 ### Error handling
 
@@ -716,10 +718,43 @@ The solver follows the primal-dual barrier method from the Ipopt papers (Wachter
 When the primary IPM fails, ripopt automatically tries alternative solvers:
 
 1. **L-BFGS**: Tried first for unconstrained problems (m=0, no bounds); used as fallback for bound-constrained problems
-2. **Augmented Lagrangian**: PHR penalty method for constrained problems, with the IPM solving each AL subproblem
-3. **SQP**: Equality-constrained Sequential Quadratic Programming with l1 merit function line search
-4. **Explicit slack reformulation**: Converts g(x) to g(x)-s=0 with bounds on s, stabilizing multiplier oscillation at degenerate points
-5. **Best-du tracking**: Throughout the solve, tracks the iterate with lowest dual infeasibility and recovers it at max iterations
+2. **L-BFGS Hessian approximation**: Retries the IPM with L-BFGS curvature pairs replacing the exact Hessian (helps when the Hessian is ill-conditioned or buggy)
+3. **Augmented Lagrangian**: PHR penalty method for constrained problems, with the IPM solving each AL subproblem
+4. **SQP**: Equality-constrained Sequential Quadratic Programming with l1 merit function line search
+5. **Explicit slack reformulation**: Converts g(x) to g(x)-s=0 with bounds on s, stabilizing multiplier oscillation at degenerate points
+6. **Best-du tracking**: Throughout the solve, tracks the iterate with lowest dual infeasibility and recovers it at max iterations
+
+### Limited-Memory Hessian Approximation (L-BFGS-in-IPM)
+
+When `hessian_approximation_lbfgs = true`, the IPM replaces exact Hessian evaluations with an L-BFGS curvature approximation. This eliminates the need for `hessian_values()` callbacks entirely.
+
+**How it works:**
+
+1. Each IPM iteration, after accepting a step, the solver computes `s_k = x_{k+1} - x_k` and `y_k = ∇L(x_{k+1}) - ∇L(x_k)` from Lagrangian gradient differences
+2. Powell damping ensures positive curvature (`s^T y > 0`)
+3. An explicit dense B_k matrix is formed from the L-BFGS pairs and used in KKT assembly
+4. Up to 10 curvature pairs are stored (O(n·m) memory where m=10)
+
+**When to use it:**
+
+- Neural networks in NLPs (dense Hessian, O(n²) memory prohibitive)
+- Problems where second derivatives are unavailable or expensive
+- Rapid prototyping (skip Hessian derivation)
+- When the exact Hessian is ill-conditioned or buggy
+
+**Automatic fallback:** By default (`enable_lbfgs_hessian_fallback = true`), if the exact-Hessian IPM fails with MaxIterations, NumericalError, or RestorationFailed, the solver automatically retries with L-BFGS Hessian approximation. This helps when the user-provided Hessian is inaccurate.
+
+**Example:**
+
+```rust
+let options = SolverOptions {
+    hessian_approximation_lbfgs: true,
+    ..SolverOptions::default()
+};
+let result = ripopt::solve(&problem, &options);
+```
+
+See `examples/lbfgs_hessian.rs` for complete working examples.
 
 ### Condensed KKT System
 
