@@ -1340,8 +1340,11 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     }
 
     // SQP fallback: try SQP when IPM didn't reach Optimal and problem has constraints
+    // Skip for large problems — SQP uses dense QP subproblems, O(n³) per iteration
+    let kkt_dim = problem.num_variables() + problem.num_constraints();
     if options.enable_sqp_fallback
         && problem.num_constraints() > 0
+        && kkt_dim <= 1000
         && !matches!(result.status, SolveStatus::Optimal)
     {
         if options.print_level >= 5 {
