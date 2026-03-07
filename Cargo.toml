@@ -37,6 +37,10 @@ name = "cutest_suite"
 path = "cutest_suite/run_cutest.rs"
 required-features = ["cutest", "ipopt-native"]
 
+[[example]]
+name = "compare_large_scale"
+required-features = ["ipopt-native"]
+
 [profile.release]
 debug = true
 
