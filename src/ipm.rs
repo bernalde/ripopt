@@ -3,9 +3,10 @@ use std::time::{Duration, Instant};
 use crate::convergence::{self, check_convergence, ConvergenceInfo, ConvergenceStatus};
 use crate::filter::{self, Filter, FilterEntry};
 use crate::kkt::{self, InertiaCorrectionParams};
+use crate::linear_solver::banded::BandedLdl;
 use crate::linear_solver::dense::DenseLdl;
 use crate::linear_solver::sparse::SparseLdl;
-use crate::linear_solver::{LinearSolver, SymmetricMatrix};
+use crate::linear_solver::{KktMatrix, LinearSolver, SymmetricMatrix};
 use crate::options::SolverOptions;
 use crate::problem::NlpProblem;
 use crate::restoration::RestorationPhase;
@@ -532,7 +533,9 @@ impl SolverState {
 
         // Initialize constraint multipliers via least-squares estimate if enabled.
         // Solves min ||∇f + J^T y||^2  ⟹  (J J^T) y = -J ∇f
-        let y = if options.least_squares_mult_init && m > 0 {
+        // Gate LS mult init on problem size: dense J*J^T is O(m^2*n), too slow for large problems
+        let ls_init_dim_limit = 500;
+        let y = if options.least_squares_mult_init && m > 0 && (m + n) <= ls_init_dim_limit {
             let mut grad_f_init = vec![0.0; n];
             problem.gradient(&x, &mut grad_f_init);
 
@@ -1853,6 +1856,10 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         );
     }
 
+    if options.print_level >= 5 {
+        eprintln!("ripopt: Starting main loop (n={}, m={})", n, m);
+    }
+
     // Main IPM loop
     for iteration in 0..options.max_iter {
         state.iter = iteration;
@@ -2128,14 +2135,15 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         // Compute sigma (barrier diagonal)
         let sigma = kkt::compute_sigma(&state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u);
 
-        // Use condensed KKT (Schur complement) when m >= 2n for efficiency.
+        // Use dense condensed KKT (Schur complement) when m >= 2n and n is small.
         // Condensed cost is O(n^2*m + n^3) vs O((n+m)^3) — strictly better when m > n.
-        // Use m >= 2n threshold (relaxed from m > 2n) to avoid borderline cases
-        // where condensed path has different numerical behavior.
-        let use_condensed = m >= 2 * n && n > 0;
+        let use_condensed = m >= 2 * n && n > 0 && !use_sparse;
 
-        // Build condensed KKT when applicable (skip full KKT assembly — saves O((n+m)^2)
-        // assembly + O((n+m)^3) factorization with up to 15 inertia correction attempts).
+        // Use sparse condensed KKT when problem is large and has constraints.
+        // Reduces (n+m)×(n+m) sparse factorization to n×n sparse factorization.
+        // The condensed S = H + Σ + J^T·D_c^{-1}·J may be banded for PDE problems.
+        let use_sparse_condensed = use_sparse && m > 0 && !use_condensed;
+
         let t_kkt = Instant::now();
         let condensed_system = if use_condensed {
             Some(kkt::assemble_condensed_kkt(
@@ -2151,9 +2159,22 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             None
         };
 
-        // Build and factor full KKT only when NOT using condensed path.
-        // For condensed path, full KKT is built on-demand only if condensed fails or SOC needs it.
-        let mut kkt_system_opt: Option<kkt::KktSystem> = if !use_condensed {
+        let sparse_condensed_system = if use_sparse_condensed {
+            Some(kkt::assemble_sparse_condensed_kkt(
+                n, m,
+                &state.hess_rows, &state.hess_cols, &state.hess_vals,
+                &state.jac_rows, &state.jac_cols, &state.jac_vals,
+                &sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
+                &state.y, &state.z_l, &state.z_u,
+                &state.x, &state.x_l, &state.x_u, state.mu,
+                &state.v_l, &state.v_u,
+            ))
+        } else {
+            None
+        };
+
+        // Build full KKT only when not using any condensed path
+        let mut kkt_system_opt: Option<kkt::KktSystem> = if !use_condensed && !use_sparse_condensed {
             Some(kkt::assemble_kkt(
                 n, m,
                 &state.hess_rows, &state.hess_cols, &state.hess_vals,
@@ -2167,6 +2188,21 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             None
         };
         timings.kkt_assembly += t_kkt.elapsed();
+
+        // On first iteration with sparse condensed, detect bandwidth for the condensed system
+        if iteration == 0 && use_sparse_condensed {
+            if let Some(ref sc) = sparse_condensed_system {
+                let bw = BandedLdl::compute_bandwidth(&sc.matrix.triplet_rows, &sc.matrix.triplet_cols);
+                if bw * bw <= n {
+                    if options.print_level >= 5 {
+                        eprintln!("ripopt: Sparse condensed S has bandwidth {} for n={}, using banded solver", bw, n);
+                    }
+                    lin_solver = Box::new(BandedLdl::new());
+                } else if options.print_level >= 5 {
+                    eprintln!("ripopt: Sparse condensed S has bandwidth {} for n={}, using sparse solver", bw, n);
+                }
+            }
+        }
 
         // Factor with inertia correction (only for non-condensed path)
         if let Some(ref mut kkt_system) = kkt_system_opt {
@@ -2445,6 +2481,60 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     }
                 }
             }
+        } else if let Some(ref sc) = sparse_condensed_system {
+            // Sparse condensed path: factor S = H + Σ + J^T·D_c^{-1}·J with banded/sparse solver
+            let kkt_sc = KktMatrix::Sparse(sc.matrix.clone());
+            let factor_ok = lin_solver.factor(&kkt_sc).is_ok();
+            if factor_ok {
+                match kkt::solve_sparse_condensed(sc, lin_solver.as_mut()) {
+                    Ok(d) => d,
+                    Err(_) => {
+                        // Fall back to full KKT
+                        let mut kkt = kkt::assemble_kkt(
+                            n, m,
+                            &state.hess_rows, &state.hess_cols, &state.hess_vals,
+                            &state.jac_rows, &state.jac_cols, &state.jac_vals,
+                            &sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
+                            &state.y, &state.z_l, &state.z_u,
+                            &state.x, &state.x_l, &state.x_u, state.mu,
+                            use_sparse, &state.v_l, &state.v_u,
+                        );
+                        let mut fallback_solver = SparseLdl::new();
+                        if kkt::factor_with_inertia_correction(
+                            &mut kkt, &mut fallback_solver, &mut inertia_params,
+                        ).is_ok() {
+                            kkt::solve_for_direction(&kkt, &mut fallback_solver)
+                                .unwrap_or_else(|_| gradient_descent_fallback(&state)
+                                    .unwrap_or_else(|| (vec![0.0; n], vec![0.0; m])))
+                        } else {
+                            gradient_descent_fallback(&state)
+                                .unwrap_or_else(|| (vec![0.0; n], vec![0.0; m]))
+                        }
+                    }
+                }
+            } else {
+                // Factor failed — try full KKT
+                let mut kkt = kkt::assemble_kkt(
+                    n, m,
+                    &state.hess_rows, &state.hess_cols, &state.hess_vals,
+                    &state.jac_rows, &state.jac_cols, &state.jac_vals,
+                    &sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
+                    &state.y, &state.z_l, &state.z_u,
+                    &state.x, &state.x_l, &state.x_u, state.mu,
+                    use_sparse, &state.v_l, &state.v_u,
+                );
+                let mut fallback_solver = SparseLdl::new();
+                if kkt::factor_with_inertia_correction(
+                    &mut kkt, &mut fallback_solver, &mut inertia_params,
+                ).is_ok() {
+                    kkt::solve_for_direction(&kkt, &mut fallback_solver)
+                        .unwrap_or_else(|_| gradient_descent_fallback(&state)
+                            .unwrap_or_else(|| (vec![0.0; n], vec![0.0; m])))
+                } else {
+                    gradient_descent_fallback(&state)
+                        .unwrap_or_else(|| (vec![0.0; n], vec![0.0; m]))
+                }
+            }
         } else {
             let dir_result = kkt::solve_for_direction(kkt_system_opt.as_ref().unwrap(), lin_solver.as_mut());
             match dir_result {
@@ -2678,6 +2768,12 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     // Use condensed SOC (avoids building full KKT)
                     attempt_soc_condensed(
                         &state, problem, &g_trial, cs, cond, &filter,
+                        theta_current, phi_current, grad_phi_step, alpha, options,
+                    )
+                } else if let Some(ref sc) = sparse_condensed_system {
+                    // Use sparse condensed SOC
+                    attempt_soc_sparse_condensed(
+                        &state, problem, &g_trial, lin_solver.as_mut(), sc, &filter,
                         theta_current, phi_current, grad_phi_step, alpha, options,
                     )
                 } else if let Some(ref kkt) = kkt_system_opt {
@@ -3793,6 +3889,103 @@ fn attempt_soc_condensed<P: NlpProblem>(
         }
 
         // Update c_soc for next SOC iteration (respecting constraint type)
+        for i in 0..m {
+            let is_equality = state.g_l[i].is_finite() && state.g_u[i].is_finite()
+                && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
+            if is_equality || state.g_l[i].is_finite() {
+                c_soc[i] = g_soc[i] - state.g_l[i];
+            } else if state.g_u[i].is_finite() {
+                c_soc[i] = g_soc[i] - state.g_u[i];
+            }
+        }
+    }
+
+    None
+}
+
+/// SOC using sparse condensed KKT system.
+fn attempt_soc_sparse_condensed<P: NlpProblem>(
+    state: &SolverState,
+    problem: &P,
+    g_trial: &[f64],
+    solver: &mut dyn LinearSolver,
+    condensed: &kkt::SparseCondensedKktSystem,
+    filter: &Filter,
+    theta_current: f64,
+    phi_current: f64,
+    grad_phi_step: f64,
+    alpha: f64,
+    options: &SolverOptions,
+) -> Option<(Vec<f64>, f64, Vec<f64>, f64)> {
+    let n = state.n;
+    let m = state.m;
+    if m == 0 { return None; }
+
+    let mut c_soc = vec![0.0; m];
+    for i in 0..m {
+        let is_equality = state.g_l[i].is_finite() && state.g_u[i].is_finite()
+            && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
+        if is_equality || state.g_l[i].is_finite() {
+            c_soc[i] = g_trial[i] - state.g_l[i];
+        } else if state.g_u[i].is_finite() {
+            c_soc[i] = g_trial[i] - state.g_u[i];
+        }
+    }
+
+    let kappa_soc = 0.99;
+    let mut theta_prev_soc = convergence::primal_infeasibility(g_trial, &state.g_l, &state.g_u);
+
+    for _soc_iter in 0..options.max_soc {
+        let dx_soc = match kkt::solve_sparse_condensed_soc(condensed, solver, &c_soc) {
+            Ok(d) => d,
+            Err(_) => return None,
+        };
+
+        let mut x_soc = vec![0.0; n];
+        for i in 0..n {
+            x_soc[i] = state.x[i] + alpha * dx_soc[i];
+            if state.x_l[i].is_finite() { x_soc[i] = x_soc[i].max(state.x_l[i] + 1e-14); }
+            if state.x_u[i].is_finite() { x_soc[i] = x_soc[i].min(state.x_u[i] - 1e-14); }
+        }
+
+        let obj_soc = problem.objective(&x_soc);
+        let mut g_soc = vec![0.0; m];
+        problem.constraints(&x_soc, &mut g_soc);
+
+        let theta_soc = convergence::primal_infeasibility(&g_soc, &state.g_l, &state.g_u);
+        if theta_soc >= kappa_soc * theta_prev_soc { return None; }
+        theta_prev_soc = theta_soc;
+
+        let mut phi_soc = obj_soc;
+        for i in 0..n {
+            if state.x_l[i].is_finite() {
+                phi_soc -= state.mu * (x_soc[i] - state.x_l[i]).max(1e-20).ln();
+            }
+            if state.x_u[i].is_finite() {
+                phi_soc -= state.mu * (state.x_u[i] - x_soc[i]).max(1e-20).ln();
+            }
+        }
+        if options.constraint_slack_barrier {
+            for i in 0..m {
+                let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
+                    && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
+                if is_eq { continue; }
+                if state.g_l[i].is_finite() {
+                    let slack = g_soc[i] - state.g_l[i];
+                    if slack > state.mu * 1e-2 { phi_soc -= state.mu * slack.ln(); }
+                }
+                if state.g_u[i].is_finite() {
+                    let slack = state.g_u[i] - g_soc[i];
+                    if slack > state.mu * 1e-2 { phi_soc -= state.mu * slack.ln(); }
+                }
+            }
+        }
+
+        let (acceptable, _) = filter.check_acceptability(
+            theta_current, phi_current, theta_soc, phi_soc, grad_phi_step, alpha,
+        );
+        if acceptable { return Some((x_soc, obj_soc, g_soc, alpha)); }
+
         for i in 0..m {
             let is_equality = state.g_l[i].is_finite() && state.g_u[i].is_finite()
                 && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;

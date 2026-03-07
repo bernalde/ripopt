@@ -592,4 +592,10 @@ fn main() {
     bench!("OptControl 2.5K", 2499, 1250, OptimalControl::new(1249));
     bench!("Poisson 2.5K", 2450, 1225, PoissonControl::new(35));
     bench!("SparseQP 1K", 500, 500, SparseQP { n: 500 });
+    println!("{}", "-".repeat(95));
+    bench!("Rosenbrock 5K", 5000, 0, ChainedRosenbrock { n: 5000 });
+    bench!("Bratu 10K", 10000, 9998, BratuProblem::new(10000));
+    bench!("OptControl 20K", 19999, 10000, OptimalControl::new(9999));
+    bench!("Poisson 50K", 49928, 24964, PoissonControl::new(158));
+    bench!("SparseQP 100K", 50000, 50000, SparseQP { n: 50000 });
 }

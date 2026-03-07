@@ -17,6 +17,10 @@ use faer::Conj;
 /// Automatically selects simplicial or supernodal mode based on fill-in analysis.
 /// Supernodal mode uses dense BLAS operations on column groups for better cache
 /// efficiency on large problems.
+///
+/// Performance: after the first factorization, the CSC structure, symbolic
+/// factorization, COO→CSC mapping, and workspace buffers are all cached.
+/// Subsequent calls only update CSC values and run numeric factorization.
 pub struct SparseLdl {
     /// Dimension of the factored matrix.
     n: usize,
@@ -30,6 +34,20 @@ pub struct SparseLdl {
     zero_pivot_tol: f64,
     /// Force supernodal mode (for testing).
     force_supernodal: bool,
+
+    // --- Cached CSC structure and mapping (optimization #1 and #3) ---
+    /// Cached CSC matrix (structure is fixed for NLP, values updated in-place).
+    csc: Option<faer::sparse::SparseColMat<usize, f64>>,
+    /// Mapping from COO triplet index → CSC value index.
+    /// For each triplet k, coo_to_csc[k] is the index into csc_values where
+    /// the triplet's value should be accumulated (duplicates sum).
+    coo_to_csc: Vec<usize>,
+
+    // --- Cached workspace buffers (optimization #2) ---
+    /// Workspace for numeric factorization.
+    factor_buf: Option<GlobalPodBuffer>,
+    /// Workspace for solve.
+    solve_buf: Option<GlobalPodBuffer>,
 }
 
 impl Default for SparseLdl {
@@ -47,6 +65,10 @@ impl SparseLdl {
             factored: false,
             zero_pivot_tol: 1e-12,
             force_supernodal: false,
+            csc: None,
+            coo_to_csc: Vec::new(),
+            factor_buf: None,
+            solve_buf: None,
         }
     }
 
@@ -109,6 +131,58 @@ impl SparseLdl {
             zero,
         }
     }
+
+    /// Build COO→CSC mapping for the given triplets and CSC structure.
+    /// For each COO triplet (row, col, val), finds the CSC value index where
+    /// the value should be accumulated. Duplicate COO entries mapping to the
+    /// same CSC position will sum their values.
+    fn build_coo_to_csc_mapping(
+        triplet_rows: &[usize],
+        triplet_cols: &[usize],
+        csc: &faer::sparse::SparseColMat<usize, f64>,
+    ) -> Vec<usize> {
+        let nnz_coo = triplet_rows.len();
+        let mut mapping = Vec::with_capacity(nnz_coo);
+        let sym = csc.symbolic();
+        let col_ptrs = sym.col_ptrs();
+        let row_indices = sym.row_indices();
+
+        for k in 0..nnz_coo {
+            let row = triplet_rows[k];
+            let col = triplet_cols[k];
+
+            // Find the CSC position for (row, col) in upper triangle
+            let col_start = col_ptrs[col];
+            let col_end = col_ptrs[col + 1];
+
+            // Binary search for row in this column's row indices
+            let slice = &row_indices[col_start..col_end];
+            let pos = slice.binary_search(&row)
+                .unwrap_or_else(|_| panic!(
+                    "COO entry ({}, {}) not found in CSC structure", row, col
+                ));
+            mapping.push(col_start + pos);
+        }
+
+        mapping
+    }
+
+    /// Update CSC values from COO triplets using the cached mapping.
+    /// Zeros all values first, then accumulates from triplets.
+    fn scatter_coo_to_csc(
+        coo_to_csc: &[usize],
+        triplet_vals: &[f64],
+        csc_values: &mut [f64],
+    ) {
+        // Zero out CSC values
+        for v in csc_values.iter_mut() {
+            *v = 0.0;
+        }
+        // Scatter-add from COO triplets using the first triplet_vals.len() mapping entries
+        for (k, &val) in triplet_vals.iter().enumerate() {
+            csc_values[coo_to_csc[k]] += val;
+        }
+    }
 }
 
 impl SparseLdl {
@@ -141,14 +215,38 @@ impl LinearSolver for SparseLdl {
             }));
         }
 
-        // Convert COO to CSC (upper triangle)
-        let csc = sparse.to_upper_csc();
+        let first_call = self.symbolic.is_none();
 
-        // Compute symbolic factorization on first call (sparsity pattern is fixed for NLP)
-        if self.symbolic.is_none() {
+        if first_call {
+            // First call: build CSC from COO, compute symbolic factorization,
+            // build COO→CSC mapping, allocate workspace buffers.
+
+            // Build CSC via faer's triplet converter
+            let triplets: Vec<(usize, usize, f64)> = sparse.triplet_rows.iter()
+                .zip(sparse.triplet_cols.iter())
+                .zip(sparse.triplet_vals.iter())
+                .map(|((&r, &c), &v)| (r, c, v))
+                .collect();
+            let csc = faer::sparse::SparseColMat::<usize, f64>::try_new_from_triplets(
+                self.n, self.n, &triplets,
+            ).map_err(|e| SolverError::NumericalFailure(format!("CSC conversion: {:?}", e)))?;
+
+            // Build COO → CSC mapping
+            self.coo_to_csc = Self::build_coo_to_csc_mapping(
+                &sparse.triplet_rows,
+                &sparse.triplet_cols,
+                &csc,
+            );
+
+            // Symbolic factorization
             use faer::sparse::linalg::cholesky::CholeskySymbolicParams;
             use faer::sparse::linalg::SupernodalThreshold;
-            let threshold = if self.force_supernodal {
+            // Force supernodal for large systems. faer's AUTO threshold (40.0) is too
+            // high for KKT systems, causing simplicial mode to be selected even at 20K+
+            // dimensions. Simplicial does O(n) random memory accesses per sparse update,
+            // while supernodal uses dense BLAS on column groups with good cache locality.
+            // This is the root cause of a 70,000x gap vs MUMPS at scale.
+            let threshold = if self.force_supernodal || self.n >= 500 {
                 SupernodalThreshold::FORCE_SUPERNODAL
             } else {
                 SupernodalThreshold::AUTO
@@ -165,18 +263,42 @@ impl LinearSolver for SparseLdl {
             .map_err(|e| SolverError::NumericalFailure(format!("symbolic factorization: {:?}", e)))?;
 
             self.l_values = vec![0.0; symbolic.len_values()];
+
+            // Pre-allocate workspace buffers
+            let par = Parallelism::Rayon(0);
+            let factor_req = symbolic
+                .factorize_numeric_ldlt_req::<f64>(false, par)
+                .map_err(|e| SolverError::NumericalFailure(format!("stack req: {:?}", e)))?;
+            self.factor_buf = Some(GlobalPodBuffer::new(factor_req));
+
+            let solve_req = symbolic
+                .solve_in_place_req::<f64>(1)
+                .map_err(|e| SolverError::NumericalFailure(format!("solve stack req: {:?}", e)))?;
+            self.solve_buf = Some(GlobalPodBuffer::new(solve_req));
+
             self.symbolic = Some(symbolic);
+            self.csc = Some(csc);
+        } else {
+            // Subsequent calls: update CSC values from COO triplets via cached mapping.
+            let new_nnz = sparse.triplet_rows.len();
+            if new_nnz > self.coo_to_csc.len() {
+                // Extra entries added (e.g. add_diagonal_range for inertia correction).
+                // Extend the mapping for the new triplets.
+                let extra_mapping = Self::build_coo_to_csc_mapping(
+                    &sparse.triplet_rows[self.coo_to_csc.len()..],
+                    &sparse.triplet_cols[self.coo_to_csc.len()..],
+                    self.csc.as_ref().unwrap(),
+                );
+                self.coo_to_csc.extend(extra_mapping);
+            }
+            let csc = self.csc.as_mut().unwrap();
+            let csc_values = csc.values_mut();
+            Self::scatter_coo_to_csc(&self.coo_to_csc, &sparse.triplet_vals, csc_values);
         }
 
+        let csc = self.csc.as_ref().unwrap();
         let symbolic = self.symbolic.as_ref().unwrap();
-
-        // Compute required stack size for numeric factorization
-        let par = Parallelism::Rayon(0); // use all available cores
-        let req = symbolic
-            .factorize_numeric_ldlt_req::<f64>(false, par)
-            .map_err(|e| SolverError::NumericalFailure(format!("stack req: {:?}", e)))?;
-        let mut mem = GlobalPodBuffer::new(req);
-        let stack = PodStack::new(&mut mem);
+        let par = Parallelism::Rayon(0);
 
         // No regularization — let the inertia correction loop handle perturbation
         let reg = LdltRegularization {
@@ -185,7 +307,8 @@ impl LinearSolver for SparseLdl {
             dynamic_regularization_epsilon: 0.0,
         };
 
-        // Numeric LDLT factorization
+        // Numeric LDLT factorization using cached workspace
+        let stack = PodStack::new(self.factor_buf.as_mut().unwrap());
         let _ldlt = symbolic.factorize_numeric_ldlt::<f64>(
             &mut self.l_values,
             csc.as_ref(),
@@ -226,13 +349,8 @@ impl LinearSolver for SparseLdl {
         // Copy rhs into faer::Mat (column vector)
         let mut rhs_mat = Mat::<f64>::from_fn(self.n, 1, |i, _| rhs[i]);
 
-        // Compute required stack size for solve
-        let req = symbolic
-            .solve_in_place_req::<f64>(1)
-            .map_err(|e| SolverError::NumericalFailure(format!("solve stack req: {:?}", e)))?;
-        let mut mem = GlobalPodBuffer::new(req);
-        let stack = PodStack::new(&mut mem);
-
+        // Solve using cached workspace buffer
+        let stack = PodStack::new(self.solve_buf.as_mut().unwrap());
         ldlt.solve_in_place_with_conj(Conj::No, rhs_mat.as_mut(), Parallelism::Rayon(0), stack);
 
         for i in 0..self.n {
@@ -508,5 +626,55 @@ mod tests {
                 i, ax[i], rhs[i]
             );
         }
+    }
+
+    #[test]
+    fn test_cached_refactorization() {
+        // Test that factoring the same solver twice (simulating iteration 2)
+        // gives correct results when using the cached CSC mapping.
+        let mut s = SparseSymmetricMatrix::zeros(3);
+        s.add(0, 0, 4.0);
+        s.add(1, 0, 2.0);
+        s.add(1, 1, 5.0);
+        s.add(2, 0, 1.0);
+        s.add(2, 1, 3.0);
+        s.add(2, 2, 6.0);
+
+        let matrix1 = KktMatrix::Sparse(s);
+        let mut solver = SparseLdl::new();
+
+        // First factorization
+        solver.factor(&matrix1).unwrap();
+        let rhs = [1.0, 2.0, 3.0];
+        let mut sol1 = [0.0; 3];
+        solver.solve(&rhs, &mut sol1).unwrap();
+
+        // Second factorization with different values but same structure
+        let mut s2 = SparseSymmetricMatrix::zeros(3);
+        s2.add(0, 0, 10.0);
+        s2.add(1, 0, 1.0);
+        s2.add(1, 1, 10.0);
+        s2.add(2, 0, 0.5);
+        s2.add(2, 1, 1.0);
+        s2.add(2, 2, 10.0);
+
+        let matrix2 = KktMatrix::Sparse(s2.clone());
+        solver.factor(&matrix2).unwrap();
+        let mut sol2 = [0.0; 3];
+        solver.solve(&rhs, &mut sol2).unwrap();
+
+        // Verify Ax ≈ b for second solve
+        let mut ax = [0.0; 3];
+        matrix2.matvec(&sol2, &mut ax);
+        for i in 0..3 {
+            assert!(
+                (ax[i] - rhs[i]).abs() < 1e-10,
+                "Row {}: Ax={}, b={}",
+                i, ax[i], rhs[i]
+            );
+        }
+
+        // Solutions should differ (different matrices)
+        assert!((sol1[0] - sol2[0]).abs() > 1e-6, "Solutions should differ");
     }
 }

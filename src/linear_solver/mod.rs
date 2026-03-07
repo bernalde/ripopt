@@ -1,3 +1,4 @@
+pub mod banded;
 pub mod dense;
 pub mod sparse;
 

@@ -1,5 +1,5 @@
 use crate::convergence::is_equality_constraint;
-use crate::linear_solver::{KktMatrix, LinearSolver, SolverError, SymmetricMatrix};
+use crate::linear_solver::{KktMatrix, LinearSolver, SolverError, SparseSymmetricMatrix, SymmetricMatrix};
 
 /// Information about the KKT system structure.
 pub struct KktSystem {
@@ -756,6 +756,274 @@ pub fn solve_condensed_soc(
     let mut dx = vec![0.0; n];
     solver.solve(&rhs, &mut dx)?;
 
+    Ok(dx)
+}
+
+/// Sparse condensed KKT system for large problems where both n and m are large.
+///
+/// Like `CondensedKktSystem` but stores S as a sparse matrix, avoiding O(n²) memory.
+/// The Schur complement J^T · D_c^{-1} · J is computed directly in COO format.
+pub struct SparseCondensedKktSystem {
+    pub matrix: SparseSymmetricMatrix,
+    pub rhs: Vec<f64>,
+    pub n: usize,
+    pub m: usize,
+    pub d_c: Vec<f64>,
+    pub rhs_primal: Vec<f64>,
+    pub rhs_constraint: Vec<f64>,
+    pub jac_rows: Vec<usize>,
+    pub jac_cols: Vec<usize>,
+    pub jac_vals: Vec<f64>,
+}
+
+/// Assemble a sparse condensed (Schur complement) KKT system.
+///
+/// S = H + Σ + J^T · (-D_c)^{-1} · J  (n×n sparse)
+/// rhs = r_d + J^T · (-D_c)^{-1} · r_p
+///
+/// The J^T·D_c^{-1}·J product is computed row-by-row:
+/// for each constraint i, add rank-1 update (1/(-d_c[i])) * J[i,:]^T * J[i,:]
+/// Only nonzero pairs of J entries in the same row produce fill.
+#[allow(clippy::too_many_arguments)]
+pub fn assemble_sparse_condensed_kkt(
+    n: usize,
+    m: usize,
+    hess_rows: &[usize],
+    hess_cols: &[usize],
+    hess_vals: &[f64],
+    jac_rows: &[usize],
+    jac_cols: &[usize],
+    jac_vals: &[f64],
+    sigma: &[f64],
+    grad_f: &[f64],
+    g: &[f64],
+    g_l: &[f64],
+    g_u: &[f64],
+    y: &[f64],
+    z_l: &[f64],
+    z_u: &[f64],
+    x: &[f64],
+    x_l: &[f64],
+    x_u: &[f64],
+    mu: f64,
+    _v_l: &[f64],
+    _v_u: &[f64],
+) -> SparseCondensedKktSystem {
+    // Estimate nnz: hess + diagonal + J^T*D_c^{-1}*J fill
+    // For each constraint row with k nonzeros, the outer product has k*(k+1)/2 entries.
+    // Build a row-pointer structure for J to iterate by constraint row.
+    let mut row_start = vec![0usize; m + 1];
+    for &r in jac_rows {
+        row_start[r + 1] += 1;
+    }
+    for i in 0..m {
+        row_start[i + 1] += row_start[i];
+    }
+    // Sort Jacobian entries by row
+    let jac_nnz = jac_rows.len();
+    let mut jac_order = vec![0usize; jac_nnz];
+    let mut row_count = vec![0usize; m];
+    for k in 0..jac_nnz {
+        let r = jac_rows[k];
+        jac_order[row_start[r] + row_count[r]] = k;
+        row_count[r] += 1;
+    }
+
+    // Estimate nnz for S
+    let mut schur_nnz = 0;
+    for i in 0..m {
+        let k = row_start[i + 1] - row_start[i];
+        schur_nnz += k * (k + 1) / 2;
+    }
+    let total_nnz = hess_rows.len() + n + schur_nnz;
+    let mut matrix = SparseSymmetricMatrix::with_capacity(n, total_nnz);
+
+    // (1,1) block: H + Σ
+    for (idx, (&row, &col)) in hess_rows.iter().zip(hess_cols.iter()).enumerate() {
+        matrix.add(row, col, hess_vals[idx]);
+    }
+    for i in 0..n {
+        matrix.add(i, i, sigma[i]);
+    }
+
+    // RHS: dual residual r_d
+    let mut rhs_primal = vec![0.0; n];
+    for i in 0..n {
+        let mut rd = -grad_f[i];
+        rd += z_l[i];
+        rd -= z_u[i];
+        if x_l[i].is_finite() {
+            rd += mu / (x[i] - x_l[i]);
+        }
+        if x_u[i].is_finite() {
+            rd -= mu / (x_u[i] - x[i]);
+        }
+        rhs_primal[i] = rd;
+    }
+    // Subtract J^T * y
+    for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
+        rhs_primal[col] -= jac_vals[idx] * y[row];
+    }
+
+    // (2,2) block diagonal D_c and constraint RHS
+    let mut d_c = vec![0.0; m];
+    let mut rhs_constraint = vec![0.0; m];
+
+    for i in 0..m {
+        if is_equality_constraint(g_l[i], g_u[i]) {
+            // For equalities, D_c comes from constraint regularization.
+            // Use -delta_c (a small regularization) so the Schur complement
+            // J^T * delta_c^{-1} * J doesn't blow up.
+            let delta_c = mu.max(1e-8).min(1e-4);
+            d_c[i] = -delta_c;
+            rhs_constraint[i] = -(g[i] - g_l[i]);
+            continue;
+        }
+
+        let mut sigma_s = 0.0;
+        let mut rhs_correction = y[i];
+        let mut any_feasible = false;
+        let mut rhs_infeasible = 0.0;
+
+        if g_l[i].is_finite() {
+            let slack = g[i] - g_l[i];
+            if slack >= -1e-8 {
+                let safe_slack = slack.max(mu.max(1e-10));
+                let z_sl = if y[i] < -1e-20 { -y[i] } else { mu / safe_slack };
+                sigma_s += z_sl / safe_slack;
+                rhs_correction += mu / safe_slack;
+                any_feasible = true;
+            } else {
+                rhs_infeasible += -(g[i] - g_l[i]);
+            }
+        }
+        if g_u[i].is_finite() {
+            let slack = g_u[i] - g[i];
+            if slack >= -1e-8 {
+                let safe_slack = slack.max(mu.max(1e-10));
+                let z_su = if y[i] > 1e-20 { y[i] } else { mu / safe_slack };
+                sigma_s += z_su / safe_slack;
+                rhs_correction -= mu / safe_slack;
+                any_feasible = true;
+            } else {
+                rhs_infeasible += -(g[i] - g_u[i]);
+            }
+        }
+
+        if any_feasible && sigma_s > 1e-20 {
+            let sigma_s_inv = (1.0 / sigma_s).min(1e20);
+            d_c[i] = -sigma_s_inv;
+            rhs_constraint[i] = sigma_s_inv * rhs_correction + rhs_infeasible;
+        } else {
+            rhs_constraint[i] = rhs_infeasible;
+        }
+    }
+
+    // Schur complement: S += J^T · (-D_c)^{-1} · J
+    // Process row-by-row to exploit sparsity
+    for i in 0..m {
+        let d_c_eff = if d_c[i].abs() < 1e-20 { -1e-16 } else { d_c[i] };
+        let inv_neg_dc = 1.0 / (-d_c_eff);
+
+        let start = row_start[i];
+        let end = row_start[i + 1];
+        // For each pair of nonzeros in row i of J, add outer product entry
+        for a in start..end {
+            let ka = jac_order[a];
+            let ca = jac_cols[ka];
+            let va = jac_vals[ka];
+            for b in a..end {
+                let kb = jac_order[b];
+                let cb = jac_cols[kb];
+                let vb = jac_vals[kb];
+                // Add to upper triangle (min(ca,cb), max(ca,cb))
+                let (p, q) = if ca <= cb { (ca, cb) } else { (cb, ca) };
+                let val = if a == b {
+                    inv_neg_dc * va * vb
+                } else {
+                    inv_neg_dc * va * vb // both (a,b) and (b,a) contribute, but we only do upper
+                };
+                matrix.add(p, q, val);
+            }
+        }
+    }
+
+    // Condensed RHS: r_d + J^T · (-D_c)^{-1} · r_p
+    let mut rhs = rhs_primal.clone();
+    for i in 0..m {
+        let d_c_eff = if d_c[i].abs() < 1e-20 { -1e-16 } else { d_c[i] };
+        let inv_neg_dc = 1.0 / (-d_c_eff);
+        let scaled_rp = inv_neg_dc * rhs_constraint[i];
+        let start = row_start[i];
+        let end = row_start[i + 1];
+        for a in start..end {
+            let ka = jac_order[a];
+            rhs[jac_cols[ka]] += jac_vals[ka] * scaled_rp;
+        }
+    }
+
+    SparseCondensedKktSystem {
+        matrix,
+        rhs,
+        n,
+        m,
+        d_c,
+        rhs_primal,
+        rhs_constraint,
+        jac_rows: jac_rows.to_vec(),
+        jac_cols: jac_cols.to_vec(),
+        jac_vals: jac_vals.to_vec(),
+    }
+}
+
+/// Solve a sparse condensed system: dx from factored solver, recover dy.
+pub fn solve_sparse_condensed(
+    condensed: &SparseCondensedKktSystem,
+    solver: &mut dyn LinearSolver,
+) -> Result<(Vec<f64>, Vec<f64>), SolverError> {
+    let n = condensed.n;
+    let m = condensed.m;
+
+    let mut dx = vec![0.0; n];
+    solver.solve(&condensed.rhs, &mut dx)?;
+
+    // Recover dy = (-D_c)^{-1} · (J · dx - r_p)
+    let mut jdx = vec![0.0; m];
+    for (idx, (&row, &col)) in condensed.jac_rows.iter().zip(condensed.jac_cols.iter()).enumerate() {
+        jdx[row] += condensed.jac_vals[idx] * dx[col];
+    }
+
+    let mut dy = vec![0.0; m];
+    for i in 0..m {
+        let d_c_eff = if condensed.d_c[i].abs() < 1e-20 { -1e-16 } else { condensed.d_c[i] };
+        dy[i] = (jdx[i] - condensed.rhs_constraint[i]) / (-d_c_eff);
+    }
+
+    Ok((dx, dy))
+}
+
+/// Solve sparse condensed with modified constraint residual (for SOC).
+pub fn solve_sparse_condensed_soc(
+    condensed: &SparseCondensedKktSystem,
+    solver: &mut dyn LinearSolver,
+    c_soc: &[f64],
+) -> Result<Vec<f64>, SolverError> {
+    let n = condensed.n;
+    let m = condensed.m;
+
+    let mut scaled = vec![0.0; m];
+    for i in 0..m {
+        let d_c_eff = if condensed.d_c[i].abs() < 1e-20 { -1e-16 } else { condensed.d_c[i] };
+        scaled[i] = (-c_soc[i]) / (-d_c_eff);
+    }
+
+    let mut rhs = condensed.rhs_primal.clone();
+    for (idx, (&row, &col)) in condensed.jac_rows.iter().zip(condensed.jac_cols.iter()).enumerate() {
+        rhs[col] += condensed.jac_vals[idx] * scaled[row];
+    }
+
+    let mut dx = vec![0.0; n];
+    solver.solve(&rhs, &mut dx)?;
     Ok(dx)
 }
 
