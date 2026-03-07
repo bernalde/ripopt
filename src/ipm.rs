@@ -956,6 +956,13 @@ fn detect_ne_problem<P: NlpProblem>(problem: &P) -> bool {
         return false;
     }
 
+    // Square systems (m == n) are better solved by direct constrained IPM
+    // (Newton on g(x)=0), which typically converges in a few iterations.
+    // LS reformulation min 0.5*||g||^2 has a harder landscape for square systems.
+    if m == n {
+        return false;
+    }
+
     // Check objective and gradient at initial point
     let mut x0 = vec![0.0; n];
     problem.initial_point(&mut x0);
@@ -1045,7 +1052,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         // approach because there are no "extra" equations to drive residuals down.
         let mut ls_opts = options.clone();
         if m == n {
-            ls_opts.max_iter = options.max_iter.min(100).max(options.max_iter / 10);
+            ls_opts.max_iter = (options.max_iter / 10).min(100);
         }
         let ls_result = solve_ipm(&ls_problem, &ls_opts);
 
