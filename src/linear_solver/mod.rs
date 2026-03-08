@@ -1,5 +1,8 @@
 pub mod banded;
 pub mod dense;
+#[cfg(feature = "rmumps")]
+pub mod multifrontal;
+#[cfg(feature = "faer")]
 pub mod sparse;
 
 use std::fmt;
@@ -334,6 +337,7 @@ impl SparseSymmetricMatrix {
     }
 
     /// Convert to faer SparseColMat (upper triangle, duplicates summed).
+    #[cfg(feature = "faer")]
     pub fn to_upper_csc(&self) -> faer::sparse::SparseColMat<usize, f64> {
         let triplets: Vec<(usize, usize, f64)> = self
             .triplet_rows
@@ -659,6 +663,7 @@ mod tests {
         assert!((y[2] - 14.0).abs() < 1e-15);
     }
 
+    #[cfg(feature = "faer")]
     #[test]
     fn test_sparse_to_upper_csc() {
         let mut s = SparseSymmetricMatrix::zeros(3);

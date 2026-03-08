@@ -5,8 +5,32 @@ use crate::filter::{self, Filter, FilterEntry};
 use crate::kkt::{self, InertiaCorrectionParams};
 use crate::linear_solver::banded::BandedLdl;
 use crate::linear_solver::dense::DenseLdl;
+#[cfg(feature = "faer")]
 use crate::linear_solver::sparse::SparseLdl;
+#[cfg(feature = "rmumps")]
+use crate::linear_solver::multifrontal::MultifrontalLdl;
 use crate::linear_solver::{KktMatrix, LinearSolver, SymmetricMatrix};
+
+/// Create a new sparse linear solver using the best available backend.
+/// Prefers rmumps (multifrontal) when available, falls back to faer (SparseLdl).
+fn new_sparse_solver() -> Box<dyn LinearSolver> {
+    #[cfg(feature = "rmumps")]
+    { return Box::new(MultifrontalLdl::new()); }
+    #[cfg(all(not(feature = "rmumps"), feature = "faer"))]
+    { return Box::new(SparseLdl::new()); }
+    #[cfg(not(any(feature = "rmumps", feature = "faer")))]
+    { return Box::new(DenseLdl::new()); }
+}
+
+/// Create the appropriate linear solver for a fallback KKT system.
+/// Uses sparse solver when `use_sparse` is true, dense otherwise.
+fn new_fallback_solver(use_sparse: bool) -> Box<dyn LinearSolver> {
+    if use_sparse {
+        new_sparse_solver()
+    } else {
+        Box::new(DenseLdl::new())
+    }
+}
 use crate::options::SolverOptions;
 use crate::problem::NlpProblem;
 use crate::restoration::RestorationPhase;
@@ -1690,7 +1714,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     // Initialize linear solver — use sparse for large KKT systems
     let use_sparse = (n + m) >= options.sparse_threshold;
     let mut lin_solver: Box<dyn LinearSolver> = if use_sparse {
-        Box::new(SparseLdl::new())
+        new_sparse_solver()
     } else {
         Box::new(DenseLdl::new())
     };
@@ -2499,11 +2523,11 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             &state.x, &state.x_l, &state.x_u, state.mu,
                             use_sparse, &state.v_l, &state.v_u,
                         );
-                        let mut fallback_solver = SparseLdl::new();
+                        let mut fallback_solver = new_fallback_solver(use_sparse);
                         if kkt::factor_with_inertia_correction(
-                            &mut kkt, &mut fallback_solver, &mut inertia_params,
+                            &mut kkt, fallback_solver.as_mut(), &mut inertia_params,
                         ).is_ok() {
-                            kkt::solve_for_direction(&kkt, &mut fallback_solver)
+                            kkt::solve_for_direction(&kkt, fallback_solver.as_mut())
                                 .unwrap_or_else(|_| gradient_descent_fallback(&state)
                                     .unwrap_or_else(|| (vec![0.0; n], vec![0.0; m])))
                         } else {
@@ -2523,11 +2547,11 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     &state.x, &state.x_l, &state.x_u, state.mu,
                     use_sparse, &state.v_l, &state.v_u,
                 );
-                let mut fallback_solver = SparseLdl::new();
+                let mut fallback_solver = new_fallback_solver(use_sparse);
                 if kkt::factor_with_inertia_correction(
-                    &mut kkt, &mut fallback_solver, &mut inertia_params,
+                    &mut kkt, fallback_solver.as_mut(), &mut inertia_params,
                 ).is_ok() {
-                    kkt::solve_for_direction(&kkt, &mut fallback_solver)
+                    kkt::solve_for_direction(&kkt, fallback_solver.as_mut())
                         .unwrap_or_else(|_| gradient_descent_fallback(&state)
                             .unwrap_or_else(|| (vec![0.0; n], vec![0.0; m])))
                 } else {

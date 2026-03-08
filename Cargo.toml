@@ -1,6 +1,9 @@
+[workspace]
+members = [".", "rmumps"]
+
 [package]
 name = "ripopt"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "EPL-2.0"
 description = "A memory-safe interior point optimizer in Rust"
@@ -13,11 +16,15 @@ log = "0.4"
 env_logger = "0.11"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-faer = "0.20"
+faer = { version = "0.20", optional = true }
+rmumps = { path = "rmumps", optional = true }
 
 [features]
+default = ["rmumps"]
 ipopt-native = []
 cutest = []
+rmumps = ["dep:rmumps"]
+faer = ["dep:faer"]
 
 [[bin]]
 name = "hs_suite"
@@ -40,6 +47,9 @@ required-features = ["cutest", "ipopt-native"]
 [[example]]
 name = "compare_large_scale"
 required-features = ["ipopt-native"]
+
+[[example]]
+name = "benchmark_solvers"
 
 [profile.release]
 debug = true

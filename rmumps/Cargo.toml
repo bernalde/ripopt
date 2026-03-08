@@ -1,0 +1,11 @@
+[package]
+name = "rmumps"
+version = "0.1.0"
+edition = "2021"
+license = "CECILL-C"
+description = "Pure Rust multifrontal sparse symmetric indefinite solver"
+
+[dependencies]
+rayon = "1"
+
+[dev-dependencies]

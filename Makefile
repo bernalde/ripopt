@@ -101,7 +101,7 @@ cutest-smoke:
 		2> >(tee cutest_suite/smoke_stderr.txt >&2)
 	@echo "Smoke test complete."
 
-# Large problems: n+m >= 100, exercises the sparse LDL solver.
+# Large problems: n+m >= 100, exercises the sparse multifrontal solver.
 # Includes over-constrained (m >> n), large-n, and NE systems.
 cutest-large:
 	cargo run --bin cutest_suite --features cutest,ipopt-native --release -- \

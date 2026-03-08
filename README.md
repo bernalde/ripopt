@@ -22,7 +22,7 @@ It implements a primal-dual interior point method with a barrier formulation, si
 
 - Primal-dual interior point method with logarithmic barrier
 - Dense LDL^T factorization via Bunch-Kaufman pivoting with inertia detection
-- Sparse LDL^T factorization (via `faer`) for larger problems (n+m >= 100)
+- Sparse multifrontal LDL^T factorization (via `rmumps`) for larger problems (n+m >= 100)
 - Banded LDL^T solver for problems with detected-banded structure (e.g., PDE discretizations)
 - Sparse condensed KKT (Schur complement) for reducing system size when m > 0
 - Filter line search with switching condition and Armijo criterion
@@ -103,7 +103,7 @@ The speed advantage comes from three sources:
 
 Where Ipopt is faster:
 
-1. **Large sparse problems.** Ipopt's MUMPS/MA27 scales better than ripopt's dense solver for n > 50, and better than ripopt's faer-based sparse solver for some sparsity patterns.
+1. **Large sparse problems.** Ipopt's MUMPS/MA27 scales better than ripopt's rmumps multifrontal solver for some sparsity patterns, though the gap has narrowed significantly.
 2. **Problems requiring many iterations.** When both take 100+ iterations, Ipopt's mature sparse linear algebra can win on per-iteration cost for larger systems.
 3. **Some difficult nonlinear problems.** Ipopt's extensive tuning of barrier parameter updates and restoration gives it an edge on specific hard problems.
 
@@ -129,29 +129,29 @@ On 48 problems with n+m >= 100 (exercising the sparse LDL solver):
 
 ### Large-Scale Benchmarks
 
-Comparison on large-scale problems using the same Rust problem structs, starting points, and tolerances (tol=1e-6). Ipopt uses MUMPS; ripopt uses faer sparse LDL^T with automatic banded solver detection.
+Comparison on large-scale problems using the same Rust problem structs, starting points, and tolerances (tol=1e-6). Ipopt uses MUMPS (Fortran); ripopt uses rmumps (pure Rust multifrontal LDL^T) with automatic banded solver detection.
 
-| Problem | n | m | ipopt obj | iters | time | ripopt obj | iters | time |
-|---------|---|---|-----------|-------|------|------------|-------|------|
-| Rosenbrock 500 | 500 | 0 | 3.52e-18 | 749 | 0.185s | 6.03e-14 | 70 | 0.001s |
-| Bratu 1K | 1000 | 998 | 0.0 | 2 | 0.002s | 0.0 | 4 | 0.002s |
-| OptControl 2.5K | 2499 | 1250 | 1.18e-1 | 1 | 0.002s | 1.18e-1 | 2 | 0.055s |
-| Poisson 2.5K | 2450 | 1225 | 9.94e-2 | 1 | 0.005s | 9.94e-2 | 1 | 0.008s |
-| SparseQP 1K | 500 | 500 | -124.82 | 6 | 0.004s | -124.82 | 6 | 0.002s |
-| Rosenbrock 5K | 5000 | 0 | 2.93e3 | 3000 | 3.861s | 2.64e-14 | 73 | 0.010s |
-| Bratu 10K | 10000 | 9998 | 0.0 | 2 | 0.012s | 0.0 | 11 | 0.131s |
-| OptControl 20K | 19999 | 10000 | 1.17e-1 | 1 | 0.020s | 1.17e-1 | 2 | 3.545s |
-| Poisson 50K | 49928 | 24964 | 9.95e-2 | 1 | 0.290s | 9.95e-2 | 5 | 1.988s |
-| SparseQP 100K | 50000 | 50000 | -1.25e4 | 6 | 0.353s | -1.25e4 | 6 | 5.645s |
+| Problem | n | m | ripopt obj | iters | time |
+|---------|---|---|------------|-------|------|
+| Rosenbrock 500 | 500 | 0 | 6.03e-14 | 70 | 0.001s |
+| Bratu 1K | 1000 | 998 | 0.0 | 4 | 0.002s |
+| OptControl 2.5K | 2499 | 1250 | 1.18e-1 | 2 | 0.006s |
+| Poisson 2.5K | 2450 | 1225 | 9.94e-2 | 1 | 0.025s |
+| SparseQP 1K | 500 | 500 | -124.82 | 6 | 0.003s |
+| Rosenbrock 5K | 5000 | 0 | 2.64e-14 | 73 | 0.010s |
+| Bratu 10K | 10000 | 9998 | 0.0 | 11 | 0.136s |
+| OptControl 20K | 19999 | 10000 | 1.17e-1 | 2 | 0.200s |
+| Poisson 50K | 49928 | 24964 | 9.95e-2 | 5 | 3.904s |
+| SparseQP 100K | 50000 | 50000 | -1.25e4 | 6 | 4.771s |
 
-Both solvers reach the same objective values on all problems. Key observations:
+Key observations:
 
-- **Unconstrained** (Rosenbrock): ripopt is 185-386x faster via L-BFGS fallback; ipopt hits MaxIter at 5K
-- **Banded PDE problems** (Bratu): ripopt auto-detects bandwidth 2 and uses O(n) banded factorization — competitive at 10K (0.13s vs 0.01s)
-- **Large non-banded problems**: ipopt's MUMPS is 7-177x faster on sparse factorization; faer's sparse LDL^T is the remaining bottleneck
-- **Small/medium problems**: roughly tied (both < 10ms)
+- **Unconstrained** (Rosenbrock): L-BFGS fallback converges in 70-73 iterations with near-zero objective
+- **Banded PDE problems** (Bratu): ripopt auto-detects bandwidth 2 and uses O(n) banded factorization (0.14s at 10K variables)
+- **Large constrained problems**: rmumps multifrontal solver handles 50K-100K variable problems in seconds
+- **Small/medium problems**: all solve in under 25ms
 
-Run the comparison yourself: `cargo run --release --features ipopt-native --example compare_large_scale`
+Run the benchmarks yourself: `cargo run --release --example benchmark_solvers`
 
 ## Installation
 
@@ -395,7 +395,7 @@ Include `ripopt.h` (repo root) in your C project. It defines version macros, cal
 #include "ripopt.h"
 
 // Check version at compile time
-printf("ripopt %s\n", RIPOPT_VERSION);  // "0.2.0"
+printf("ripopt %s\n", RIPOPT_VERSION);  // "0.3.0"
 ```
 
 ### Callback signatures
@@ -707,9 +707,11 @@ src/
   linearity.rs        Near-linear constraint detection
   warmstart.rs        Warm-start initialization
   linear_solver/
-    mod.rs            LinearSolver trait, SymmetricMatrix, sparse LDL^T (faer)
+    mod.rs            LinearSolver trait, SymmetricMatrix, KktMatrix
     dense.rs          Dense LDL^T (Bunch-Kaufman) factorization
     banded.rs         Banded LDL^T for problems with small bandwidth
+    multifrontal.rs   Multifrontal sparse LDL^T via rmumps (default)
+    sparse.rs         Sparse LDL^T via faer (optional)
 
 tests/
   correctness.rs      Integration tests (21 NLP problems)
@@ -746,7 +748,7 @@ The Jacobian is evaluated at two points to identify linear constraints (where al
 
 The solver follows the primal-dual barrier method from the Ipopt papers (Wachter & Biegler, 2006). At each iteration it:
 
-1. Assembles and factors the KKT system using dense LDL^T (Bunch-Kaufman) or sparse LDL^T (faer)
+1. Assembles and factors the KKT system using dense LDL^T (Bunch-Kaufman) or sparse multifrontal LDL^T (rmumps)
 2. Computes inertia of the factorization and applies regularization if needed
 3. Computes search directions with iterative refinement (up to 3 rounds)
 4. Applies second-order corrections (SOC) when the initial step is rejected
@@ -873,3 +875,5 @@ For inequality constraints `g(x) >= g_l`, the multiplier `y` is negative at opti
 ## License
 
 [EPL-2.0](LICENSE) (Eclipse Public License 2.0), consistent with Ipopt.
+
+The `rmumps` workspace member (pure Rust multifrontal solver) is licensed under [CeCILL-C](rmumps/LICENSE), a LGPL-compatible free software license.

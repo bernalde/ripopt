@@ -1,0 +1,340 @@
+use crate::csc::CscMatrix;
+use crate::etree::EliminationTree;
+
+/// A supernode: a contiguous range of columns that can be factored together.
+#[derive(Debug, Clone)]
+pub struct Supernode {
+    /// First column in this supernode.
+    pub start: usize,
+    /// Number of columns (fully-summed variables).
+    pub nfs: usize,
+    /// All row indices in this supernode's front (includes the nfs FS columns
+    /// followed by the contribution block indices). Sorted.
+    pub front_indices: Vec<usize>,
+}
+
+/// Symbolic factorization result.
+/// Describes the structure of the multifrontal factorization without computing values.
+#[derive(Debug, Clone)]
+pub struct SymbolicFactorization {
+    /// Matrix dimension.
+    pub n: usize,
+    /// Elimination tree (per-column).
+    pub etree: EliminationTree,
+    /// Per-column front indices (row structure of L, including diagonal).
+    pub col_indices: Vec<Vec<usize>>,
+    /// Supernodes in postorder (leaves before parents).
+    pub supernodes: Vec<Supernode>,
+    /// For each column j, which supernode index it belongs to.
+    pub col_to_supernode: Vec<usize>,
+    /// Supernodal elimination tree: parent[s] = parent supernode of s, or None.
+    pub snode_parent: Vec<Option<usize>>,
+    /// Children of each supernode.
+    pub snode_children: Vec<Vec<usize>>,
+    /// Total number of nonzeros in L.
+    pub l_nnz: usize,
+
+    // Legacy fields for backward compatibility with non-supernodal code paths
+    /// Per-column front indices (same as col_indices, kept for compatibility).
+    pub front_indices: Vec<Vec<usize>>,
+    /// Per-column nfs (always 1, kept for compatibility).
+    pub front_nfs: Vec<usize>,
+    /// Per-column postorder.
+    pub postorder: Vec<usize>,
+}
+
+impl SymbolicFactorization {
+    /// Compute the symbolic factorization from a permuted upper-triangle CSC matrix.
+    pub fn from_csc(csc: &CscMatrix) -> Self {
+        let n = csc.n;
+        let etree = EliminationTree::from_csc(csc);
+        let postorder = etree.postorder();
+        let children = etree.children();
+
+        // Phase 1: Compute per-column row structure of L (bottom-up in postorder)
+        //
+        // Build row adjacency: for each row i, which columns j > i have entry (i, j).
+        // The CSC stores upper triangle (row <= col), so entry (i, j) with i < j is
+        // in column j at row i. We invert this to get row_adj[i] = {j : (i,j) in A, j > i}.
+        let mut row_adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for j in 0..n {
+            for idx in csc.col_ptr[j]..csc.col_ptr[j + 1] {
+                let i = csc.row_idx[idx];
+                if i < j {
+                    row_adj[i].push(j);
+                }
+            }
+        }
+
+        let mut col_indices: Vec<Vec<usize>> = vec![Vec::new(); n];
+
+        for &j in &postorder {
+            let mut row_set: Vec<usize> = Vec::new();
+
+            // Original off-diagonal entries in row j (columns k > j)
+            row_set.extend_from_slice(&row_adj[j]);
+
+            // Merge children's row structures (indices > j)
+            for &child in &children[j] {
+                for &row in &col_indices[child] {
+                    if row > j {
+                        row_set.push(row);
+                    }
+                }
+            }
+
+            row_set.sort_unstable();
+            row_set.dedup();
+
+            let mut indices = Vec::with_capacity(1 + row_set.len());
+            indices.push(j);
+            indices.extend_from_slice(&row_set);
+            col_indices[j] = indices;
+        }
+
+        // Phase 2: Detect fundamental supernodes
+        // Column j+1 can be merged with column j's supernode if:
+        //   1. j+1 has exactly one child in the etree: j
+        //   2. col_indices[j+1] == col_indices[j] \ {j}
+        //      (i.e., same structure shifted by one)
+        let mut snode_id = vec![0usize; n]; // which supernode each column belongs to
+        let mut supernodes: Vec<Supernode> = Vec::new();
+
+        if n > 0 {
+            // Process in natural order (0..n) since supernodes are contiguous ranges
+            let mut col = 0;
+            while col < n {
+                let current_start = col;
+                let mut nfs = 1;
+
+                // Try to extend: can col+1 merge into this supernode?
+                while col + nfs < n {
+                    let next = col + nfs;
+                    let prev = col + nfs - 1;
+
+                    // Check: next has exactly one child = prev
+                    let next_children = &children[next];
+                    if next_children.len() != 1 || next_children[0] != prev {
+                        break;
+                    }
+
+                    let prev_idx = &col_indices[prev];
+                    let next_idx = &col_indices[next];
+
+                    if next_idx.len() + 1 != prev_idx.len() {
+                        break;
+                    }
+
+                    // Check tail match: next_idx[1..] == prev_idx[2..]
+                    let mut matches = true;
+                    for i in 1..next_idx.len() {
+                        if next_idx[i] != prev_idx[i + 1] {
+                            matches = false;
+                            break;
+                        }
+                    }
+                    if !matches {
+                        break;
+                    }
+
+                    nfs += 1;
+                }
+
+                // Create supernode
+                let snode_idx = supernodes.len();
+                let front_idx = &col_indices[current_start];
+                let snode = Supernode {
+                    start: current_start,
+                    nfs,
+                    front_indices: front_idx.clone(),
+                };
+                supernodes.push(snode);
+
+                for k in current_start..(current_start + nfs) {
+                    snode_id[k] = snode_idx;
+                }
+
+                col += nfs;
+            }
+        }
+
+        // Phase 3: Build supernodal elimination tree
+        let num_snodes = supernodes.len();
+        let mut snode_parent: Vec<Option<usize>> = vec![None; num_snodes];
+        let mut snode_children: Vec<Vec<usize>> = vec![Vec::new(); num_snodes];
+
+        for s in 0..num_snodes {
+            let last_col = supernodes[s].start + supernodes[s].nfs - 1;
+            if let Some(parent_col) = etree.parent[last_col] {
+                let parent_snode = snode_id[parent_col];
+                if parent_snode != s {
+                    snode_parent[s] = Some(parent_snode);
+                    snode_children[parent_snode].push(s);
+                }
+            }
+        }
+
+        // Deduplicate snode_children
+        for ch in snode_children.iter_mut() {
+            ch.sort_unstable();
+            ch.dedup();
+        }
+
+        // Supernodes are already in topological order (postorder) because
+        // we created them by scanning columns 0..n, and parents have higher indices.
+        // But let's verify and compute a proper postorder.
+        // Actually, since snode indices increase with column indices, and parents
+        // always have higher column indices, the natural snode order IS a valid postorder.
+
+        // Compute L nnz
+        let l_nnz: usize = col_indices
+            .iter()
+            .map(|fi| if fi.is_empty() { 0 } else { fi.len() - 1 })
+            .sum();
+
+        // Legacy fields
+        let front_indices = col_indices.clone();
+        let front_nfs = vec![1usize; n];
+
+        SymbolicFactorization {
+            n,
+            etree,
+            col_indices,
+            supernodes,
+            col_to_supernode: snode_id,
+            snode_parent,
+            snode_children,
+            l_nnz,
+            front_indices,
+            front_nfs,
+            postorder,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::coo::CooMatrix;
+    use crate::csc::CscMatrix;
+
+    fn csc_from_upper_triplets(n: usize, triplets: &[(usize, usize, f64)]) -> CscMatrix {
+        let rows: Vec<usize> = triplets.iter().map(|t| t.0).collect();
+        let cols: Vec<usize> = triplets.iter().map(|t| t.1).collect();
+        let vals: Vec<f64> = triplets.iter().map(|t| t.2).collect();
+        let coo = CooMatrix::new(n, rows, cols, vals).unwrap();
+        CscMatrix::from_coo(&coo)
+    }
+
+    #[test]
+    fn test_symbolic_tridiagonal() {
+        let csc = csc_from_upper_triplets(4, &[
+            (0, 0, 1.0), (0, 1, 1.0),
+            (1, 1, 1.0), (1, 2, 1.0),
+            (2, 2, 1.0), (2, 3, 1.0),
+            (3, 3, 1.0),
+        ]);
+        let sym = SymbolicFactorization::from_csc(&csc);
+
+        assert_eq!(sym.front_indices[0], vec![0, 1]);
+        assert_eq!(sym.front_indices[1], vec![1, 2]);
+        assert_eq!(sym.front_indices[2], vec![2, 3]);
+        assert_eq!(sym.front_indices[3], vec![3]);
+        assert_eq!(sym.l_nnz, 3);
+
+        // Tridiagonal: cols 2,3 merge (col 3's only child is col 2,
+        // and col_indices[3]={3} == col_indices[2]\{2}={3})
+        assert_eq!(sym.supernodes.len(), 3);
+    }
+
+    #[test]
+    fn test_symbolic_arrow() {
+        let csc = csc_from_upper_triplets(4, &[
+            (0, 0, 1.0), (0, 3, 1.0),
+            (1, 1, 1.0), (1, 3, 1.0),
+            (2, 2, 1.0), (2, 3, 1.0),
+            (3, 3, 1.0),
+        ]);
+        let sym = SymbolicFactorization::from_csc(&csc);
+
+        assert_eq!(sym.front_indices[0], vec![0, 3]);
+        assert_eq!(sym.front_indices[1], vec![1, 3]);
+        assert_eq!(sym.front_indices[2], vec![2, 3]);
+        assert_eq!(sym.front_indices[3], vec![3]);
+        assert_eq!(sym.l_nnz, 3);
+    }
+
+    #[test]
+    fn test_symbolic_fill_in() {
+        let csc = csc_from_upper_triplets(4, &[
+            (0, 0, 1.0), (0, 1, 1.0), (0, 3, 1.0),
+            (1, 1, 1.0),
+            (2, 2, 1.0), (2, 3, 1.0),
+            (3, 3, 1.0),
+        ]);
+        let sym = SymbolicFactorization::from_csc(&csc);
+
+        assert_eq!(sym.front_indices[0], vec![0, 1, 3]);
+        assert_eq!(sym.front_indices[1], vec![1, 3]);
+        assert_eq!(sym.front_indices[2], vec![2, 3]);
+        assert_eq!(sym.front_indices[3], vec![3]);
+        assert_eq!(sym.l_nnz, 4);
+
+        // Columns 0 and 1 can merge: col 0 = {0,1,3}, col 1 = {1,3} = {0,1,3}\{0}
+        // and col 1's only child is col 0.
+        assert_eq!(sym.supernodes.len(), 3); // {0,1}, {2}, {3}
+        assert_eq!(sym.supernodes[0].start, 0);
+        assert_eq!(sym.supernodes[0].nfs, 2);
+    }
+
+    #[test]
+    fn test_symbolic_diagonal() {
+        let csc = csc_from_upper_triplets(3, &[
+            (0, 0, 1.0), (1, 1, 1.0), (2, 2, 1.0),
+        ]);
+        let sym = SymbolicFactorization::from_csc(&csc);
+        for j in 0..3 {
+            assert_eq!(sym.front_indices[j], vec![j]);
+        }
+        assert_eq!(sym.l_nnz, 0);
+    }
+
+    #[test]
+    fn test_symbolic_dense_3x3() {
+        let csc = csc_from_upper_triplets(3, &[
+            (0, 0, 1.0), (0, 1, 1.0), (0, 2, 1.0),
+            (1, 1, 1.0), (1, 2, 1.0),
+            (2, 2, 1.0),
+        ]);
+        let sym = SymbolicFactorization::from_csc(&csc);
+
+        assert_eq!(sym.front_indices[0], vec![0, 1, 2]);
+        assert_eq!(sym.front_indices[1], vec![1, 2]);
+        assert_eq!(sym.front_indices[2], vec![2]);
+        assert_eq!(sym.l_nnz, 3);
+
+        // Dense 3x3: all columns merge into one supernode
+        assert_eq!(sym.supernodes.len(), 1);
+        assert_eq!(sym.supernodes[0].start, 0);
+        assert_eq!(sym.supernodes[0].nfs, 3);
+    }
+
+    #[test]
+    fn test_supernodal_parent() {
+        // Fill-in case: supernodes {0,1}, {2}, {3}
+        let csc = csc_from_upper_triplets(4, &[
+            (0, 0, 1.0), (0, 1, 1.0), (0, 3, 1.0),
+            (1, 1, 1.0),
+            (2, 2, 1.0), (2, 3, 1.0),
+            (3, 3, 1.0),
+        ]);
+        let sym = SymbolicFactorization::from_csc(&csc);
+
+        // Snode 0 = {0,1}, snode 1 = {2}, snode 2 = {3}
+        // Parent of snode 0 (last col=1, etree parent=3) -> snode of col 3 = snode 2
+        // Parent of snode 1 (last col=2, etree parent=3) -> snode 2
+        assert_eq!(sym.snode_parent[0], Some(2));
+        assert_eq!(sym.snode_parent[1], Some(2));
+        assert_eq!(sym.snode_parent[2], None); // root
+    }
+}
