@@ -3,7 +3,7 @@ use crate::csc::CscMatrix;
 /// Elimination tree for a sparse symmetric matrix.
 #[derive(Debug, Clone)]
 pub struct EliminationTree {
-    /// parent[i] = parent of node i, or NONE if i is a root.
+    /// `parent[i]` = parent of node i, or None if i is a root.
     pub parent: Vec<Option<usize>>,
     /// Number of nodes.
     pub n: usize,

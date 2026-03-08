@@ -27,7 +27,7 @@ pub struct SymbolicFactorization {
     pub supernodes: Vec<Supernode>,
     /// For each column j, which supernode index it belongs to.
     pub col_to_supernode: Vec<usize>,
-    /// Supernodal elimination tree: parent[s] = parent supernode of s, or None.
+    /// Supernodal elimination tree: `snode_parent[s]` = parent supernode of s, or None.
     pub snode_parent: Vec<Option<usize>>,
     /// Children of each supernode.
     pub snode_children: Vec<Vec<usize>>,

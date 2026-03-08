@@ -1,4 +1,6 @@
+/// Approximate minimum degree ordering.
 pub mod amd;
+/// Identity (no reordering) permutation.
 pub mod natural;
 
 use crate::csc::CscMatrix;
@@ -13,7 +15,7 @@ pub enum Ordering {
 }
 
 /// Compute a fill-reducing permutation for the given symmetric CSC matrix.
-/// Returns (perm, perm_inv) where perm[new] = old and perm_inv[old] = new.
+/// Returns `(perm, perm_inv)` where `perm[new] = old` and `perm_inv[old] = new`.
 pub fn compute_ordering(csc: &CscMatrix, ordering: Ordering) -> (Vec<usize>, Vec<usize>) {
     match ordering {
         Ordering::Amd => amd::amd_ordering(csc),
@@ -22,7 +24,7 @@ pub fn compute_ordering(csc: &CscMatrix, ordering: Ordering) -> (Vec<usize>, Vec
 }
 
 /// Apply a symmetric permutation to a CSC matrix: P * A * P^T.
-/// perm_inv[old] = new position.
+/// `perm_inv[old]` = new position.
 /// Returns a new CSC matrix with permuted indices.
 pub fn permute_symmetric_csc(csc: &CscMatrix, _perm: &[usize], perm_inv: &[usize]) -> CscMatrix {
     let n = csc.n;

@@ -6,7 +6,7 @@ use crate::coo::CooMatrix;
 pub struct CscMatrix {
     /// Matrix dimension (n x n).
     pub n: usize,
-    /// Column pointers (length n+1). Column j has entries col_ptr[j]..col_ptr[j+1].
+    /// Column pointers (length n+1). Column j has entries `col_ptr[j]..col_ptr[j+1]`.
     pub col_ptr: Vec<usize>,
     /// Row indices (sorted within each column).
     pub row_idx: Vec<usize>,

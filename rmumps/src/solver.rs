@@ -2,6 +2,7 @@ use crate::coo::CooMatrix;
 use crate::csc::CscMatrix;
 use crate::numeric::{multifrontal_factor, NumericFactorization};
 use crate::ordering::{self, Ordering};
+use crate::scaling::{self, Scaling, ScalingFactors};
 use crate::solve::multifrontal_solve;
 use crate::symbolic::SymbolicFactorization;
 use crate::{Inertia, SolverError};
@@ -13,6 +14,8 @@ pub struct SolverOptions {
     pub ordering: Ordering,
     /// Number of iterative refinement steps (default: 2).
     pub refine_steps: usize,
+    /// Matrix scaling method applied before factorization.
+    pub scaling: Scaling,
 }
 
 impl Default for SolverOptions {
@@ -20,6 +23,7 @@ impl Default for SolverOptions {
         Self {
             ordering: Ordering::Amd,
             refine_steps: 2,
+            scaling: Scaling::None,
         }
     }
 }
@@ -44,9 +48,12 @@ pub struct Solver {
     numeric: Option<NumericFactorization>,
     /// Permuted CSC matrix (stored for iterative refinement).
     permuted_csc: Option<CscMatrix>,
+    /// Scaling factors (computed during factor, if scaling is enabled).
+    scaling_factors: Option<ScalingFactors>,
 }
 
 impl Solver {
+    /// Create a new solver with the given options.
     pub fn new(options: SolverOptions) -> Self {
         Self {
             options,
@@ -55,6 +62,7 @@ impl Solver {
             symbolic: None,
             numeric: None,
             permuted_csc: None,
+            scaling_factors: None,
         }
     }
 
@@ -75,6 +83,7 @@ impl Solver {
 
     /// Numeric factorization using the most recent symbolic analysis.
     /// The matrix must have the same sparsity pattern as the one passed to `analyze`.
+    /// If scaling is enabled, computes scaling factors and applies them before factorization.
     /// Returns the inertia of the matrix.
     pub fn factor(&mut self, matrix: &CooMatrix) -> Result<Inertia, SolverError> {
         let sym = self.symbolic.as_ref().ok_or_else(|| {
@@ -82,7 +91,21 @@ impl Solver {
         })?;
 
         let csc = CscMatrix::from_coo(matrix);
-        let permuted_csc = ordering::permute_symmetric_csc(&csc, &self.perm, &self.perm_inv);
+
+        // Compute and apply scaling if enabled
+        let sf = scaling::compute_scaling(&csc, self.options.scaling);
+        let mut permuted_csc = ordering::permute_symmetric_csc(&csc, &self.perm, &self.perm_inv);
+        if let Some(ref sf) = sf {
+            // Apply scaling in the permuted space: need to permute the scaling vector too
+            let mut perm_d = vec![0.0; csc.n];
+            for i in 0..csc.n {
+                perm_d[self.perm_inv[i]] = sf.d[i];
+            }
+            let perm_sf = ScalingFactors { d: perm_d };
+            perm_sf.scale_csc(&mut permuted_csc);
+        }
+        self.scaling_factors = sf;
+
         let numeric = multifrontal_factor(&permuted_csc, sym);
         let inertia = numeric.inertia;
         self.numeric = Some(numeric);
@@ -91,6 +114,8 @@ impl Solver {
     }
 
     /// Solve Ax = b using the most recent factorization.
+    /// If scaling was applied during factorization, the solve automatically
+    /// handles scaling/unscaling: solves (DAD)y = Db, returns x = Dy.
     pub fn solve(&self, rhs: &[f64], solution: &mut [f64]) -> Result<(), SolverError> {
         let sym = self.symbolic.as_ref().ok_or_else(|| {
             SolverError::InvalidState("must call analyze() before solve()".into())
@@ -107,17 +132,30 @@ impl Solver {
             });
         }
 
+        // Scale RHS if scaling is active: b_scaled = D * b
+        let scaled_rhs;
+        let effective_rhs = if let Some(ref sf) = self.scaling_factors {
+            scaled_rhs = {
+                let mut sr = vec![0.0; n];
+                sf.scale_rhs(rhs, &mut sr);
+                sr
+            };
+            &scaled_rhs
+        } else {
+            rhs
+        };
+
         // Apply permutation to RHS: permuted_rhs[new_i] = rhs[old_i]
         let mut permuted_rhs = vec![0.0; n];
         for i in 0..n {
-            permuted_rhs[self.perm_inv[i]] = rhs[i];
+            permuted_rhs[self.perm_inv[i]] = effective_rhs[i];
         }
 
         // Solve in permuted space
         let mut permuted_sol = vec![0.0; n];
         multifrontal_solve(num, sym, &permuted_rhs, &mut permuted_sol)?;
 
-        // Iterative refinement in permuted space
+        // Iterative refinement in permuted space (using the scaled+permuted matrix)
         if self.options.refine_steps > 0 {
             if let Some(ref pcsc) = self.permuted_csc {
                 let mut residual = vec![0.0; n];
@@ -139,8 +177,16 @@ impl Solver {
         }
 
         // Apply inverse permutation to solution
+        let mut unpermuted = vec![0.0; n];
         for i in 0..n {
-            solution[i] = permuted_sol[self.perm_inv[i]];
+            unpermuted[i] = permuted_sol[self.perm_inv[i]];
+        }
+
+        // Unscale solution if scaling is active: x = D * y
+        if let Some(ref sf) = self.scaling_factors {
+            sf.unscale_solution(&unpermuted, solution);
+        } else {
+            solution.copy_from_slice(&unpermuted);
         }
 
         Ok(())
@@ -159,12 +205,25 @@ impl Solver {
     /// Numeric factorization from a pre-built CSC matrix (skips COO→CSC conversion).
     /// The CSC must have the same sparsity pattern as the one used during `analyze`.
     /// This is the fast path for IPM inertia correction, where only values change.
+    /// If scaling is enabled, computes and applies scaling before factorization.
     pub fn factor_csc(&mut self, csc: &CscMatrix) -> Result<Inertia, SolverError> {
         let sym = self.symbolic.as_ref().ok_or_else(|| {
             SolverError::InvalidState("must call analyze() before factor_csc()".into())
         })?;
 
-        let permuted_csc = ordering::permute_symmetric_csc(csc, &self.perm, &self.perm_inv);
+        // Compute and apply scaling if enabled
+        let sf = scaling::compute_scaling(csc, self.options.scaling);
+        let mut permuted_csc = ordering::permute_symmetric_csc(csc, &self.perm, &self.perm_inv);
+        if let Some(ref sf) = sf {
+            let mut perm_d = vec![0.0; csc.n];
+            for i in 0..csc.n {
+                perm_d[self.perm_inv[i]] = sf.d[i];
+            }
+            let perm_sf = ScalingFactors { d: perm_d };
+            perm_sf.scale_csc(&mut permuted_csc);
+        }
+        self.scaling_factors = sf;
+
         let numeric = multifrontal_factor(&permuted_csc, sym);
         let inertia = numeric.inertia;
         self.numeric = Some(numeric);
@@ -190,6 +249,7 @@ impl Solver {
         self.symbolic = None;
         self.numeric = None;
         self.permuted_csc = None;
+        self.scaling_factors = None;
     }
 }
 
@@ -377,5 +437,82 @@ mod tests {
         let mut x = [0.0; 8];
         solver.solve(&b, &mut x).unwrap();
         check_residual(&coo, &x, &b, 1e-10);
+    }
+
+    #[test]
+    fn test_solver_with_ruiz_scaling() {
+        // Ill-conditioned KKT: H = diag(1e6, 1e-6), A = [1, 1]
+        let coo = make_coo(3, &[
+            (0, 0, 1e6), (1, 1, 1e-6),
+            (0, 2, 1.0), (1, 2, 1.0),
+            (2, 2, 0.0),
+        ]);
+        let opts = SolverOptions {
+            scaling: crate::scaling::Scaling::Ruiz { max_iter: 10 },
+            ..Default::default()
+        };
+        let mut solver = Solver::new(opts);
+        let inertia = solver.analyze_and_factor(&coo).unwrap();
+        assert_eq!(inertia.positive, 2);
+        assert_eq!(inertia.negative, 1);
+
+        let b = [1e6 + 1.0, 1e-6 + 1.0, 2.0]; // x = [1, 1, 0]
+        let mut x = [0.0; 3];
+        solver.solve(&b, &mut x).unwrap();
+        check_residual(&coo, &x, &b, 1e-4);
+    }
+
+    #[test]
+    fn test_solver_with_diagonal_scaling() {
+        // Same problem with diagonal scaling
+        let coo = make_coo(3, &[
+            (0, 0, 1e4), (0, 1, 1.0),
+            (1, 1, 1e-4), (1, 2, 1e-2),
+            (2, 2, 1.0),
+        ]);
+        let opts = SolverOptions {
+            scaling: crate::scaling::Scaling::Diagonal,
+            ..Default::default()
+        };
+        let mut solver = Solver::new(opts);
+        solver.analyze_and_factor(&coo).unwrap();
+
+        let b = [1.0, 2.0, 3.0];
+        let mut x = [0.0; 3];
+        solver.solve(&b, &mut x).unwrap();
+        check_residual(&coo, &x, &b, 1e-8);
+    }
+
+    #[test]
+    fn test_solver_scaling_matches_unscaled() {
+        // Well-conditioned problem: scaling should give same answer
+        let coo = make_coo(3, &[
+            (0, 0, 4.0), (0, 1, 2.0), (0, 2, 1.0),
+            (1, 1, 5.0), (1, 2, 3.0),
+            (2, 2, 6.0),
+        ]);
+
+        let b = [8.0, 18.0, 25.0];
+
+        // Solve without scaling
+        let mut solver1 = Solver::new(SolverOptions::default());
+        solver1.analyze_and_factor(&coo).unwrap();
+        let mut x1 = [0.0; 3];
+        solver1.solve(&b, &mut x1).unwrap();
+
+        // Solve with Ruiz scaling
+        let opts = SolverOptions {
+            scaling: crate::scaling::Scaling::Ruiz { max_iter: 10 },
+            ..Default::default()
+        };
+        let mut solver2 = Solver::new(opts);
+        solver2.analyze_and_factor(&coo).unwrap();
+        let mut x2 = [0.0; 3];
+        solver2.solve(&b, &mut x2).unwrap();
+
+        for i in 0..3 {
+            assert!((x1[i] - x2[i]).abs() < 1e-10,
+                "x[{}]: unscaled={:.10e}, scaled={:.10e}", i, x1[i], x2[i]);
+        }
     }
 }

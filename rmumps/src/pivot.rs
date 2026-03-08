@@ -92,7 +92,7 @@ pub struct BunchKaufmanResult {
     pub l: DenseMat,
     /// Diagonal of D (1x1 blocks).
     pub d_diag: Vec<f64>,
-    /// Off-diagonal of D (2x2 blocks). d_offdiag[k] != 0 means (k, k+1) is a 2x2 block.
+    /// Off-diagonal of D (2x2 blocks). `d_offdiag[k]` != 0 means (k, k+1) is a 2x2 block.
     pub d_offdiag: Vec<f64>,
     /// Pivot permutation: original index -> factored position.
     pub perm: Vec<usize>,

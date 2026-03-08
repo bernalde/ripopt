@@ -2,7 +2,9 @@
 /// Entry (i, j) is at index j * nrows + i.
 #[derive(Debug, Clone)]
 pub struct DenseMat {
+    /// Number of rows.
     pub nrows: usize,
+    /// Number of columns.
     pub ncols: usize,
     /// Column-major data, length nrows * ncols.
     pub data: Vec<f64>,
@@ -18,16 +20,19 @@ impl DenseMat {
         }
     }
 
+    /// Get element at row `i`, column `j`.
     #[inline]
     pub fn get(&self, i: usize, j: usize) -> f64 {
         self.data[j * self.nrows + i]
     }
 
+    /// Set element at row `i`, column `j` to `val`.
     #[inline]
     pub fn set(&mut self, i: usize, j: usize, val: f64) {
         self.data[j * self.nrows + i] = val;
     }
 
+    /// Add `val` to element at row `i`, column `j`.
     #[inline]
     pub fn add(&mut self, i: usize, j: usize, val: f64) {
         self.data[j * self.nrows + i] += val;
@@ -423,7 +428,7 @@ unsafe fn microkernel_nt_sub(
 /// C is m x m symmetric; both triangles are updated.
 ///
 /// Uses a cache-friendly column-oriented approach: for each column p of L21,
-/// scale by D[p] and do a rank-1 symmetric update.
+/// scale by D\[p\] and do a rank-1 symmetric update.
 pub fn dense_schur_complement(
     m: usize,
     k: usize,
