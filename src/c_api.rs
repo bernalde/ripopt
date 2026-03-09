@@ -439,6 +439,7 @@ pub unsafe extern "C" fn ripopt_add_int_option(
         "watchdog_trial_iter_max" => p.options.watchdog_trial_iter_max = val as usize,
         "sparse_threshold" => p.options.sparse_threshold = val as usize,
         "restoration_max_iter" => p.options.restoration_max_iter = val as usize,
+        "gondzio_mcc_max" => p.options.gondzio_mcc_max = val as usize,
         _ => return 0,
     }
     1
@@ -511,6 +512,12 @@ pub unsafe extern "C" fn ripopt_add_str_option(
         }
         "enable_lbfgs_hessian_fallback" => {
             p.options.enable_lbfgs_hessian_fallback = value == "yes";
+        }
+        "mehrotra_pc" => {
+            p.options.mehrotra_pc = value == "yes";
+        }
+        "proactive_infeasibility_detection" => {
+            p.options.proactive_infeasibility_detection = value == "yes";
         }
         _ => return 0,
     }

@@ -478,6 +478,92 @@ pub fn recover_dz(
     (dz_l, dz_u)
 }
 
+/// Compute the affine-scaling (μ=0) predictor RHS for Mehrotra predictor-corrector.
+///
+/// Returns a copy of the existing KKT RHS with the centering terms (μ/s) removed.
+/// Solving with this RHS gives the pure-Newton (affine-scaling) direction that
+/// can be used to probe a better barrier parameter μ.
+///
+/// Cost: O(n) to build — extremely cheap. The expensive part is the triangular solve.
+pub fn affine_predictor_rhs(
+    rhs: &[f64],
+    x: &[f64],
+    x_l: &[f64],
+    x_u: &[f64],
+    mu: f64,
+) -> Vec<f64> {
+    let n = x.len();
+    let mut rhs_aff = rhs.to_vec();
+    // Remove the μ/s centering terms from the primal block
+    for i in 0..n {
+        if x_l[i].is_finite() {
+            let s_l = (x[i] - x_l[i]).max(1e-20);
+            rhs_aff[i] -= mu / s_l;
+        }
+        if x_u[i].is_finite() {
+            let s_u = (x_u[i] - x[i]).max(1e-20);
+            rhs_aff[i] += mu / s_u;
+        }
+    }
+    rhs_aff
+}
+
+/// Build a new KKT RHS with a different barrier parameter μ_new.
+///
+/// Given the existing RHS assembled with μ_old, returns a new RHS for μ_new.
+/// Only the primal block (first n entries) changes: the μ/s centering terms
+/// are updated from μ_old/s to μ_new/s.
+pub fn rebuild_rhs_with_mu(
+    rhs: &[f64],
+    x: &[f64],
+    x_l: &[f64],
+    x_u: &[f64],
+    mu_old: f64,
+    mu_new: f64,
+) -> Vec<f64> {
+    let n = x.len();
+    let mut rhs_new = rhs.to_vec();
+    let delta_mu = mu_new - mu_old;
+    for i in 0..n {
+        if x_l[i].is_finite() {
+            let s_l = (x[i] - x_l[i]).max(1e-20);
+            rhs_new[i] += delta_mu / s_l;
+        }
+        if x_u[i].is_finite() {
+            let s_u = (x_u[i] - x[i]).max(1e-20);
+            rhs_new[i] -= delta_mu / s_u;
+        }
+    }
+    rhs_new
+}
+
+/// Solve the factored system with a custom RHS (backsolve only, no re-factorization).
+///
+/// Used for Mehrotra predictor-corrector and Gondzio centrality corrections —
+/// both need extra backsolves with the already-factored KKT matrix.
+///
+/// Returns (dx, dy) where dx is the primal block (first n entries) and dy the dual.
+pub fn solve_with_custom_rhs(
+    n: usize,
+    dim: usize,
+    solver: &mut dyn LinearSolver,
+    rhs: &[f64],
+) -> Result<(Vec<f64>, Vec<f64>), SolverError> {
+    if rhs.iter().any(|v| v.is_nan() || v.is_infinite()) {
+        return Err(SolverError::NumericalFailure(
+            "Custom RHS contains NaN/Inf".to_string(),
+        ));
+    }
+    let mut solution = vec![0.0; dim];
+    solver.solve(rhs, &mut solution)?;
+    if solution.iter().any(|v| v.is_nan() || v.is_infinite()) {
+        return Err(SolverError::NumericalFailure(
+            "Custom solve solution contains NaN/Inf".to_string(),
+        ));
+    }
+    Ok((solution[..n].to_vec(), solution[n..].to_vec()))
+}
+
 /// Condensed KKT system for m >> n problems (Schur complement).
 ///
 /// Instead of factoring the full (n+m)×(n+m) KKT system, we condense to n×n:

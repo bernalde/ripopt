@@ -1754,6 +1754,10 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     // Consecutive iterations with obj < -1e20 for robust unbounded detection
     let mut consecutive_unbounded: usize = 0;
 
+    // Consecutive iterations where theta (primal infeasibility) stagnated.
+    // Used by proactive infeasibility detection to exit early.
+    let mut theta_stall_count: usize = 0;
+
     // Best feasible point tracking: save the best (lowest obj) point that is feasible
     let mut best_x: Option<Vec<f64>> = None;
     let mut best_obj: f64 = f64::INFINITY;
@@ -2143,6 +2147,60 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         // Track whether we've ever been feasible
         if primal_inf < options.constr_viol_tol {
             ever_feasible = true;
+        }
+
+        // Proactive infeasibility detection: if θ has stagnated for many consecutive
+        // iterations AND the gradient of the violation is near-zero, declare infeasibility
+        // earlier rather than burning iterations until restoration eventually fires.
+        if options.proactive_infeasibility_detection
+            && !ever_feasible
+            && m > 0
+            && iteration >= 50
+            && primal_inf > options.constr_viol_tol
+            && theta_history.len() >= theta_history_len
+        {
+            let theta_min_h = theta_history.iter().cloned().fold(f64::INFINITY, f64::min);
+            let theta_max_h = theta_history.iter().cloned().fold(0.0f64, f64::max);
+            // "Stagnated" = less than 1% relative variation over the history window
+            if theta_max_h > 0.0 && (theta_max_h - theta_min_h) < 0.01 * primal_inf {
+                theta_stall_count += 1;
+            } else {
+                theta_stall_count = 0;
+            }
+            // After 10 consecutive stagnation windows, check stationarity of ∇θ
+            if theta_stall_count >= 10 {
+                let mut violation = vec![0.0; m];
+                for i in 0..m {
+                    let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
+                        && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
+                    if is_eq {
+                        violation[i] = state.g[i] - state.g_l[i];
+                    } else if state.g_l[i].is_finite() && state.g[i] < state.g_l[i] {
+                        violation[i] = state.g[i] - state.g_l[i];
+                    } else if state.g_u[i].is_finite() && state.g[i] > state.g_u[i] {
+                        violation[i] = state.g[i] - state.g_u[i];
+                    }
+                }
+                let mut grad_theta = vec![0.0; n];
+                for (idx, (&row, &col)) in
+                    state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
+                {
+                    grad_theta[col] += state.jac_vals[idx] * violation[row];
+                }
+                let grad_theta_norm = grad_theta.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+                let stationarity_tol = 1e-3 * primal_inf.max(1.0);
+                if grad_theta_norm < stationarity_tol {
+                    log::info!(
+                        "Proactive infeasibility at iter {}: θ stagnated at {:.2e}, ‖∇θ‖={:.2e}",
+                        iteration, primal_inf, grad_theta_norm
+                    );
+                    return make_result(&state, SolveStatus::LocalInfeasibility);
+                }
+                // Stationarity not met — reset counter to check again in another window
+                theta_stall_count = 0;
+            }
+        } else if ever_feasible {
+            theta_stall_count = 0;
         }
 
         // Unbounded detection: objective diverging negatively with satisfied constraints.
@@ -2560,6 +2618,109 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 }
             }
         } else {
+            // Mehrotra predictor-corrector (PC): probe the affine-scaling direction to
+            // estimate a better barrier parameter μ before solving the main step.
+            //
+            // Algorithm:
+            //   1. Solve affine predictor (μ=0 in RHS) — same factored matrix, new RHS.
+            //   2. Compute max step α_aff for the predictor using fraction-to-boundary.
+            //   3. Compute μ_aff = average complementarity after the affine step.
+            //   4. Set σ = (μ_aff / μ)³  (centering parameter).
+            //   5. Update KKT RHS to use μ_new = σ·μ (≤ μ → more aggressive decrease).
+            //   6. Solve the main corrector with the improved RHS.
+            //
+            // Cost: one extra triangular solve (no re-factorization).
+            // Reference: Mehrotra (1992, SIAM J. Optim.); Nocedal/Wächter (2006).
+            if options.mehrotra_pc {
+                let has_bounds = (0..n).any(|i| state.x_l[i].is_finite() || state.x_u[i].is_finite());
+                if has_bounds {
+                    // Scope the immutable borrow so it ends before the mutable update below.
+                    let pc_rhs: Option<Vec<f64>> = {
+                        let kkt = kkt_system_opt.as_ref().unwrap();
+                        let rhs_aff = kkt::affine_predictor_rhs(
+                            &kkt.rhs, &state.x, &state.x_l, &state.x_u, state.mu,
+                        );
+                        if let Ok((dx_aff, _)) = kkt::solve_with_custom_rhs(
+                            kkt.n, kkt.dim, lin_solver.as_mut(), &rhs_aff,
+                        ) {
+                            // Complementarity steps for the affine predictor (μ=0)
+                            let (dz_l_aff, dz_u_aff) = kkt::recover_dz(
+                                &state.x, &state.x_l, &state.x_u,
+                                &state.z_l, &state.z_u, &dx_aff, 0.0,
+                            );
+                            // Compute α_aff = max step along affine direction
+                            let tau_aff = 1.0 - 1e-3;
+                            let aff_zl = filter::fraction_to_boundary(&state.z_l, &dz_l_aff, tau_aff);
+                            let aff_zu = filter::fraction_to_boundary(&state.z_u, &dz_u_aff, tau_aff);
+                            let mut alpha_aff = aff_zl.min(aff_zu).min(1.0);
+                            for i in 0..n {
+                                if state.x_l[i].is_finite() && dx_aff[i] < 0.0 {
+                                    let s = (state.x[i] - state.x_l[i]).max(1e-20);
+                                    alpha_aff = alpha_aff.min(tau_aff * s / (-dx_aff[i]));
+                                }
+                                if state.x_u[i].is_finite() && dx_aff[i] > 0.0 {
+                                    let s = (state.x_u[i] - state.x[i]).max(1e-20);
+                                    alpha_aff = alpha_aff.min(tau_aff * s / dx_aff[i]);
+                                }
+                            }
+                            alpha_aff = alpha_aff.clamp(0.0, 1.0);
+                            // Compute μ_aff = average complementarity after affine step
+                            let mut mu_aff_sum = 0.0_f64;
+                            let mut nb: usize = 0;
+                            for i in 0..n {
+                                if state.x_l[i].is_finite() {
+                                    let s = (state.x[i] + alpha_aff * dx_aff[i]
+                                        - state.x_l[i]).max(1e-20);
+                                    let z = (state.z_l[i] + alpha_aff * dz_l_aff[i]).max(1e-20);
+                                    mu_aff_sum += s * z;
+                                    nb += 1;
+                                }
+                                if state.x_u[i].is_finite() {
+                                    let s = (state.x_u[i] - state.x[i]
+                                        - alpha_aff * dx_aff[i]).max(1e-20);
+                                    let z = (state.z_u[i] + alpha_aff * dz_u_aff[i]).max(1e-20);
+                                    mu_aff_sum += s * z;
+                                    nb += 1;
+                                }
+                            }
+                            if nb > 0 {
+                                let mu_aff = mu_aff_sum / nb as f64;
+                                let sigma = (mu_aff / state.mu).powi(3).clamp(0.0, 1.0);
+                                let mu_pc = (sigma * state.mu).max(options.mu_min);
+                                // Apply PC only when the centering parameter suggests
+                                // a meaningful μ decrease (σ < 0.95) and the probe is
+                                // not degenerate. Skip early iterations to avoid
+                                // amplifying noise at poorly-scaled starting points.
+                                // Also skip when sigma is very small (near convergence,
+                                // α_aff → 1) to avoid over-aggressive barrier decrease.
+                                let sigma_skip_min = 0.05_f64;
+                                if mu_pc < state.mu * 0.95 && sigma >= sigma_skip_min && iteration >= 2 {
+                                    log::debug!(
+                                        "Mehrotra PC iter {}: σ={:.4} α_aff={:.4} μ: {:.2e}→{:.2e}",
+                                        iteration, sigma, alpha_aff, state.mu, mu_pc
+                                    );
+                                    Some(kkt::rebuild_rhs_with_mu(
+                                        &kkt.rhs, &state.x, &state.x_l, &state.x_u,
+                                        state.mu, mu_pc,
+                                    ))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    }; // immutable borrow of kkt_system_opt ends here
+
+                    // Apply the improved RHS to the KKT system
+                    if let Some(new_rhs) = pc_rhs {
+                        kkt_system_opt.as_mut().unwrap().rhs = new_rhs;
+                    }
+                }
+            }
+
             let dir_result = kkt::solve_for_direction(kkt_system_opt.as_ref().unwrap(), lin_solver.as_mut());
             match dir_result {
                 Ok(d) => d,
@@ -2606,6 +2767,144 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         state.dy = dy;
         state.dz_l = dz_l;
         state.dz_u = dz_u;
+
+        // Gondzio multiple centrality corrections (MCC).
+        //
+        // After computing the main search direction (possibly Mehrotra-corrected),
+        // perform up to `gondzio_mcc_max` additional centrality corrections.
+        // Each correction uses the SAME factored KKT matrix (one extra backsolve each)
+        // to drive complementarity pairs that are far from μ back toward the central path.
+        //
+        // Acceptance criterion: the correction is accepted only if it does not reduce
+        // the maximum step length by more than 10%.
+        //
+        // Reference: Gondzio (1994, Comput. Optim. Appl.); Gondzio (2007).
+        if options.gondzio_mcc_max > 0 {
+            if let Some(ref kkt) = kkt_system_opt {
+                // Compute a preliminary max step for the current direction
+                let tau_mcc = if mu_state.mode == MuMode::Free {
+                    let nlp_error = primal_inf + dual_inf + compl_inf_best;
+                    (1.0 - nlp_error).max(options.tau_min)
+                } else {
+                    (1.0 - state.mu).max(options.tau_min)
+                };
+                let mcc_zl = filter::fraction_to_boundary(&state.z_l, &state.dz_l, tau_mcc);
+                let mcc_zu = filter::fraction_to_boundary(&state.z_u, &state.dz_u, tau_mcc);
+                let mut alpha_mcc = mcc_zl.min(mcc_zu).min(1.0);
+                for i in 0..n {
+                    if state.x_l[i].is_finite() && state.dx[i] < 0.0 {
+                        let s = state.x[i] - state.x_l[i];
+                        alpha_mcc = alpha_mcc.min(tau_mcc * s / (-state.dx[i]));
+                    }
+                    if state.x_u[i].is_finite() && state.dx[i] > 0.0 {
+                        let s = state.x_u[i] - state.x[i];
+                        alpha_mcc = alpha_mcc.min(tau_mcc * s / state.dx[i]);
+                    }
+                }
+                alpha_mcc = alpha_mcc.clamp(0.0, 1.0);
+
+                let mu_target = state.mu;
+                let beta_min = 0.01_f64;  // centrality lower bound: z·s ≥ β_min·μ
+                let beta_max = 100.0_f64; // centrality upper bound: z·s ≤ β_max·μ
+
+                for _mcc_iter in 0..options.gondzio_mcc_max {
+                    // Build centrality correction RHS: target z·s → μ for outliers
+                    let mut rhs_mcc = vec![0.0_f64; kkt.dim];
+                    let mut needs_correction = false;
+
+                    for i in 0..n {
+                        if state.x_l[i].is_finite() {
+                            let s_t = (state.x[i] + alpha_mcc * state.dx[i]
+                                - state.x_l[i]).max(1e-20);
+                            let z_t = (state.z_l[i] + alpha_mcc * state.dz_l[i]).max(1e-20);
+                            let c = z_t * s_t;
+                            if c < beta_min * mu_target || c > beta_max * mu_target {
+                                rhs_mcc[i] += (mu_target - c) / s_t;
+                                needs_correction = true;
+                            }
+                        }
+                        if state.x_u[i].is_finite() {
+                            let s_t = (state.x_u[i] - state.x[i]
+                                - alpha_mcc * state.dx[i]).max(1e-20);
+                            let z_t = (state.z_u[i] + alpha_mcc * state.dz_u[i]).max(1e-20);
+                            let c = z_t * s_t;
+                            if c < beta_min * mu_target || c > beta_max * mu_target {
+                                rhs_mcc[i] -= (mu_target - c) / s_t;
+                                needs_correction = true;
+                            }
+                        }
+                    }
+
+                    if !needs_correction {
+                        break;
+                    }
+
+                    // Solve for the centrality correction direction
+                    match kkt::solve_with_custom_rhs(kkt.n, kkt.dim, lin_solver.as_mut(), &rhs_mcc) {
+                        Ok((ddx, ddy)) => {
+                            // Compute bound-multiplier corrections from the Newton step:
+                            //   S_l · ddz_l + Z_l · ddx = 0  (no centering in correction)
+                            //   ddz_l[i] = -(z_l[i] / s_l[i]) * ddx[i]
+                            //   ddz_u[i] =  (z_u[i] / s_u[i]) * ddx[i]
+                            // NOTE: do NOT use recover_dz(mu=0) here — that adds the
+                            // affine centering term (-z_l[i]) which would drive z_l to zero.
+                            let mut ddz_l = vec![0.0_f64; n];
+                            let mut ddz_u = vec![0.0_f64; n];
+                            for i in 0..n {
+                                if state.x_l[i].is_finite() {
+                                    let s_l = (state.x[i] - state.x_l[i]).max(1e-20);
+                                    ddz_l[i] = -(state.z_l[i] / s_l) * ddx[i];
+                                }
+                                if state.x_u[i].is_finite() {
+                                    let s_u = (state.x_u[i] - state.x[i]).max(1e-20);
+                                    ddz_u[i] = (state.z_u[i] / s_u) * ddx[i];
+                                }
+                            }
+
+                            // Tentatively update direction
+                            let mut dx_c: Vec<f64> = state.dx.iter().zip(ddx.iter()).map(|(a, b)| a + b).collect();
+                            let dy_c: Vec<f64> = state.dy.iter().zip(ddy.iter()).map(|(a, b)| a + b).collect();
+                            let dz_l_c: Vec<f64> = state.dz_l.iter().zip(ddz_l.iter()).map(|(a, b)| a + b).collect();
+                            let dz_u_c: Vec<f64> = state.dz_u.iter().zip(ddz_u.iter()).map(|(a, b)| a + b).collect();
+
+                            // Compute new alpha for the corrected direction
+                            let new_zl = filter::fraction_to_boundary(&state.z_l, &dz_l_c, tau_mcc);
+                            let new_zu = filter::fraction_to_boundary(&state.z_u, &dz_u_c, tau_mcc);
+                            let mut alpha_new = new_zl.min(new_zu).min(1.0);
+                            for i in 0..n {
+                                if state.x_l[i].is_finite() && dx_c[i] < 0.0 {
+                                    let s = state.x[i] - state.x_l[i];
+                                    alpha_new = alpha_new.min(tau_mcc * s / (-dx_c[i]));
+                                }
+                                if state.x_u[i].is_finite() && dx_c[i] > 0.0 {
+                                    let s = state.x_u[i] - state.x[i];
+                                    alpha_new = alpha_new.min(tau_mcc * s / dx_c[i]);
+                                }
+                            }
+                            alpha_new = alpha_new.clamp(0.0, 1.0);
+
+                            // Accept only if the correction doesn't shrink alpha by >10%
+                            if alpha_new >= 0.9 * alpha_mcc {
+                                // dx_c needs explicit type annotation for vec addition
+                                let _ = &mut dx_c; // silence unused_mut warning
+                                state.dx = dx_c;
+                                state.dy = dy_c;
+                                state.dz_l = dz_l_c;
+                                state.dz_u = dz_u_c;
+                                alpha_mcc = alpha_new;
+                                log::debug!(
+                                    "Gondzio MCC iter {}: correction accepted, α_mcc={:.4}",
+                                    iteration, alpha_mcc
+                                );
+                            } else {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
+        }
 
         // Compute maximum step sizes using fraction-to-boundary rule.
         // Free mode: tau based on NLP error. Fixed mode: tau based on mu.

@@ -119,6 +119,36 @@ pub struct SolverOptions {
     /// is ill-conditioned, buggy, or overly sparse.
     /// Default: true.
     pub enable_lbfgs_hessian_fallback: bool,
+    /// Enable Mehrotra predictor-corrector for barrier parameter selection.
+    ///
+    /// After factoring the KKT system, solves an affine-scaling predictor step
+    /// (μ=0 in the RHS) to probe the Newton direction. From this probe, computes
+    /// a better centering parameter σ = (μ_aff/μ)³ and rebuilds the corrector RHS
+    /// with μ_new = σ·μ. Costs one extra triangular solve (not a re-factorization).
+    ///
+    /// Expected effect: 20–40% fewer iterations on convex-like problems.
+    /// Applies to the full sparse/dense KKT path.
+    /// Default: true.
+    pub mehrotra_pc: bool,
+    /// Maximum number of Gondzio multiple centrality corrections per iteration.
+    ///
+    /// After the main (Mehrotra-corrected) direction is computed, performs up to
+    /// this many additional centrality corrections. Each correction uses the same
+    /// factored KKT matrix (one backsolve each) to drive outlier complementarity
+    /// pairs (z·s far from μ) back toward the central path.
+    ///
+    /// Set to 0 to disable. Typical value: 3.
+    /// Default: 3.
+    pub gondzio_mcc_max: usize,
+    /// Enable proactive infeasibility detection.
+    ///
+    /// Monitors constraint violation (θ) in the main loop. If θ has stagnated
+    /// (< 1% relative change over the history window) and the gradient of θ is
+    /// stationary, declares LocalInfeasibility earlier instead of wasting iterations
+    /// before restoration eventually fires.
+    ///
+    /// Default: true.
+    pub proactive_infeasibility_detection: bool,
 }
 
 impl Default for SolverOptions {
@@ -173,6 +203,9 @@ impl Default for SolverOptions {
             enable_sqp_fallback: true,
             hessian_approximation_lbfgs: false,
             enable_lbfgs_hessian_fallback: true,
+            mehrotra_pc: true,
+            gondzio_mcc_max: 0,
+            proactive_infeasibility_detection: true,
         }
     }
 }

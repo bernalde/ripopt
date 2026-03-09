@@ -143,6 +143,17 @@ fn apply_option(opts: &mut SolverOptions, key: &str, value: &str) {
         "warm_start_init_point" => {
             opts.warm_start = value == "yes";
         }
+        "mehrotra_pc" => {
+            opts.mehrotra_pc = value == "yes" || value == "true" || value == "1";
+        }
+        "gondzio_mcc_max" => {
+            if let Ok(v) = value.parse() {
+                opts.gondzio_mcc_max = v;
+            }
+        }
+        "proactive_infeasibility_detection" => {
+            opts.proactive_infeasibility_detection = value == "yes" || value == "true" || value == "1";
+        }
         _ => {
             eprintln!("Warning: unknown option '{}'", key);
         }
