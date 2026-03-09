@@ -42,6 +42,7 @@ It implements a primal-dual interior point method with a barrier formulation, si
 - **Near-linear constraint detection**: Automatically identifies linear constraints and skips their Hessian contribution
 - **Limited-memory Hessian approximation**: L-BFGS-in-IPM mode (`hessian_approximation_lbfgs`) replaces exact Hessian with L-BFGS curvature pairs, eliminating the need for second-derivative callbacks
 - **Multi-solver fallback architecture**: L-BFGS, Augmented Lagrangian, SQP, and explicit slack reformulation
+- **Parametric sensitivity analysis**: sIPOPT-style post-optimal sensitivity (`ds/dp = -M⁻¹ · Nₚ`) for computing how the optimal solution changes under parameter perturbations, plus reduced Hessian extraction for covariance estimation
 - **C API** mirroring the Ipopt C interface for direct linking from C/C++/Python/Julia
 - **AMPL NL interface** with Pyomo integration via `SolverFactory('ripopt')`
 
@@ -616,6 +617,9 @@ cargo run --example hs071
 
 # Benchmark timing across 5 problems
 cargo run --release --example benchmark
+
+# Parametric sensitivity analysis
+cargo run --release --example sensitivity
 ```
 
 ### C
@@ -635,12 +639,12 @@ See [Compile and run the examples](#compile-and-run-the-examples) above for buil
 cargo test
 ```
 
-193 tests total:
-- **125 unit tests**: Dense LDL factorization, convergence checking, filter line search, fraction-to-boundary, KKT assembly, restoration, preprocessing, linearity detection, SQP, linear solver, autodiff, L-BFGS
+209 tests total:
+- **131 unit tests**: Dense LDL factorization, convergence checking, filter line search, fraction-to-boundary, KKT assembly, restoration, preprocessing, linearity detection, SQP, linear solver, autodiff, L-BFGS, sensitivity analysis
 - **12 C API tests**: FFI integration tests
-- **27 integration tests**: Rosenbrock, SimpleQP, HS071, HS035, PureBoundConstrained, MultipleEqualityConstraints, NE-to-LS reformulation, augmented Lagrangian, NL file parsing, IPM code paths, and more
+- **29 integration tests**: Rosenbrock, SimpleQP, HS071, HS035, PureBoundConstrained, MultipleEqualityConstraints, NE-to-LS reformulation, augmented Lagrangian, NL file parsing, IPM code paths, parametric sensitivity, and more
 - **15 HS regression tests**: Selected Hock-Schittkowski problems for regression checking
-- **14 new coverage tests**: Augmented Lagrangian convergence paths, NL parser/solver pipeline, autodiff tape operations, IPM preprocessing/condensed KKT/unbounded detection
+- **14 coverage tests**: Augmented Lagrangian convergence paths, NL parser/solver pipeline, autodiff tape operations, IPM preprocessing/condensed KKT/unbounded detection
 
 ## Code Coverage
 
@@ -702,6 +706,7 @@ src/
   lbfgs.rs            L-BFGS solver for unconstrained/bound-constrained problems
   augmented_lagrangian.rs  Augmented Lagrangian fallback for constrained problems
   sqp.rs              SQP fallback for constrained problems
+  sensitivity.rs      Parametric sensitivity analysis (sIPOPT-style)
   slack_formulation.rs     Explicit slack reformulation fallback
   preprocessing.rs    Fixed variable elimination, redundant constraint removal, bound tightening
   linearity.rs        Near-linear constraint detection
@@ -715,12 +720,14 @@ src/
 
 tests/
   correctness.rs      Integration tests (21 NLP problems)
+  sensitivity.rs      Parametric sensitivity integration tests
   hs_regression.rs    HS suite regression tests (15 problems)
   c_api.rs            C API integration tests (11 tests via FFI)
 
 examples/
   rosenbrock.rs       Unconstrained optimization
   hs071.rs            Constrained NLP
+  sensitivity.rs      Parametric sensitivity analysis demo
   benchmark.rs        Timing benchmark
   c_api_test.c        HS071 via the C API
   c_rosenbrock.c      Unconstrained Rosenbrock via C API
@@ -797,6 +804,50 @@ let result = ripopt::solve(&problem, &options);
 ```
 
 See `examples/lbfgs_hessian.rs` for complete working examples.
+
+### Parametric Sensitivity Analysis
+
+ripopt provides sIPOPT-style post-optimal sensitivity analysis: after solving an NLP, compute how the optimal solution changes when problem parameters are perturbed, without re-solving. This is useful for:
+
+- **What-if analysis**: How does the optimal design change if a constraint bound shifts?
+- **Uncertainty propagation**: Map parameter uncertainty to solution uncertainty via the reduced Hessian
+- **Real-time optimization**: Update the solution for small disturbances at near-zero cost
+
+The core equation is `ds/dp = -M⁻¹ · Nₚ` — one backsolve using the already-factored KKT matrix.
+
+**Usage**: Implement the `ParametricNlpProblem` trait (extends `NlpProblem` with parameter derivative methods), then call `solve_with_sensitivity()`:
+
+```rust
+use ripopt::{ParametricNlpProblem, SolverOptions};
+
+// Implement ParametricNlpProblem for your problem type...
+// (adds num_parameters, jacobian_p_*, hessian_xp_* methods)
+
+let mut ctx = ripopt::solve_with_sensitivity(&problem, &options);
+
+// Compute sensitivity for a parameter perturbation Δp
+let dp = [0.1];  // perturbation vector
+let sens = ctx.compute_sensitivity(&problem, &[&dp]).unwrap();
+
+// Predict perturbed solution: x(p + Δp) ≈ x* + dx
+let x_new: Vec<f64> = ctx.result.x.iter()
+    .zip(sens.dx_dp[0].iter())
+    .map(|(x, dx)| x + dx)
+    .collect();
+
+// Extract reduced Hessian for covariance estimation
+let cov = ctx.reduced_hessian().unwrap();
+```
+
+On the HS071 problem with a parametric constraint bound, the sensitivity prediction matches re-solve to within 1e-5:
+
+```
+Predicted x(p=40.1): (1.000000, 4.751642, 3.824904, 1.375540)
+Actual    x(p=40.1): (1.000000, 4.751634, 3.824896, 1.375553)
+Prediction errors:   8.4e-6,   8.0e-6,   1.4e-5
+```
+
+See `examples/sensitivity.rs` for a complete working example.
 
 ### Condensed KKT System
 
