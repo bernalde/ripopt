@@ -203,9 +203,9 @@ impl Default for SolverOptions {
             enable_sqp_fallback: true,
             hessian_approximation_lbfgs: false,
             enable_lbfgs_hessian_fallback: true,
-            mehrotra_pc: true,
+            mehrotra_pc: false,
             gondzio_mcc_max: 0,
-            proactive_infeasibility_detection: true,
+            proactive_infeasibility_detection: false,
         }
     }
 }
