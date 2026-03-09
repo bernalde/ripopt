@@ -25,8 +25,11 @@ hs_suite_stderr.txt
 # Data files
 CLSF.DAT
 
-# Manuscript (local only)
-manuscript/
+# Manuscript build artifacts (org files are primary source)
+manuscript/*.tex
+manuscript/*.pdf
+manuscript/*.synctex.gz
+manuscript/_minted/
 
 # Archive of old docs
 archive/

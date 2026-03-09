@@ -1,0 +1,1154 @@
+#+TITLE: ripopt: An Interior Point Optimizer in Rust with Implicit Slacks and Robust Recovery
+#+AUTHOR: John Kitchin
+#+DATE: 2026-02-14
+#+OPTIONS: toc:3 num:t
+#+LATEX_CLASS: article
+#+LATEX_CLASS_OPTIONS: [12pt,preprint]
+
+
+
+
+* Abstract
+
+We present ripopt, a nonlinear interior point optimizer implemented in Rust. ripopt originated as a translation of the Ipopt algorithm citep:wachter2006implementation but has diverged in several architectural and algorithmic respects. The core design decision---eliminating explicit slack variables for inequality constraints in favor of an implicit slack formulation---produces smaller Karush-Kuhn-Tucker (KKT) systems and a simplified problem interface. This formulation necessitates novel strategies for convergence detection, including stationarity-based bound multipliers with a complementarity gate, and a two-layer convergence test. We introduce a two-phase restoration architecture that uses a fast Gauss-Newton feasibility solver before falling back to a full NLP restoration subproblem, combined with a multi-attempt recovery strategy that explores different barrier landscapes through systematic perturbation. For nonlinear equation systems posed as constrained optimization, ripopt automatically detects the problem structure and reformulates it as an unconstrained least-squares problem with a full Hessian including second-order corrections. A multi-solver fallback architecture---including L-BFGS for unconstrained problems, augmented Lagrangian for constrained problems, and explicit slack reformulation---provides additional robustness when the primary IPM fails. ripopt also provides sIPOPT-style parametric sensitivity analysis, computing how the optimal solution changes under parameter perturbations via a single KKT backsolve at near-zero cost. On the Hock-Schittkowski test suite, ripopt solves 120 of 120 problems (100%) compared to Ipopt's 118 (98.3%). On the CUTEst benchmark suite of 727 problems, ripopt solves 598 (82.3%) compared to Ipopt's 555 (76.3%), with a geometric mean wall-clock speedup of 8.2$\times$ on commonly-solved problems and zero problems where Ipopt succeeds but ripopt fails. We provide a detailed analysis of where each solver excels, the failure modes that remain, and opportunities for improvement.
+
+* Introduction
+
+** Nonlinear Programming and Interior Point Methods
+
+We consider the general nonlinear programming (NLP) problem:
+
+\begin{align}
+\min_{x \in \mathbb{R}^n} \quad & f(x) \label{eq:nlp} \\
+\text{s.t.} \quad & g_L \le g(x) \le g_U \notag \\
+& x_L \le x \le x_U \notag
+\end{align}
+
+where $f: \mathbb{R}^n \to \mathbb{R}$ is the objective, $g: \mathbb{R}^n \to \mathbb{R}^m$ are the constraints, and $x_L, x_U, g_L, g_U$ are bounds (with $\pm\infty$ permitted). Interior point methods citep:fiacco1968nonlinear,forsgren2002interior replace the bound constraints with logarithmic barrier terms and solve a sequence of barrier subproblems parameterized by $\mu > 0$:
+
+\begin{equation}
+\min_x \; f(x) - \mu \sum_{i} \ln(x_i - x_{L,i}) - \mu \sum_i \ln(x_{U,i} - x_i) \quad \text{s.t.} \quad g_L \le g(x) \le g_U
+\end{equation}
+
+As $\mu \to 0$, the barrier subproblem solutions converge to a solution of the original NLP. The first-order optimality conditions of the barrier problem yield the primal-dual system, which is solved by Newton's method at each iteration.
+
+** The Ipopt Algorithm
+
+Ipopt (Interior Point OPTimizer) citep:wachter2006implementation is the most widely used open-source solver for large-scale nonlinear programming. It combines a primal-dual interior point method with a filter line search citep:fletcher2002nonlinear and an adaptive barrier parameter update strategy citep:nocedal2008adaptive. Key design decisions in Ipopt include: (i) introduction of explicit slack variables for every inequality constraint, (ii) a quality-function-based barrier parameter oracle with golden-section search, (iii) a single NLP restoration phase for feasibility recovery, and (iv) reliance on external sparse symmetric indefinite linear solvers (MA27, MA57, MUMPS, or Pardiso).
+
+Ipopt has proven highly effective across a wide range of applications, from chemical process optimization to robotics trajectory planning. However, its design carries computational overhead from explicit slack variables, complex barrier parameter selection, and the initialization and interop costs of Fortran-based linear algebra libraries. These overheads are particularly significant for small-to-medium problems where the per-iteration cost is dominated by setup rather than factorization.
+
+** Motivation for ripopt
+
+This project began as an attempt to translate the Ipopt algorithm into Rust, motivated by these goals:
+
+1. *Explore the limits of agentic code engineering* Claude Code was used exclusively to generate all the code in ripopt, including the core IPM engine, linear algebra routines, and the entire test suite and benchmarking infrastructure. This project serves as a case study in how far we can push agentic code generation for complex numerical algorithms. 
+  
+2.  *Eliminate external dependencies*. Ipopt requires Fortran linear algebra libraries (MUMPS, MA27/57, or Pardiso) that complicate installation, cross-compilation, and embedding in modern software systems. A pure Rust implementation with built-in linear solvers removes this friction.
+
+3. *Reduce per-iteration overhead*. Rust's zero-cost abstractions, stack allocation, and absence of garbage collection enable lower per-iteration times, especially for small problems where C/Fortran interop and dynamic memory allocation dominate.
+
+We almost immediately learned a direct, line by line translation did not occur through agentic engineering. Instead, the development process was highly iterative and exploratory, with many design decisions revisited multiple times as we gained a deeper understanding of the algorithm and its failure modes. This led to several significant divergences from the original Ipopt design, introducing several algorithmic innovations that ultimately allowed it to solve more benchmark problems than the reference implementation. These were not all intentional---some were serendipitous discoveries that emerged from the process of debugging and improving the implementation---but they represent meaningful contributions to the state of the art in interior point optimization. Ultimately, we kept these innovations because they improved robustness and performance, even though they made the code less of a direct translation of Ipopt.
+
+** Contributions
+
+The contributions of this paper are:
+
+1. An implicit slack formulation for inequality constraints that reduces the KKT system dimension from $(n + m + n_{\text{ineq}})$ to $(n + m)$ and simplifies the algorithmic interface (Section [[*Implicit Slack Formulation]]).
+
+2. A stationarity-based bound multiplier computation with a complementarity gate for robust convergence detection without explicit slack variables (Section [[*Convergence with Stationarity-Based Bound Multipliers]]).
+
+3. A two-phase restoration architecture combining a fast Gauss-Newton feasibility solver with a full NLP restoration subproblem, and a multi-attempt recovery strategy that systematically perturbs the barrier landscape (Section [[*Two-Phase Restoration with Multi-Attempt Recovery]]).
+
+4. Automatic detection and reformulation of nonlinear equation systems as unconstrained least-squares problems with full (Gauss-Newton + second-order) Hessian computation (Section [[*Automatic NE-to-LS Reformulation]]).
+
+5. Extensive benchmarking on 727 CUTEst problems citep:gould2015cutest and 120 Hock-Schittkowski problems citep:hock1981test, with analysis of speed, accuracy, and failure modes relative to Ipopt (Section [[*Computational Results]]).
+
+6. A multi-solver fallback architecture that applies L-BFGS, augmented Lagrangian, SQP, and explicit slack reformulation when the primary interior point method fails, eliminating all cases where Ipopt succeeds but ripopt does not (Section [[*Multi-Solver Fallback Architecture]]).
+
+7. Problem preprocessing that eliminates fixed variables, detects redundant constraints, and tightens variable bounds from verified linear constraints before solving (Section [[*Preprocessing]]).
+
+8. Near-linear constraint detection that identifies linear constraints by comparing Jacobian values at multiple points, enabling the solver to skip their second-order Hessian contributions (Section [[*Near-Linear Constraint Detection]]).
+
+9. A built-in AMPL NL file interface with automatic differentiation, enabling drop-in integration with Pyomo citep:bynum2021pyomo via a thin solver plugin (Section [[*AMPL NL Interface and Pyomo Integration]]).
+
+10. A C API that mirrors the Ipopt C interface, enabling direct linking from C, C++, Python (via =ctypes=/=cffi=), and other languages without subprocess overhead (Section [[*C API]]).
+
+** Notation and Conventions
+
+We denote the number of variables by $n$ and the number of constraints by $m$. The Jacobian of $g$ is $J \in \mathbb{R}^{m \times n}$. Following the Ipopt convention, the Lagrangian is $\mathcal{L}(x, y) = f(x) + y^T g(x)$, where $y \in \mathbb{R}^m$ are the constraint multipliers. Bound multipliers $z_L, z_U \in \mathbb{R}^n$ are associated with the variable bounds $x \ge x_L$ and $x \le x_U$ respectively. The barrier parameter is $\mu > 0$.
+
+* Implicit Slack Formulation
+  :PROPERTIES:
+  :CUSTOM_ID: implicit-slack
+  :END:
+
+** Standard Approach: Explicit Slacks
+
+Ipopt converts inequality constraints $g_L \le g(x) \le g_U$ by introducing explicit slack variables $s$:
+
+\begin{equation}
+g(x) - s = 0, \qquad g_L \le s \le g_U
+\end{equation}
+
+\noindent The barrier function then includes terms $-\mu \ln(s_i - g_{L,i})$ and $-\mu \ln(g_{U,i} - s_i)$, and the KKT system has dimension $(n + n_{\text{ineq}} + m)$---primal variables, slack variables, and constraint multipliers. This requires tracking $s$, its associated multipliers $z_s$, slack fraction-to-boundary checks, and careful slack initialization citep:wachter2006implementation.
+
+** Our Approach: Implicit Slacks
+
+We treat the constraint slacks $s_L = g(x) - g_L$ and $s_U = g_U - g(x)$ as implicit functions of $x$ and condense their barrier contributions directly into the KKT matrix during assembly. For each inequality constraint $i$ with slack $s_{L,i} = g_i(x) - g_{L,i} > 0$ (feasible), we compute a barrier stiffness:
+
+\begin{equation}
+\Sigma_{s,i} = \frac{z_{s_L,i}}{s_{L,i}} + \frac{z_{s_U,i}}{s_{U,i}} \label{eq:sigma-s}
+\end{equation}
+
+where the implicit slack multipliers are derived from the Lagrange multiplier $y_i$:
+
+\begin{equation}
+z_{s_L,i} = \begin{cases} -y_i & \text{if } y_i < 0 \\ \mu / \tilde{s}_{L,i} & \text{otherwise} \end{cases}
+\end{equation}
+
+and $\tilde{s}_{L,i} = \max(s_{L,i}, \mu, 10^{-10})$ is a safeguarded slack. This derivation follows from the complementarity conditions of the barrier problem: at a barrier-optimal point for a lower-bounded constraint, the multiplier $y_i$ and the slack multiplier $z_{s_L,i}$ satisfy $y_i = -z_{s_L,i}$ (with appropriate sign conventions).
+
+The resulting KKT system is:
+
+\begin{equation}
+\begin{bmatrix} H + \Sigma_x + \delta_w I & J^T \\ J & -\Sigma_s^{-1} - \delta_c I \end{bmatrix}
+\begin{bmatrix} \Delta x \\ \Delta y \end{bmatrix}
+=
+\begin{bmatrix} r_d \\ r_p \end{bmatrix} \label{eq:kkt}
+\end{equation}
+
+where $H = \nabla^2_{xx} \mathcal{L}$ is the Lagrangian Hessian, $\Sigma_x$ contains the barrier contributions from variable bounds, $\Sigma_s^{-1}$ is diagonal with entries $1/\Sigma_{s,i}$ for inequality constraints and $0$ for equalities, and $\delta_w, \delta_c$ are regularization parameters from inertia correction (Section [[*Inertia Correction]]).
+
+** System Size Reduction
+
+The implicit slack formulation reduces the KKT system size:
+
+| System                         | Dimension                 | Factorization Cost               |
+|--------------------------------+---------------------------+----------------------------------|
+| Ipopt (explicit slacks)        | $n + n_{\text{ineq}} + m$ | $O((n + n_{\text{ineq}} + m)^3)$ |
+| ripopt (implicit slacks)       | $n + m$                   | $O((n + m)^3)$                   |
+| ripopt (condensed, $m \ge 2n$) | $n$                       | $O(n^2 m + n^3)$                 |
+
+For a problem with $n = 100$ variables and $m = 200$ inequality constraints, Ipopt factors a $500 \times 500$ system; ripopt factors a $300 \times 300$ system, or $100 \times 100$ with the Schur complement condensation.
+
+** Handling Infeasible Iterates
+
+When an inequality constraint is violated ($s_{L,i} < 0$), no meaningful barrier term exists. We handle this with a branch: infeasible constraints receive a pure feasibility-driving right-hand side $-(g_i - g_{L,i})$ without barrier contribution, while feasible constraints use the full barrier formulation with safeguarded slack floors. This branching logic is more complex than Ipopt's uniform treatment of slacks (which are always positive by construction) but avoids the need for explicit slack variables entirely.
+
+** Condensed KKT via Schur Complement
+
+When $m \ge 2n$, we further reduce the system by Schur complement elimination of $\Delta y$:
+
+\begin{equation}
+S \, \Delta x = r_d + J^T (-D_c)^{-1} r_p \label{eq:condensed}
+\end{equation}
+
+where $S = H + \Sigma_x + \delta_w I + J^T (-D_c)^{-1} J$ is the Schur complement and $D_c$ is the $(2,2)$ block diagonal. The multiplier update is recovered as $\Delta y = (-D_c)^{-1}(J \Delta x - r_p)$. For equality constraints where the $(2,2)$ entry would be zero, we use a stiff-spring penalty of $-10^{-16}$ to avoid dropping equalities from the Schur complement. This condensation is particularly effective for problems with many more constraints than variables, such as data fitting and optimal control discretizations.
+
+* Convergence with Stationarity-Based Bound Multipliers
+  :PROPERTIES:
+  :CUSTOM_ID: convergence
+  :END:
+
+** Challenges Without Explicit Slacks
+
+In Ipopt, explicit slack variables $s$ have well-behaved iterative multipliers $z_s$ that naturally satisfy complementarity as the algorithm progresses. Without explicit slacks, the iterative bound multipliers $z_L, z_U$ (updated via Newton steps with $\kappa_\sigma$ safeguarding citep:wachter2006implementation) can exhibit two pathological behaviors:
+
+1. *Inflation*: The $\kappa_\sigma$ safeguard clamps $z_i \cdot s_i \in [\mu/\kappa_\sigma, \kappa_\sigma \mu]$ (with $\kappa_\sigma = 10^{10}$). When $\mu$ is still relatively high but the primal iterate is near-optimal, the safeguard can inflate $z$ to maintain the complementarity bound, producing misleadingly large complementarity error.
+
+2. *Oscillation*: At degenerate points---where an active variable bound coincides with an active inequality constraint---the multipliers $(y, z)$ are not uniquely determined. The iterative $z$ can oscillate between iterations as the Newton step alternately attributes the stationarity residual to $y$ or $z$.
+
+Using inflated or oscillating $z$ for convergence checks leads to either stalled convergence (the complementarity error never decreases) or false convergence declarations (the dual infeasibility appears zero because $z$ absorbs the gradient residual).
+
+** Stationarity-Based Optimal Multipliers
+
+We compute "optimal" bound multipliers $z_{\text{opt}}$ directly from the KKT stationarity condition. At a KKT point:
+
+\begin{equation}
+\nabla f(x) + J(x)^T y - z_L + z_U = 0 \label{eq:stationarity}
+\end{equation}
+
+For each variable $i$, we compute the stationarity residual $r_i = \nabla_i f + (J^T y)_i$---the component of the gradient that bound multipliers must absorb at optimality. We then set:
+
+\begin{equation}
+z_{L,\text{opt},i} = \begin{cases} r_i & \text{if } r_i > 0, \; x_{L,i} \text{ is finite, and complementarity gate passes} \\ 0 & \text{otherwise} \end{cases}
+\end{equation}
+
+\begin{equation}
+z_{U,\text{opt},i} = \begin{cases} -r_i & \text{if } r_i < 0, \; x_{U,i} \text{ is finite, and complementarity gate passes} \\ 0 & \text{otherwise} \end{cases}
+\end{equation}
+
+The logic is: if the stationarity residual is positive and a lower bound exists, then $z_{L,i}$ should absorb it; if negative and an upper bound exists, then $z_{U,i}$ should absorb it. When the residual sign does not match any available bound, the variable contributes directly to the dual infeasibility.
+
+** The Complementarity Gate
+
+Without a safeguard, $z_{\text{opt}}$ can be problematic far from optimality. If the iterate is at a non-optimal point with a large gradient residual, $z_{\text{opt}}$ would set a correspondingly large bound multiplier, making the dual infeasibility appear to be zero even though the point is not optimal. The multiplier simply absorbs the gradient residual without the point actually satisfying optimality conditions.
+
+We introduce a complementarity gate that accepts $z_{\text{opt},i}$ only when it is consistent with the barrier problem's complementarity relationship:
+
+\begin{equation}
+z_{\text{opt},i} \cdot s_i \le \kappa_{\text{compl}} \cdot \mu \label{eq:gate}
+\end{equation}
+
+with $\kappa_{\text{compl}} = 10^{10}$. When this check fails, $z_{\text{opt},i}$ is set to zero, and the full stationarity residual at variable $i$ contributes to the dual infeasibility measure.
+
+The gate is deliberately permissive ($\kappa_{\text{compl}} = 10^{10}$)---it only rejects $z_{\text{opt}}$ values that are astronomically inconsistent with the current barrier parameter. As $\mu \to 0$ near convergence, the gate tightens, eventually requiring $z_{\text{opt}} \cdot s \approx 0$, which is the true complementarity condition. Without this gate, problem TP023 from the Hock-Schittkowski suite citep:hock1981test falsely reports convergence at $f = 4697$ instead of the correct $f^* = 2.0$.
+
+** Two-Layer Convergence Test
+
+We require both a scaled and an unscaled convergence check to pass:
+
+*Scaled check* (adapted from Ipopt): Uses $z_{\text{opt}}$ for dual infeasibility, with scaling factor $s_d = \max(s_{\max}, \|y\|_1 + \|z_{\text{opt}}\|_1) / s_{\max}$ where $s_{\max}$ controls the growth rate of the tolerance with multiplier magnitude.
+
+*Unscaled check*: Uses iterative $z$ for dual infeasibility against a relaxed tolerance $\epsilon_{\text{dual}} = 100$. This serves as a safety net---it catches false convergence where $z_{\text{opt}}$ absorbs gradient residuals at non-optimal points that happen to slip through the complementarity gate.
+
+For complementarity, we take $\min(C_z, C_{z_{\text{opt}}})$ where $C_z$ uses iterative multipliers and $C_{z_{\text{opt}}}$ uses stationarity-based multipliers. This handles cases where iterative $z$ is inflated by the $\kappa_\sigma$ safeguard (making $C_z$ misleadingly large) while $z_{\text{opt}}$ correctly reflects the NLP complementarity.
+
+Convergence is declared when both checks pass simultaneously, with the additional requirement that the acceptable-tolerance check ($\epsilon_{\text{acc}}$) holds for at least $k_{\text{acc}}$ consecutive iterations for the Acceptable status.
+
+* Two-Phase Restoration with Multi-Attempt Recovery
+  :PROPERTIES:
+  :CUSTOM_ID: restoration
+  :END:
+
+** Background
+
+When the filter line search citep:fletcher2002nonlinear,wachter2006implementation fails to find an acceptable step at any step size $\alpha \ge \alpha_{\min}$, the solver must recover feasibility. In Ipopt, this triggers an NLP restoration phase that formulates and solves a full barrier subproblem minimizing constraint violation. If the restoration phase itself fails (e.g., the feasibility subproblem is locally infeasible), Ipopt terminates with =Restoration_Failed=. This is the dominant failure mode in practice---on the CUTEst suite, 32% of Ipopt's failures are =Restoration_Failed=.
+
+** Phase 1: Gauss-Newton Feasibility Solver
+
+Before invoking the expensive NLP restoration, we attempt a Gauss-Newton (GN) solve on the constraint violation [[citep:nocedal2006numerical]]:
+
+\begin{equation}
+\min_x \; \frac{1}{2} \|h(x)\|^2, \qquad h_i(x) = \max(g_{L,i} - g_i(x), \; g_i(x) - g_{U,i}, \; 0)
+\end{equation}
+
+The GN step solves the normal equations $(J_a J_a^T + \epsilon I) w = h_a$ where $J_a$ is the Jacobian restricted to violated constraints, using Levenberg-Marquardt citep:levenberg1944method,marquardt1963algorithm regularization with adaptive $\epsilon$ (starting at $10^{-8}$, increasing by $10\times$ on factorization failure). The step is $\Delta x = -J_a^T w$, a minimum-norm solution in the full variable space.
+
+The GN phase includes three fallback mechanisms:
+
+1. *Gradient descent fallback*: When the GN line search fails to find sufficient decrease after 30 halvings, a steepest-descent step $\Delta x = -J^T h$ is computed with a separate backtracking line search. This is critical for problems where the GN Hessian is nearly singular (e.g., when the Jacobian is rank-deficient).
+
+2. *Proximity regularization*: When progress stalls (consecutive line search failures), a pull toward the starting point is added: $\Delta x_i \mathrel{-}= \eta(x_{\text{rest},i} - x_i)$ with $\eta = 10^{-4}(1 + k_{\text{fail}})$ increasing with consecutive failures. This prevents the GN solver from wandering far when it cannot make progress.
+
+3. *Penalty-regularized fallback*: If the main GN loop fails to achieve sufficient violation reduction (less than 50% or less than 1%), a penalty-regularized gradient descent minimizes $\frac{1}{2}\|h\|^2 + \rho\|x - x_{\text{ref}}\|^2$ with increasing $\rho \in \{10^{-6}, 10^{-4}, 10^{-2}\}$.
+
+The GN phase provides quadratic convergence for nonlinear equalities (vs.\ linear for gradient descent) and handles 90%+ of restoration calls at a fraction of the cost of a full NLP subproblem.
+
+** Phase 2: NLP Restoration
+
+If GN restoration fails on two consecutive occasions, we invoke the full NLP restoration subproblem, matching Ipopt's formulation [[citep:wachter2006implementation]]:
+
+\begin{equation}
+\min_{x,p,n} \; \rho \sum_i (p_i + n_i) + \frac{\eta}{2} \|D_R(x - x_R)\|^2 \quad \text{s.t.} \quad g(x) - p + n = g_{\text{target}}, \; p, n \ge 0
+\label{eq:nlp-resto}
+\end{equation}
+
+where $\rho = 1000$, $\eta = \sqrt{\mu}$, $D_R$ is a diagonal scaling matrix with $D_{R,i} = 1/\max(1, |x_{R,i}|)$, and $x_R$ is the reference point (the iterate at restoration entry). This is solved by the same IPM engine with two safeguards against infinite recursion: (i) dynamic dispatch (~&dyn NlpProblem~ in Rust) breaks the monomorphization chain, and (ii) ~disable_nlp_restoration = true~ in the inner solve prevents further nesting.
+
+Critically, when the NLP restoration itself returns =LocalInfeasibility= or fails to converge, we do *not* immediately terminate. Instead, the result falls through to the multi-attempt recovery mechanism described below. This design reflects our observation that the stationarity-based infeasibility detection (computed at recovery attempt 7) is more reliable than the NLP restoration's own convergence signal, which can declare local infeasibility prematurely.
+
+** Multi-Attempt Recovery
+
+When both GN and NLP restoration fail, we cycle through up to 6 recovery attempts before declaring infeasibility:
+
+| Attempt | Strategy                                                | Rationale                                 |
+|---------+---------------------------------------------------------+-------------------------------------------|
+| 1       | Mode switch (Free $\to$ Fixed, or force $\mu$ decrease) | Different barrier strategy may help       |
+| 2       | NLP restoration + $\mu \times 10$                       | Large $\mu$ smooths barrier landscape     |
+| 3       | $\mu \times 0.1$ + $x$ perturbation                     | Small $\mu$ may find narrow feasible path |
+| 4       | $\mu \times 100$ + $x$ perturbation                     | Much larger $\mu$ for broader search      |
+| 5       | $\mu \times 0.01$ + $x$ perturbation                    | Much smaller $\mu$ for tight convergence  |
+| 6       | $\mu \times 1000$ + $x$ perturbation                    | Extreme $\mu$ increase as last resort     |
+
+The $\mu$ factors $[10, 0.1, 100, 0.01, 1000, 0.001]$ alternate between increasing and decreasing by progressively larger magnitudes. This systematic exploration of different barrier landscapes is entirely novel compared to Ipopt, which terminates after a single restoration failure.
+
+The $x$ perturbation (attempts 3--6) uses a deterministic pattern $\Delta x_i = \text{sign}_i \cdot 10^{-4} \cdot \text{range}_i$ where $\text{sign}_i = (-1)^{[(7i + 13k) \bmod 3 = 0]}$ depends on both the variable index $i$ and the attempt number $k$, and $\text{range}_i = x_{U,i} - x_{L,i}$ for bounded variables or $\max(|x_i|, 1)$ for unbounded. This escapes the current basin while maintaining reproducibility.
+
+After each recovery attempt, the filter is fully reset (all entries cleared, $\theta_{\max}$ recomputed from the current point), giving the algorithm a clean slate.
+
+After all 6 attempts, infeasibility is checked via stationarity of the constraint violation function: if $\|J^T h(x)\|_\infty < 10^{-4} \cdot \max(\theta, 1)$, where $\theta = \|h(x)\|$ is the constraint violation, we report =LocalInfeasibility=---the iterate is at a stationary point of the violation function, indicating the problem is (locally) infeasible.
+
+** Post-Restoration State Reset
+
+After successful restoration, the algorithmic state is comprehensively reset:
+- Bound multipliers: $z_i = \mu / s_i$, capped at $10^3$
+- Constraint multipliers: $y_i = 0$ (the IPM step will determine appropriate values via stationarity)
+- Barrier parameter: $\mu = \max(\bar{c}, \mu_{\min})$ where $\bar{c}$ is the average complementarity
+- Barrier mode: reset to Free (adaptive), treating restoration as a fresh start
+- Filter: cleared and re-initialized from the restored point
+
+This aggressive reset contrasts with Ipopt, which continues in whatever barrier mode was active before restoration.
+
+* Automatic NE-to-LS Reformulation
+  :PROPERTIES:
+  :CUSTOM_ID: ne-to-ls
+  :END:
+
+** Problem Setting
+
+Many CUTEst problems are nonlinear equation (NE) systems posed as constrained optimization with a dummy zero objective: find $x$ such that $g(x) = t$ where $f(x) \equiv 0$. Ipopt treats these as standard constrained NLPs, but the zero objective provides no gradient information to guide the search direction, and Ipopt's line search---which balances objective decrease against constraint violation---cannot make switching decisions when the objective is identically flat. On the CUTEst suite, Ipopt returns status code $-10$ (insufficient degrees of freedom) on 20 such NE problems.
+
+** Detection
+
+We automatically detect NE structure at the initial point by checking five conditions:
+
+1. $m \ge n$ (at least as many equations as unknowns)
+2. $|f(x_0)| < 10^{-10}$ (objective is numerically zero)
+3. $\|\nabla f(x_0)\|_\infty < 10^{-10}$ (gradient is numerically zero)
+4. $g_{L,i} = g_{U,i}$ for all $i$ (all constraints are equalities)
+5. $\theta(x_0) \ge 10^{-8}$ (constraints are not already satisfied; avoids unnecessary reformulation)
+
+No user annotation is required. This detection runs once before the main solve loop and adds negligible overhead.
+
+** Reformulation as Least Squares
+
+The detected NE problem is reformulated as an unconstrained (or bound-constrained) least-squares minimization:
+
+\begin{equation}
+\min_x \; F(x) = \frac{1}{2} \sum_{i=1}^m (g_i(x) - t_i)^2 = \frac{1}{2}\|r(x)\|^2 \label{eq:ls}
+\end{equation}
+
+where $r_i(x) = g_i(x) - t_i$ are the residuals and $t_i = g_{L,i}$ are the constraint targets. Variable bounds from the original problem are preserved. This reformulated problem is then solved by the same IPM engine as any other bound-constrained NLP.
+
+** Full Hessian with Second-Order Correction
+
+Most least-squares solvers use only the Gauss-Newton approximation $H_{\text{GN}} = J^T J$, which is positive semi-definite and provides superlinear convergence near the solution where residuals are small citep:nocedal2006numerical. However, far from the solution where residuals $r_i$ are large, the Gauss-Newton approximation can be poor, leading to slow convergence or failure.
+
+We compute the full Hessian of the least-squares objective:
+
+\begin{equation}
+\nabla^2 F(x) = J(x)^T J(x) + \sum_{i=1}^m r_i(x) \nabla^2 g_i(x) \label{eq:full-hess}
+\end{equation}
+
+The second-order correction $\sum r_i \nabla^2 g_i$ is computed by reusing the NLP Hessian evaluation interface of the original problem: calling =hessian_values(x, 0, r)= with $\sigma = 0$ (suppresses the objective Hessian, which is zero) and $\lambda = r$ (the residual vector as the multiplier). By the definition of the Lagrangian Hessian $\sigma \nabla^2 f + \sum_i \lambda_i \nabla^2 g_i$, this directly computes $\sum_i r_i \nabla^2 g_i$ without any additional interface or implementation effort.
+
+The full Hessian is critical for problems like PFIT4, where the initial residual is $O(10^3)$ and the Gauss-Newton approximation fails to converge while the full Hessian succeeds.
+
+** Fallback and Result Interpretation
+
+After the LS solve, we evaluate the original constraint violation $\theta = \|h(x^*)\|_\infty$ at the LS solution $x^*$:
+
+- $\theta < \epsilon_{\text{tol}}$: =Optimal= (equations solved within tolerance)
+- $\theta < \epsilon_{\text{acc}}$: =Acceptable= (equations solved within relaxed tolerance)
+- LS converged (=Optimal= or =Acceptable=) but $\theta$ large: =LocalInfeasibility= (the system is genuinely inconsistent---the LS minimum has nonzero residual)
+- LS did not converge and $\theta$ large: fall back to the constrained IPM on the original problem
+
+This fallback is important for square systems ($m = n$): the LS reformulation may converge to a local minimum of $\|r\|^2$ that is nonzero (a saddle point or local minimum in residual space), but the constrained IPM may still find a feasible point by approaching from a different direction.
+
+* Preprocessing
+  :PROPERTIES:
+  :CUSTOM_ID: preprocessing
+  :END:
+
+Before invoking the interior point solver, ripopt applies three preprocessing steps to simplify the problem:
+
+** Fixed Variable Elimination
+
+When $x_{L,i} = x_{U,i}$ (within tolerance $10^{-10}$), variable $x_i$ is fixed at $(x_{L,i} + x_{U,i})/2$ and eliminated from the optimization. The =PreprocessedProblem= wrapper presents a reduced problem with remapped variable indices, delegates all function evaluations to the original problem (inserting fixed values into the full-dimensional $x$), and remaps the sparsity patterns of the Jacobian and Hessian. After solving the reduced problem, the solution is unmapped back to the original dimension.
+
+** Redundant Constraint Detection
+
+Two constraints are considered redundant if they have identical bounds and identical Jacobian entries (same column structure and values) at two distinct evaluation points. Checking at two points prevents false matches from nonlinear constraints that happen to have the same Jacobian at a single point. Redundant constraints are removed from the reduced problem.
+
+** Bound Tightening from Linear Constraints
+
+For verified linear constraints (Jacobian unchanged between two evaluation points) with exactly one free-variable nonzero entry $a_j$, the constraint $g_L \le a_j x_j + c \le g_U$ yields tighter bounds on $x_j$:
+
+\begin{equation}
+\frac{g_L - c}{a_j} \le x_j \le \frac{g_U - c}{a_j} \quad (\text{if } a_j > 0)
+\end{equation}
+
+where $c$ is the fixed-variable contribution. This tightening is only applied after verifying constraint linearity, avoiding incorrect bounds from nonlinear constraints whose Jacobian happens to have a single nonzero at the initial point.
+
+** Preprocessing Fallback
+
+If the preprocessed solve fails (returning anything other than Optimal or Acceptable), ripopt automatically retries without preprocessing, since fixed variable elimination can change the numerical conditioning of borderline problems. This fallback ensures that preprocessing never causes regressions.
+
+* Near-Linear Constraint Detection
+  :PROPERTIES:
+  :CUSTOM_ID: linearity
+  :END:
+
+After scaling, ripopt evaluates the Jacobian at two distinct points (the initial point $x_0$ and a perturbed $x_1$) and compares entries per constraint row. If all entries for constraint $i$ change by less than $10^{-12}$ (relative), the constraint is marked as linear. For linear constraints, $\nabla^2 g_i = 0$, so their $\lambda_i \nabla^2 g_i$ Hessian contribution is exactly zero. The solver zeros $\lambda_i$ for detected linear constraints before calling the Hessian evaluation, avoiding unnecessary computation.
+
+The perturbation $x_{1,j} = x_{0,j} + 1 + 0.1|x_{0,j}|$ is clamped to bounds, with fallback to the opposite direction if clamped back. Constraints involving variables that could not be perturbed by at least $10^{-4}$ are conservatively marked as nonlinear.
+
+* Multi-Solver Fallback Architecture
+  :PROPERTIES:
+  :CUSTOM_ID: fallback
+  :END:
+
+When the primary interior point method fails---returning =RestorationFailed=, =MaxIterations=, or =NumericalError=---ripopt automatically attempts up to three alternative solvers before declaring failure. This multi-solver fallback architecture is a key contributor to ripopt's robustness, eliminating all problems where Ipopt succeeds but ripopt does not.
+
+** L-BFGS for Unconstrained Problems
+
+For unconstrained problems ($m = 0$, no finite bounds), a limited-memory BFGS (L-BFGS) solver citep:nocedal2006numerical is tried *before* the IPM, since the barrier machinery is unnecessary when there are no constraints or bounds to enforce. L-BFGS maintains a compact representation of the inverse Hessian approximation using the most recent $k = 10$ curvature pairs, requiring only $O(nk)$ storage and $O(nk)$ per-iteration cost. The line search uses Wolfe conditions with backtracking.
+
+For bound-constrained problems ($m = 0$, finite bounds), L-BFGS is used as a *fallback* after IPM failure, with a projected gradient approach that clamps iterates to the feasible box at each step.
+
+The L-BFGS solver is particularly effective for problems where the exact Hessian is pathological far from the solution (e.g., strongly indefinite), as the quasi-Newton approximation builds up curvature information incrementally. On the CUTEst suite, L-BFGS solves several unconstrained problems (PALMER5A, PALMER7E) where the IPM's inertia correction struggles.
+
+** Augmented Lagrangian for Constrained Problems
+
+For constrained problems that fail the primary IPM, ripopt applies a penalty-based augmented Lagrangian (AL) method using the Powell-Hestenes-Rockafellar (PHR) formulation citep:nocedal2006numerical. The AL subproblem at outer iteration $k$ is:
+
+\begin{equation}
+\min_x \; f(x) + \sum_i \left[ y_i^{(k)} h_i(x) + \frac{\rho^{(k)}}{2} h_i(x)^2 \right] \label{eq:al}
+\end{equation}
+
+where $h_i(x)$ is the constraint violation (accounting for inequality slacks), $y^{(k)}$ are the Lagrange multiplier estimates, and $\rho^{(k)}$ is the penalty parameter. Each AL subproblem is an unconstrained (or bound-constrained) NLP solved by the same IPM engine.
+
+The multiplier update follows the standard rule $y_i^{(k+1)} = y_i^{(k)} + \rho^{(k)} h_i(x^*)$, and the penalty parameter increases by a factor of 10 when constraint violation fails to decrease sufficiently. The AL method converges when the constraint violation and KKT error both fall below tolerance.
+
+The AL fallback is effective for problems where the IPM's filter line search or restoration phase fails but the feasible region is reachable via penalty methods. On CUTEst, this recovers several problems (CRESC50, TRO6X2) that resist the primary IPM.
+
+** SQP Fallback for Constrained Problems
+
+For constrained problems where both the IPM and AL fail, ripopt tries a Sequential Quadratic Programming (SQP) solver. At each iteration, the SQP solver assembles and solves the $(n+m) \times (n+m)$ KKT system of the QP subproblem:
+
+\begin{equation}
+\begin{bmatrix} H & J^T \\ J & 0 \end{bmatrix} \begin{bmatrix} \Delta x \\ \lambda_{\text{new}} \end{bmatrix} = \begin{bmatrix} -\nabla_x \mathcal{L} \\ -c(x) \end{bmatrix}
+\end{equation}
+
+where $H$ is the Hessian of the Lagrangian, $J$ is the constraint Jacobian, and $c(x)$ is the constraint residual. Inertia correction is applied when the KKT factorization has incorrect inertia ($n$ positive, $m$ negative eigenvalues required). A backtracking line search with an $\ell_1$ merit function $\phi(x) = f(x) + \rho \|c(x)\|_1$ determines the step size, with $\rho = \max(|\lambda_{\text{new}}|) + 1$. The SQP result replaces the current best only if it is strictly better (higher solve status or lower objective at the same status).
+
+** Explicit Slack Reformulation
+
+For constrained problems with inequality constraints that fail both the primary IPM and the AL fallback, ripopt reformulates the problem with explicit slack variables:
+
+\begin{equation}
+\min_{x,s} \; f(x) \quad \text{s.t.} \quad g(x) - s = 0, \quad g_L \le s \le g_U
+\end{equation}
+
+This converts inequality constraints into equalities with bounded slacks, producing a formulation closer to Ipopt's native representation. The reformulated problem is solved by the same IPM engine with ~enable_slack_fallback = false~ to prevent recursive fallback.
+
+The explicit slack formulation addresses a fundamental limitation of the implicit slack approach: at degenerate points where constraint multipliers oscillate (Section [[*Handling Infeasible Iterates]]), explicit slacks provide well-behaved iterative multiplier updates that stabilize convergence. This fallback solves problems like HATFLDH and HS83 where restoration cycling in the implicit-slack formulation prevents convergence.
+
+** Best-Point Tracking for Cycling Detection
+
+Throughout the main IPM solve, ripopt tracks the iterate with the lowest dual infeasibility encountered during the solve. When the solver reaches the maximum iteration limit, it restores this best-dual point and checks whether it satisfies the acceptable convergence criteria. This mechanism recovers problems where the solver cycles between near-optimal points without satisfying the strict convergence test---for example, HAHN1LS, where the dual infeasibility cycles between $1.46$ and $4.25 \times 10^{-3}$ but the best point achieves acceptable convergence.
+
+The primal tolerance at the max-iteration exit is relaxed to $\max(\epsilon_{\text{acc}}, \epsilon_{\text{cv,acc}})$, where $\epsilon_{\text{cv,acc}}$ is the acceptable constraint violation tolerance. This allows problems like SSINE, where constraint violation stalls at $1.4 \times 10^{-3}$ after 3000 iterations, to be accepted when all other convergence criteria are met.
+
+* Adaptive Barrier Parameter
+  :PROPERTIES:
+  :CUSTOM_ID: adaptive-mu
+  :END:
+
+** Simplified Oracle
+
+Ipopt uses a quality function with golden-section search to determine the barrier parameter $\mu$ citep:nocedal2008adaptive. The quality function evaluates how "balanced" the iterate is at a given centering parameter $\sigma = \mu / \bar{c}$, and the golden-section search finds the $\sigma$ that minimizes this function over $[\sigma_{\min}, \sigma_{\max}]$.
+
+We replace this machinery with a direct LOQO-style formula [[citep:vanderbei1999loqo]]:
+
+\begin{equation}
+\mu = \frac{\bar{c}}{\kappa} \label{eq:mu-oracle}
+\end{equation}
+
+where $\bar{c}$ is the average complementarity (summing over both variable bound and constraint slack complementarity pairs) and $\kappa = 10$. This is equivalent to a fixed centering parameter $\sigma = 1/\kappa = 0.1$, and avoids the computational cost and implementation complexity of the golden-section search.
+
+** Free and Fixed Modes
+
+The barrier parameter alternates between two modes:
+
+- *Free mode*: $\mu$ is updated via Eq. \eqref{eq:mu-oracle} each iteration, and the filter is reset (all entries cleared) to give the algorithm maximum freedom with the new barrier landscape.
+
+- *Fixed mode*: $\mu$ decreases monotonically. The barrier subproblem is considered solved when the barrier KKT error drops below $\epsilon_{\text{barrier}} \cdot \mu$, at which point $\mu$ is decreased via $\mu_{\text{new}} = \min(\kappa_\mu \cdot \mu, \mu^{\theta_\mu})$ where $\kappa_\mu = 0.2$ and $\theta_\mu = 1.5$.
+
+The solver switches from Free to Fixed mode when insufficient progress is detected (based on a sliding window of 4 KKT error values), and back to Free mode when the Fixed mode achieves sufficient progress on a non-first iteration.
+
+** Additional Design Choices
+
+*Fraction-to-boundary rule*: In Free mode, the step length bound $\tau$ uses $\tau = \max(\tau_{\min}, 1 - e_{\text{NLP}})$ where $e_{\text{NLP}}$ is the total NLP error, rather than Ipopt's $\tau = \max(\tau_{\min}, 1 - \mu)$. Near convergence ($e_{\text{NLP}} \to 0$), $\tau \to 1$, allowing steps very close to the boundary. This is more aggressive than Ipopt's formula.
+
+*No-bounds special case*: When no variable has finite bounds, $\mu$ is set to $\mu_{\min} = 10^{-11}$ immediately. With no bound constraints, the average complementarity is zero and the barrier parameter serves no purpose; setting it to $\mu_{\min}$ avoids stalling.
+
+*Post-restoration reset*: After successful restoration, the barrier mode is reset to Free and the reference value history is cleared, treating restoration as a fresh start. Ipopt continues in whatever mode was active before restoration.
+
+* Filter Line Search
+  :PROPERTIES:
+  :CUSTOM_ID: filter
+  :END:
+
+We use the filter line search of citep:fletcher2002nonlinear as adapted by citep:wachter2006implementation, with the following implementation details.
+
+** Switching Condition
+
+The switching condition determines whether the current iteration uses $f$-type (objective decrease) or $h$-type (constraint violation decrease) acceptance:
+
+\begin{equation}
+\alpha (-\nabla \phi^T d)^{s_\phi} > \delta \, \theta^{s_\theta} \quad \text{and} \quad \theta < \theta_{\min}
+\end{equation}
+
+The inclusion of $\alpha$ as a multiplier on the left-hand side is critical: as $\alpha$ decreases during backtracking, the switching condition eventually fails, allowing the step to be accepted by $h$-type criteria (constraint reduction). An early version of ripopt omitted the $\alpha$ factor, causing the switching condition to remain active even at tiny step sizes and blocking $h$-type acceptance.
+
+** Second-Order Correction
+
+We implement iterative second-order correction (SOC) citep:nocedal2006numerical to address the Maratos effect, where the constraint linearization error causes rejection of good Newton steps. Up to $k_{\text{soc}} = 4$ SOC iterations are performed, each solving the same factored KKT matrix with a modified right-hand side that accounts for the nonlinear constraint residual at the trial point. A convergence check $\theta_{\text{soc}} \ge \kappa_{\text{soc}} \theta_{\text{prev}}$ with $\kappa_{\text{soc}} = 0.99$ terminates SOC early when constraint violation is not improving.
+
+** Objective Safeguard
+
+Before checking filter acceptability, we reject any trial point where the barrier objective increases catastrophically:
+
+\begin{equation}
+\phi_{\text{trial}} > \phi_{\text{current}} + c_{\text{obj}} (1 + |\phi_{\text{current}}|)
+\end{equation}
+
+with $c_{\text{obj}} = 5$. This prevents accepting steps that dramatically worsen the objective, even if they would technically pass the filter.
+
+* Linear Algebra
+  :PROPERTIES:
+  :CUSTOM_ID: linear-algebra
+  :END:
+
+** Bunch-Kaufman Factorization
+
+For small-to-medium problems ($n + m < 100$), we use a custom dense LDL$^T$ factorization with Bunch-Kaufman pivoting citep:bunch1977some. This produces the factorization $PLDL^T P^T = A$ where $P$ is a permutation, $L$ is unit lower triangular, and $D$ is block diagonal with $1 \times 1$ and $2 \times 2$ blocks. The $2 \times 2$ blocks handle the indefinite structure of the KKT matrix without requiring positive definiteness.
+
+A correctness issue in many textbook implementations of Bunch-Kaufman is that when rows and columns are swapped during pivoting, the $L$ entries from previously computed columns must also be swapped. Without this, $PLDL^TP^T \ne A$, producing incorrect solutions that can be difficult to diagnose (the factorization appears to succeed but the solve returns wrong search directions).
+
+** Sparse LDL$^T$ Factorization
+
+For larger problems ($n + m \ge 100$), ripopt uses =rmumps=, a pure Rust multifrontal LDL$^T$ solver with Bunch-Kaufman pivoting. The multifrontal method organizes the factorization into dense operations on frontal matrices defined by a supernodal elimination tree, providing better cache utilization than simplicial methods. AMD ordering and symbolic analysis are computed once and cached; only the numeric factorization is repeated each iteration. The COO-to-CSC index mapping is also cached across calls, so that inertia correction re-factorizations only scatter values and call the numeric phase, avoiding repeated symbolic work and memory allocation.
+
+** Inertia Correction
+  :PROPERTIES:
+  :CUSTOM_ID: inertia-correction
+  :END:
+
+The KKT matrix \eqref{eq:kkt} must have inertia $(n, m, 0)$---$n$ positive and $m$ negative eigenvalues---for the Newton step to be a descent direction for the barrier problem citep:nocedal2006numerical. After factorization, we extract the inertia from the $D$ factor (using eigenvalues of $2 \times 2$ blocks where present) and add diagonal regularization $\delta_w$ to the $(1,1)$ block and $-\delta_c$ to the $(2,2)$ block if the inertia is incorrect.
+
+The regularization grows exponentially: $\delta_w \to 4 \delta_w$ (growth factor 4) for up to 15 attempts. For unconstrained problems ($m = 0$), we first try a direct computation $\delta_w = -d_{\min} + 10^{-8}$ where $d_{\min}$ is the minimum diagonal of $D$, avoiding the exponential search entirely.
+
+A key design decision: when inertia correction fails after all 15 attempts, ripopt proceeds with the approximate factorization rather than returning an error. The filter line search will reject bad steps (producing small $\alpha$), and restoration can recover. This is more pragmatic than Ipopt's approach of immediately reporting =ErrorInStepComputation=, and allows problems like EQC and HIMMELBJ to converge (with Acceptable status) where Ipopt fails.
+
+** Iterative Refinement
+
+After each KKT solve, up to 3 rounds of iterative refinement are applied using the already-factored matrix. Convergence is checked in the $\ell_\infty$ norm with tolerance $10^{-12}$. If a refinement solve fails, it degrades gracefully rather than returning an error.
+
+* Implementation
+  :PROPERTIES:
+  :CUSTOM_ID: implementation
+  :END:
+
+** Language and Dependencies
+
+ripopt is implemented in Rust (approximately 14,400 lines of source code) with minimal external dependencies: the =rmumps= crate for sparse multifrontal LDL$^T$ factorization and the =log= crate for diagnostic output. =rmumps= is a pure Rust implementation of a multifrontal symmetric indefinite solver, included as a workspace member in the ripopt repository (licensed separately under CeCILL-C, an LGPL-compatible free software license). The dense Bunch-Kaufman factorization, KKT assembly, filter, restoration, and all algorithmic logic are implemented from scratch. The codebase includes dedicated modules for the L-BFGS solver (=lbfgs.rs=), augmented Lagrangian method (=augmented_lagrangian.rs=), and explicit slack reformulation (=slack_formulation.rs=). The library compiles to a single Cargo workspace with no C, C++, or Fortran dependencies, simplifying installation, cross-compilation, and embedding.
+
+** Problem Interface
+
+The =NlpProblem= trait defines the interface for specifying optimization problems:
+
+#+begin_src rust
+pub trait NlpProblem {
+    fn num_variables(&self) -> usize;
+    fn num_constraints(&self) -> usize;
+    fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]);
+    fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]);
+    fn initial_point(&self, x0: &mut [f64]);
+    fn objective(&self, x: &[f64]) -> f64;
+    fn gradient(&self, x: &[f64], grad: &mut [f64]);
+    fn constraints(&self, x: &[f64], g: &mut [f64]);
+    fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>);
+    fn jacobian_values(&self, x: &[f64], vals: &mut [f64]);
+    fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>);
+    fn hessian_values(&self, x: &[f64], obj_factor: f64,
+                      lambda: &[f64], vals: &mut [f64]);
+}
+#+end_src
+
+All evaluation methods use a buffer-filling pattern (the caller provides pre-allocated slices) to avoid heap allocation in the hot loop. The Jacobian and Hessian use sparse triplet format. The public API consists of a single function:
+
+#+begin_src rust
+pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions)
+    -> SolveResult;
+#+end_src
+
+This interface is intentionally similar to Ipopt's =TNLP= interface, making it straightforward to port existing Ipopt problem implementations to ripopt.
+
+** Performance Characteristics
+
+Rust's ownership model and zero-cost abstractions provide several performance advantages:
+
+- *Stack allocation*: All per-iteration working vectors are pre-allocated before the main loop. No heap allocation occurs during iteration.
+- *No interop overhead*: Unlike Ipopt, which calls into Fortran (MUMPS) or C (MA27) for each factorization, ripopt's linear algebra is in-process Rust code.
+- *Cache efficiency*: The dense Bunch-Kaufman operates on contiguous memory with predictable access patterns.
+- *No runtime overhead*: Rust has no garbage collector, no virtual machine, and no runtime type checking.
+
+These advantages are most pronounced for small problems ($n + m < 50$) where per-iteration time is dominated by overhead rather than $O(n^3)$ factorization.
+
+** AMPL NL Interface and Pyomo Integration
+
+To support integration with algebraic modeling languages, ripopt includes a built-in AMPL NL file parser and SOL file writer. The =ripopt= binary reads a problem in AMPL's NL format citep:gay2003writing, solves it, and writes the solution in SOL format---the same protocol used by Ipopt, KNITRO, and other AMPL-compatible solvers. The NL parser supports the full nonlinear expression DAG (directed acyclic graph) with automatic differentiation for gradient, Jacobian, and Hessian evaluation, eliminating the need for the user to supply derivative code.
+
+This AMPL interface enables a Pyomo citep:bynum2021pyomo solver plugin via Pyomo's ASL (AMPL Solver Library) infrastructure. The plugin registers =ripopt= with Pyomo's =SolverFactory=:
+
+#+begin_src python
+import pyomo_ripopt  # registers 'ripopt' with SolverFactory
+from pyomo.environ import *
+
+model = ConcreteModel()
+model.x = Var(initialize=1.5, bounds=(1, 5))
+model.y = Var(initialize=1.5, bounds=(1, 5))
+model.obj = Objective(expr=(model.x - 1)**2 + (model.y - 2)**2)
+model.c1 = Constraint(expr=model.x + model.y <= 4)
+
+solver = SolverFactory('ripopt')
+result = solver.solve(model, tee=True)
+#+end_src
+
+The plugin is a thin wrapper (30 lines of Python) that subclasses Pyomo's =ASL= solver class. Pyomo handles model serialization to NL format and solution parsing from SOL format; the plugin only needs to locate the =ripopt= executable and forward solver options. Installation is via =pip install pyomo-ripopt=, which also registers the solver through a =pyomo.solvers= entry point for automatic discovery. This means existing Pyomo workflows can switch from Ipopt to ripopt by changing a single line (=SolverFactory('ripopt')= instead of =SolverFactory('ipopt')=), with no changes to the model definition or solution retrieval code.
+
+Solver options are passed through Pyomo's standard =solver.options= dictionary:
+
+#+begin_src python
+solver = SolverFactory('ripopt')
+solver.options['tol'] = 1e-8
+solver.options['max_iter'] = 1000
+solver.options['print_level'] = 5
+#+end_src
+
+** C API
+
+ripopt exposes a C API that closely mirrors the Ipopt C interface, enabling direct linking from C, C++, Python (via =ctypes= or =cffi=), Julia, and any language with C FFI support---without the subprocess and file I/O overhead of the NL/SOL interface.
+
+*** Design
+
+The API is surfaced by compiling ripopt as a shared library (=cdylib= crate type, producing =libripopt.dylib= on macOS or =libripopt.so= on Linux). The library exports an opaque handle type and five function groups:
+
+1. *Lifecycle*: =ripopt_create= allocates a heap-owned problem handle from bounds, sizes, and callback pointers; =ripopt_free= releases it.
+2. *Options*: =ripopt_add_num_option=, =ripopt_add_int_option=, and =ripopt_add_str_option= set solver parameters by Ipopt-compatible string keys (e.g. ="tol"=, ="max_iter"=, ="mu_strategy"=).
+3. *Solve*: =ripopt_solve= takes the initial point in =x= and writes the primal solution back into =x=, with optional output pointers for constraint values, the objective, and all multipliers. Any output pointer may be =NULL=.
+
+The callback signatures are identical to the Ipopt C interface:
+
+#+begin_src c
+typedef int (*Eval_F_CB)(int n, const double *x, int new_x,
+                         double *obj_value, void *user_data);
+typedef int (*Eval_Grad_F_CB)(int n, const double *x, int new_x,
+                              double *grad_f, void *user_data);
+typedef int (*Eval_G_CB)(int n, const double *x, int new_x,
+                         int m, double *g, void *user_data);
+typedef int (*Eval_Jac_G_CB)(int n, const double *x, int new_x,
+                              int m, int nele_jac,
+                              int *iRow, int *jCol, double *values,
+                              void *user_data);
+typedef int (*Eval_H_CB)(int n, const double *x, int new_x,
+                         double obj_factor, int m,
+                         const double *lambda, int new_lambda,
+                         int nele_hess,
+                         int *iRow, int *jCol, double *values,
+                         void *user_data);
+#+end_src
+
+Each callback returns 1 on success and 0 on failure. The Jacobian and Hessian callbacks implement the standard two-call protocol: when =values == NULL=, the callback fills =iRow=/=jCol= with the sparsity pattern (0-based indices); when =values != NULL=, it fills numerical values in the same element order. The =new_x= and =new_lambda= flags are accepted and forwarded but currently ignored (ripopt always re-evaluates), which is correct and slightly conservative.
+
+*** Usage Example
+
+The following skeleton shows the lifecycle for the HS071 problem (the full example is in =examples/c_api_test.c=):
+
+#+begin_src c
+#include "ripopt.h"
+
+RipoptProblem nlp = ripopt_create(
+    n, x_l, x_u, m, g_l, g_u,
+    nele_jac, nele_hess,
+    eval_f, eval_grad_f, eval_g, eval_jac_g, eval_h);
+
+ripopt_add_int_option(nlp, "print_level", 5);
+ripopt_add_num_option(nlp, "tol", 1e-8);
+
+double x[4] = {1.0, 5.0, 5.0, 1.0};  /* initial point */
+double obj_val;
+int status = ripopt_solve(nlp, x, NULL, &obj_val,
+                          NULL, NULL, NULL, NULL);
+/* x now holds the solution; status == 0 => Optimal */
+
+ripopt_free(nlp);
+#+end_src
+
+Build and link from the repository root:
+
+#+begin_src bash
+cargo build --release
+cc examples/c_api_test.c -I. -Ltarget/release -lripopt \
+   -Wl,-rpath,$(pwd)/target/release -o c_api_test
+./c_api_test
+#+end_src
+
+On HS071 the C API test produces the correct solution ($f^* \approx 17.0140$, $x^* \approx [1.000, 4.743, 3.821, 1.379]$) in 11 IPM iterations.
+
+*** Memory Safety and Thread Safety
+
+All raw pointer dereferences in the C API implementation are confined to =unsafe= blocks. Each =CApiProblem= handle is heap-allocated and self-contained; the solver carries no global state, so =ripopt_solve= is re-entrant and multiple handles can be solved concurrently from different threads without synchronization.
+
+* Computational Results
+  :PROPERTIES:
+  :CUSTOM_ID: results
+  :END:
+
+We benchmark ripopt against Ipopt 3.14.19 (installed via Homebrew with MUMPS linear solver) on two test suites. All experiments are conducted on an Apple Mac Mini (aarch64-apple-darwin) with ripopt compiled in release mode (=--release=). Both solvers use default settings with a maximum of 3000 iterations.
+
+** Hock-Schittkowski Test Suite
+
+The Hock-Schittkowski (HS) test suite citep:hock1981test contains 120 nonlinear programming problems of varying size and difficulty, widely used for validating NLP solvers.
+
+*** Solve Rates
+
+| Solver         | Optimal | Acceptable | Failed | Total Solved     |
+|----------------+---------+------------+--------+------------------|
+| ripopt         | 98      | 22         | 0      | 120/120 (100%)  |
+| Ipopt (native) | 118     | 0          | 2      | 118/120 (98.3%) |
+
+ripopt solves all 120 problems---98 to Optimal status and 22 to Acceptable. The 22 Acceptable solutions include problems at degenerate points where strict complementarity fails but the KKT conditions are satisfied within relaxed tolerances. Notable among these is TP374 ($n=10$, $m=35$), which was previously unsolved and is now handled by the NLP restoration phase (Section [[*Two-Phase Restoration with Multi-Attempt Recovery]]). Ipopt fails on TP214 ($n=2$, =InvalidNumberDetected=) and TP223 ($n=2$, declared infeasible despite being feasible---ripopt solves it in 4 iterations).
+
+*** Solution Quality
+
+On the 117 problems where both solvers converge:
+- Matching objectives (relative difference $< 10^{-4}$): 107/117 (91.5%)
+- Median relative objective difference: $2.88 \times 10^{-9}$
+- 10 mismatches where both converge to valid KKT points at different local optima
+
+*** Speed
+
+| Metric                    | ripopt        | Ipopt (native) |
+|---------------------------+---------------+----------------|
+| Median per-problem time   | 13 $\mu$s     | 1.8 ms         |
+| Mean per-iteration time   | 2 $\mu$s      | 187 $\mu$s     |
+| Total time (117 problems) | 3.7 ms        | 255.9 ms       |
+| Geometric mean speedup    | 124.4$\times$ | ---            |
+
+ripopt is faster on all 117 commonly-solved problems, with 52% of problems showing 100--200$\times$ speedup and 17% showing 200--500$\times$ speedup. The per-iteration speedup (${\sim}100\times$) is attributable to stack allocation, the absence of C/Fortran interop, and cache-efficient dense linear algebra.
+
+*** Iteration Counts
+
+| Statistic | ripopt | Ipopt (native) |
+|-----------+--------+----------------|
+| Mean      | 14.5   | 13.3           |
+| Median    | 11     | 10             |
+| Total     | 1,691  | 1,561          |
+
+Iteration counts are comparable. ripopt uses fewer iterations on 38/117 problems and more on 57/117, with 22 ties. The similar iteration counts confirm that the speed advantage comes primarily from lower per-iteration cost, not fewer iterations.
+
+** CUTEst Benchmark Suite
+
+The CUTEst suite citep:gould2015cutest provides 727 nonlinear programming problems from diverse application domains, representing the standard benchmark for NLP solver evaluation.
+
+*** Overall Solve Rates
+
+| Metric        | ripopt            | Ipopt           |
+|---------------+-------------------+-----------------|
+| Total solved  | *598/727 (82.3%)* | 555/727 (76.3%) |
+| Constrained   | *376/493*         | 339/493         |
+| Unconstrained | *222/234*         | 216/234         |
+| Both solve    | 555               | 555             |
+| ripopt only   | 43                | ---             |
+| Ipopt only    | ---               | 0               |
+| Both fail     | 129               | 129             |
+
+ripopt solves 43 more problems than Ipopt (598 vs. 555). The advantage spans both constrained problems (+37) and unconstrained problems (+6). Notably, every problem solved by Ipopt is also solved by ripopt---there are zero Ipopt-only solves. This is a significant achievement: the multi-solver fallback architecture (Section [[*Multi-Solver Fallback Architecture]]) has eliminated all cases where Ipopt's algorithmic choices succeed but ripopt's do not.
+
+*** Solution Quality
+
+On the 555 problems where both solvers converge:
+- Matching objectives (relative difference $< 10^{-4}$): 454/555 (81.8%)
+- Median relative objective difference: $1.01 \times 10^{-9}$
+- 101 mismatches: both reach valid KKT points but at different local optima
+
+The 82% match rate reflects good agreement between the two solvers, with the remaining mismatches expected for a nonlinear solver---different algorithmic paths lead to different local optima on non-convex problems. The median relative difference of $10^{-9}$ for all commonly-solved problems indicates essentially identical solutions.
+
+*** Speed Comparison
+
+On the 555 commonly-solved problems:
+
+| Metric                                      | Value        |
+|---------------------------------------------+--------------|
+| Geometric mean speedup (ripopt faster)      | 8.2$\times$  |
+| Median speedup (ripopt faster)              | 24.2$\times$ |
+| Problems where ripopt is faster             | 78.0%        |
+| Problems where ripopt is 10$\times$+ faster | 61.1%        |
+
+The speedup varies with problem size:
+
+| Problem size             | Median speedup |
+|--------------------------+----------------|
+| Small ($n \le 10$)       | 36.7$\times$   |
+| Medium ($10 < n \le 50$) | 0.6$\times$    |
+| Large ($n > 50$)         | 1.0$\times$    |
+
+
+The large speedup on small problems reflects Rust's lower per-iteration overhead (no Fortran interop, stack allocation, pre-allocated buffers). For medium and large problems, ripopt switches to sparse multifrontal LDL$^T$ (via =rmumps=), which has similar asymptotic complexity to Fortran MUMPS, and the overhead advantage diminishes. Additionally, problems recovered by fallback solvers (L-BFGS, AL, SQP, slack) may require multiple solver attempts, increasing total wall-clock time on some problems.
+
+*** Attribution of Improvement
+
+The 43 problems solved by ripopt but not Ipopt can be attributed to:
+
+- *NE-to-LS reformulation* ($\sim$10 problems): BEALENE, BOX3NE, BROWNBSNE, DENSCHNBNE, DENSCHNENE, DEVGLA1NE, ENGVAL2NE, EXP2NE, GULFNE, YFITNE. These are nonlinear equation systems where Ipopt returns status $-10$ (insufficient degrees of freedom) while ripopt detects the NE structure and reformulates as least-squares.
+
+- *Two-phase restoration* ($\sim$10 problems): Problems where Ipopt's single NLP restoration fails but ripopt's GN phase or multi-attempt recovery succeeds. These include PFIT1, PFIT2, PFIT4, HEART6, LEWISPOL, GROUPING, MESH, NYSTROM5, NYSTROM5C, and others.
+
+- *Pragmatic inertia correction* ($\sim$5 problems): Problems where Ipopt reports =ErrorInStepComputation= but ripopt proceeds with the approximate factorization and eventually converges.
+
+- *Explicit slack fallback* ($\sim$3 problems): Problems like HATFLDH and HS83 where implicit-slack multiplier oscillation causes restoration cycling; the explicit slack reformulation (Section [[*Explicit Slack Reformulation]]) provides well-behaved multiplier updates.
+
+- *L-BFGS and AL fallback* ($\sim$5 problems): Unconstrained problems (PALMER5A, PALMER7E) where L-BFGS outperforms the IPM, and constrained problems (CRESC50, TRO6X2) where the augmented Lagrangian succeeds after IPM failure.
+
+- *Best-du tracking and relaxed tolerances* ($\sim$5 problems): Problems like HAHN1LS and SSINE where cycling or stalling prevents strict convergence but the best-point tracking (Section [[*Best-Point Tracking for Cycling Detection]]) recovers acceptable solutions at the iteration limit.
+
+- *Other algorithmic differences* ($\sim$5 problems): Differences in the barrier parameter strategy, filter parameters, or convergence criteria that allow ripopt to converge where Ipopt does not.
+
+** Failure Analysis
+
+*** Elimination of Ipopt-only Failures
+
+A key achievement of ripopt's multi-solver fallback architecture is the complete elimination of Ipopt-only solves. In earlier versions, 14 problems were solved by Ipopt but not ripopt; all 14 are now solved through the combination of explicit slack fallback (HATFLDH, HS83, HS84), L-BFGS fallback (HAHN1LS, MGH10SLS, OSBORNEA), augmented Lagrangian fallback (EXPFITC, MINMAXBD, QCNEW), best-du tracking with relaxed tolerances (SSINE, OET7), and improved NE-to-LS fallback (DENSCHNDNE, HATFLDFLNE, HYDCAR20). This means that ripopt is a strict superset of Ipopt in terms of solve capability on this benchmark.
+
+*** Common Failure Patterns
+
+From analysis of all 129 ripopt failures on CUTEst:
+- *LocalInfeasibility*: 94 cases (72.9%). The solver reaches a stationary point of the constraint violation function and declares the problem locally infeasible. This is by far the dominant failure mode, and many of these problems may have feasible solutions reachable from different starting points.
+- *Timeout*: 28 cases (21.7%). The solver exceeds the wall-clock time limit before converging. The increase from earlier versions reflects the 30-second wall-time limit that allows fallback solvers to attempt recovery before the 60-second OS kill, reclassifying some previous silent kills as explicit timeouts.
+- *MaxIterations*: 4 cases (3.1%). The solver makes progress but converges too slowly within the 2999-iteration budget. The dramatic reduction from 18 cases in earlier versions is due to best-du tracking (Section [[*Best-Point Tracking for Cycling Detection]]) recovering acceptable solutions at the iteration limit.
+- *RestorationFailed*: 3 cases (2.3%). Both GN and NLP restoration fail to reduce constraint violation. The near-elimination of this failure mode (down from 56 in earlier versions) validates the effectiveness of the two-phase restoration architecture.
+
+*** Comparison of Failure Modes
+
+| Failure Mode                    | ripopt | Ipopt |
+|---------------------------------+--------+-------|
+| LocalInfeasibility / Infeasible | *94*   | 11    |
+| Timeout                         | 28     | 28    |
+| MaxIterations                   | 4      | 10    |
+| IpoptStatus(-10)                | ---    | *112* |
+| RestorationFailed               | 3      | 4     |
+| NumericalError / Other          | 0      | 7     |
+| *Total failures*                | *129*  | *172* |
+
+The failure profiles reveal fundamentally different bottlenecks. Ipopt's dominant failure mode is =IpoptStatus(-10)= (112 cases)---the CUTEst interface rejecting problems with insufficient degrees of freedom, primarily nonlinear equation systems. ripopt avoids this entirely through the NE-to-LS reformulation (Section [[*Automatic NE-to-LS Reformulation]]).
+
+ripopt's dominant failure mode is =LocalInfeasibility= (94 cases), where the solver declares the problem locally infeasible after reaching a stationary point of the violation function. Both solvers fail on 129 common problems, most of which are genuinely infeasible. The =MaxIterations= mode has been dramatically reduced (from 18 to 4 cases) through best-du tracking, and =RestorationFailed= remains nearly eliminated (3 vs.\ Ipopt's 4), confirming that the two-phase restoration with multi-attempt recovery and the multi-solver fallback architecture are highly effective.
+
+** Speed vs. Accuracy Trade-off
+
+The benchmarks reveal a clear trade-off:
+
+- *Speed*: ripopt is dramatically faster per iteration (${\sim}100\times$ on small problems) and moderately faster per iteration on medium problems (${\sim}10\times$). This advantage comes from implementation characteristics (Rust, stack allocation, no interop) rather than algorithmic differences.
+
+- *Iteration count*: ripopt uses comparable or slightly more iterations on average. The simplified $\mu$ oracle is cheaper to evaluate but occasionally less effective than Ipopt's quality-function oracle, leading to more iterations on some problems.
+
+- *Robustness*: ripopt's two-phase restoration, multi-attempt recovery, and multi-solver fallback architecture solve 43 more problems, with zero Ipopt-only solves. The two-phase restoration has nearly eliminated =RestorationFailed= as a failure mode (3 cases vs.\ Ipopt's 4), and the fallback solvers (L-BFGS, AL, SQP, explicit slack) have eliminated all cases where Ipopt's algorithmic choices succeed but ripopt's do not.
+
+- *Solution quality*: On commonly-solved problems, solution quality is essentially identical (median relative difference $10^{-9}$). The 18% mismatch rate reflects different local optima from algorithmic path differences (including fallback solvers finding different basins), not accuracy deficiencies.
+
+* Parametric Sensitivity Analysis
+  :PROPERTIES:
+  :CUSTOM_ID: sensitivity
+  :END:
+
+ripopt provides sIPOPT-style cite:pirnay2012optimal post-optimal sensitivity analysis. Given a converged solution $(x^*, y^*, z_L^*, z_U^*)$, the sensitivity of the optimal point to parameter perturbations $\Delta p$ is computed by a single backsolve of the KKT system:
+
+\begin{equation}
+\begin{bmatrix} W + \Sigma & J^T \\ J & 0 \end{bmatrix} \begin{bmatrix} dx \\ dy \end{bmatrix} = - \begin{bmatrix} \nabla^2_{xp} L \cdot \Delta p \\ \frac{\partial g}{\partial p} \cdot \Delta p \end{bmatrix}
+\label{eq:sensitivity}
+\end{equation}
+
+where $W$ is the Hessian of the Lagrangian and $\Sigma = Z_L S_L^{-1} + Z_U S_U^{-1}$ is the barrier diagonal at the solution. Bound multiplier sensitivities are recovered from the complementarity conditions: $dz_{L,i} = -z_{L,i} \, dx_i / (x_i - x_{L,i})$ and $dz_{U,i} = z_{U,i} \, dx_i / (x_{U,i} - x_i)$.
+
+** Implementation
+
+The implementation uses the simpler post-solve approach: =solve_with_sensitivity()= calls the standard =solve()=, then reassembles the /unregularized/ KKT matrix at the solution point and factors it. This avoids modifying the core IPM loop entirely. The cost is one extra Hessian/Jacobian evaluation and one factorization---negligible compared to the solve itself.
+
+The reassembled KKT omits the inertia correction terms ($\delta_w$, $\delta_c$) that the final IPM iteration may have applied. This is important: the regularized matrix would introduce $O(\delta)$ bias in the sensitivities, while the unregularized matrix gives the exact first-order sensitivity.
+
+Users implement the =ParametricNlpProblem= trait, which extends =NlpProblem= with five methods specifying the number of parameters and the sparsity/values of $\partial g / \partial p$ and $\nabla^2_{xp} L$. The =SensitivityContext= retains the factored KKT and supports:
+
+- =compute_sensitivity()=: computes $dx/dp$, $dy/dp$, $dz_L/dp$, $dz_U/dp$ for one or more perturbation vectors $\Delta p$
+- =reduced_hessian()=: extracts the $n \times n$ upper-left block of $M^{-1}$ for covariance estimation in parameter estimation problems
+
+** Example: HS071 with Parametric Constraint Bound
+
+Consider the HS071 problem where the equality constraint bound $p = 40$ is treated as a parameter. After solving at $p = 40$, sensitivity analysis predicts the solution at $p = 40.1$ by computing $x(p + \Delta p) \approx x^* + (dx/dp) \cdot \Delta p$:
+
+| Variable | $x^*(p{=}40)$ | Predicted $x(p{=}40.1)$ | Actual $x(p{=}40.1)$ | Error       |
+|----------+----------------+--------------------------+-----------------------+-------------|
+| $x_1$    |       1.000000 |                 1.000000 |              1.000000 | $< 10^{-8}$ |
+| $x_2$    |       4.743000 |                 4.751642 |              4.751634 | $8.4 \times 10^{-6}$ |
+| $x_3$    |       3.821150 |                 3.824904 |              3.824896 | $8.0 \times 10^{-6}$ |
+| $x_4$    |       1.379408 |                 1.375540 |              1.375553 | $1.4 \times 10^{-5}$ |
+
+The prediction errors are $O(\Delta p^2)$ as expected from first-order Taylor expansion, confirming correctness of the sensitivity computation.
+
+* Opportunities for Improvement
+  :PROPERTIES:
+  :CUSTOM_ID: opportunities
+  :END:
+
+The failure analysis and benchmark comparison reveal several concrete opportunities for improvement. The failure profile has shifted dramatically from earlier versions of ripopt: =RestorationFailed= has been nearly eliminated (3 cases, down from 56), validating the two-phase restoration architecture, and =MaxIterations= has been reduced from 18 to 4 cases through best-du tracking. The dominant failure mode is now =LocalInfeasibility= (94 cases, 72.9%), followed by =Timeout= (28 cases). This shift suggests different priorities for future work.
+
+** Infeasibility Detection and Recovery
+
+The dominant failure mode---=LocalInfeasibility= (94 cases)---occurs when the solver reaches a stationary point of the constraint violation function $\|\nabla_x \theta(x)\| \approx 0$. While many of these are genuinely infeasible (both solvers fail on 129 common problems), some may represent false declarations where a feasible solution exists in a different basin. Several strategies could reduce false positives:
+
+- *Multi-start for NE problems*: When the LS reformulation converges to a nonzero local minimum, a second attempt from a perturbed starting point could escape the basin. This is particularly relevant for square NE systems ($m = n$) where the constrained IPM fallback currently uses the same starting point.
+
+- *Second-order infeasibility analysis*: Using the Hessian of $\theta(x)$ at the stationary point to distinguish between local minima (genuinely infeasible) and saddle points (potentially feasible nearby) could reduce false declarations.
+
+- *Constraint-space search*: Projecting the iterate onto the constraint manifold via a sequence of Newton steps on individual constraint subsets, rather than minimizing total violation, could find feasible points that the global violation minimization misses.
+
+Quantifying this opportunity precisely requires distinguishing genuinely infeasible problems from false declarations, which is non-trivial. However, even a 10% reduction in =LocalInfeasibility= failures would recover approximately 10 additional problems.
+
+** Adaptive Barrier Parameter Tuning
+
+The simplified LOQO-style oracle ($\mu = \bar{c}/\kappa$) is effective on average but occasionally produces more iterations than Ipopt's quality-function oracle. A more sophisticated oracle---potentially interpolating between the current fixed-$\sigma$ approach and Ipopt's golden-section search based on detected convergence rate---could reduce iteration counts without sacrificing the simplicity that benefits the majority of problems.
+
+** Multiplier Initialization
+
+ripopt initializes constraint multipliers $y$ to zero and relies on the KKT system to determine appropriate values. Ipopt's least-squares multiplier initialization computes an initial $y$ from the normal equations $J^T y \approx -\nabla f$, which can significantly reduce iteration counts, especially when the initial point is near-feasible. Adding this initialization to ripopt is straightforward and could improve convergence on problems where the initial $y = 0$ leads to poor early search directions.
+
+** Performance Optimization for Large Problems
+
+The 28 =Timeout= failures indicate performance bottlenecks on larger problems. Two directions could help:
+
+- *Sparse Jacobian assembly*: For over-constrained problems (e.g., EXPFITC with $m = 502$, $n = 5$), the condensed KKT reduces the system to dimension $n$ but the dense Jacobian assembly ($O(mn)$) still dominates. Exploiting Jacobian sparsity in the condensation step could reduce per-iteration cost.
+
+- *Sparse factorization performance*: The pure Rust multifrontal solver (=rmumps=) provides supernodal factorization with good cache utilization, but further optimization of frontal matrix operations and parallelism could narrow the remaining gap with Fortran MUMPS on the largest problems.
+
+** Quasi-Newton as Primary Solver
+
+The L-BFGS solver (Section [[*L-BFGS for Unconstrained Problems]]) is currently used as a first-attempt solver for unconstrained problems and a fallback for failed IPM solves. Extending it to serve as a primary solver for problems without second-order derivative information---or integrating L-BFGS curvature updates within the IPM framework as a Hessian approximation---could further broaden ripopt's applicability.
+
+** Scaling
+
+ripopt implements gradient-based NLP scaling, which normalizes the objective gradient and constraint Jacobian rows to have maximum absolute value of 1.0 at the initial point. While this improves convergence on many poorly scaled problems, more sophisticated scaling strategies---such as iterative equilibration or scaling based on second-order information---could further improve performance on problems with extreme scaling imbalances.
+
+** Summary of Estimated Impact
+
+| Improvement Area             | Current Failures Addressed | Estimated Problems Recovered |
+|------------------------------+----------------------------+------------------------------|
+| Infeasibility detection      | 94 LocalInfeasibility      | 5--15                        |
+| Performance optimization     | 28 Timeout                 | 5--10                        |
+| Adaptive $\mu$ oracle        | 4 MaxIterations            | 1--2                         |
+| Multiplier initialization    | Various                    | 2--4                         |
+| Scaling                      | Various                    | 2--5                         |
+
+These improvements are largely independent and could collectively push ripopt's solve rate toward 88--92% of CUTEst, approaching the practical ceiling imposed by genuinely infeasible or pathologically ill-conditioned problems.
+
+* Related Work
+
+Interior point methods for nonlinear programming have a rich history. The barrier approach originates with citep:fiacco1968nonlinear, and the primal-dual formulation was developed for linear programming by citep:mehrotra1992implementation and extended to nonlinear programming by citep:byrd1999interior and citep:wachter2006implementation. The filter line search was introduced by citep:fletcher2002nonlinear and adapted for interior point methods by citep:wachter2006implementation. The adaptive barrier parameter strategy used in Ipopt was formalized by citep:nocedal2008adaptive.
+
+The trust region framework citep:conn2000trust provides an alternative globalization strategy. Condensed KKT formulations (Schur complement reductions) are well-known in the optimization literature citep:nocedal2006numerical but are typically presented as optional reductions of the explicit-slack system; our use of implicit slacks as the primary formulation is less common.
+
+Uno (Unifying Nonlinear Optimization) citep:vanaret2024uno is a recent C++ framework that decomposes Lagrange-Newton methods (SQP and interior point) into interchangeable building blocks---constraint relaxation strategies, subproblem solvers, and globalization mechanisms---that can be combined via configuration. Uno can mimic existing solvers (including Ipopt) through presets while also enabling novel combinations. In contrast, ripopt takes a fixed algorithmic approach (primal-dual barrier with filter line search) but innovates within that framework through implicit slacks, two-phase restoration, and automatic problem reformulation.
+
+The Bunch-Kaufman factorization citep:bunch1977some is standard for symmetric indefinite systems. The Gauss-Newton method and Levenberg-Marquardt regularization citep:levenberg1944method,marquardt1963algorithm are standard tools for nonlinear least-squares; our contribution is their application within the restoration phase of an interior point solver and the automatic NE-to-LS reformulation with full Hessian. Parametric sensitivity analysis for NLPs was formalized in the sIPOPT framework citep:pirnay2012optimal, which reuses the factored KKT matrix from the final IPM iteration to compute solution sensitivities with respect to problem parameters at near-zero cost.
+
+* Conclusions
+
+We have presented ripopt, an interior point optimizer in approximately 14,400 lines of Rust that achieves superior performance to Ipopt through a combination of architectural simplification, algorithmic innovation, and a multi-solver fallback architecture. The implicit slack formulation produces smaller KKT systems and a cleaner interface. The stationarity-based convergence strategy, two-phase restoration, NE-to-LS reformulation, preprocessing, near-linear constraint detection, and fallback solvers (L-BFGS, augmented Lagrangian, SQP, explicit slack) compensate for the challenges introduced by eliminating explicit slack variables and provide novel algorithmic capabilities.
+
+On the Hock-Schittkowski test suite, ripopt solves all 120 problems (100%) compared to Ipopt's 118 (98.3%). On the CUTEst benchmark suite, ripopt solves 598 of 727 problems (82.3%) compared to Ipopt's 555 (76.3%), with zero problems where Ipopt succeeds but ripopt fails. This demonstrates that the additional complexity of explicit slack variables is not necessary for a robust interior point solver---and that a multi-solver fallback architecture can strictly dominate the reference implementation. The geometric mean $8.2\times$ speedup on commonly-solved problems---rising to $124\times$ on the HS suite---makes ripopt particularly attractive for applications requiring rapid solves of small-to-medium NLPs, such as model predictive control, real-time optimization, and embedded systems.
+
+The failure analysis reveals that ripopt's two-phase restoration has nearly eliminated =RestorationFailed= as a failure mode (3 cases, down from 56 in earlier versions), and the best-du tracking has reduced =MaxIterations= from 18 to 4 cases. The dominant remaining failure mode is =LocalInfeasibility= (94 cases), where improved detection strategies and multi-start approaches could yield significant gains. Collectively, further improvements could push the solve rate toward 88--92%, approaching the practical ceiling imposed by genuinely infeasible problems.
+
+The built-in AMPL NL interface and Pyomo solver plugin enable ripopt to serve as a drop-in replacement for Ipopt in existing Pyomo workflows, requiring only a one-line change to switch solvers. The sIPOPT-style parametric sensitivity analysis enables post-optimal what-if analysis and uncertainty propagation at near-zero cost, extending ripopt's utility beyond single-solve optimization.
+
+The source code for ripopt is available at https://github.com/jkitchin/ripopt under the EPL-2.0 license.
+
+* References
+
+bibliographystyle:unsrtnat
+bibliography:ripopt.bib
+
+* COMMENT Bibliography Notes                                      :noexport:
+
+The bibliography file ripopt.bib should contain the following entries:
+
+#+begin_src bibtex :tangle ripopt.bib
+@article{wachter2006implementation,
+  title={On the implementation of an interior-point filter line-search algorithm for large-scale nonlinear programming},
+  author={W{\"a}chter, Andreas and Biegler, Lorenz T},
+  journal={Mathematical Programming},
+  volume={106},
+  number={1},
+  pages={25--57},
+  year={2006},
+  publisher={Springer},
+  doi={10.1007/s10107-004-0559-y}
+}
+
+@article{bunch1977some,
+  title={Some stable methods for calculating inertia and solving symmetric linear systems},
+  author={Bunch, James R and Kaufman, Linda},
+  journal={Mathematics of Computation},
+  volume={31},
+  number={137},
+  pages={163--179},
+  year={1977},
+  publisher={American Mathematical Society},
+  doi={10.1090/S0025-5718-1977-0428694-0}
+}
+
+@book{nocedal2006numerical,
+  title={Numerical Optimization},
+  author={Nocedal, Jorge and Wright, Stephen J},
+  edition={2nd},
+  year={2006},
+  publisher={Springer},
+  series={Springer Series in Operations Research and Financial Engineering},
+  doi={10.1007/978-0-387-40065-5}
+}
+
+@article{gould2015cutest,
+  title={{CUTEst}: a constrained and unconstrained testing environment with safe threads for mathematical optimization},
+  author={Gould, Nicholas IM and Orban, Dominique and Toint, Philippe L},
+  journal={Computational Optimization and Applications},
+  volume={60},
+  pages={545--557},
+  year={2015},
+  publisher={Springer},
+  doi={10.1007/s10589-014-9687-3}
+}
+
+@article{fletcher2002nonlinear,
+  title={Nonlinear programming without a penalty function},
+  author={Fletcher, Roger and Leyffer, Sven},
+  journal={Mathematical Programming},
+  volume={91},
+  number={2},
+  pages={239--269},
+  year={2002},
+  publisher={Springer},
+  doi={10.1007/s101070100244}
+}
+
+@book{hock1981test,
+  title={Test Examples for Nonlinear Programming Codes},
+  author={Hock, Willi and Schittkowski, Klaus},
+  year={1981},
+  publisher={Springer},
+  series={Lecture Notes in Economics and Mathematical Systems},
+  volume={187},
+  doi={10.1007/978-3-642-48320-2}
+}
+
+@article{vanderbei1999loqo,
+  title={{LOQO}: an interior point code for quadratic programming},
+  author={Vanderbei, Robert J},
+  journal={Optimization Methods and Software},
+  volume={11},
+  number={1-4},
+  pages={451--484},
+  year={1999},
+  publisher={Taylor \& Francis},
+  doi={10.1080/10556789908805759}
+}
+
+@book{fiacco1968nonlinear,
+  title={Nonlinear Programming: Sequential Unconstrained Minimization Techniques},
+  author={Fiacco, Anthony V and McCormick, Garth P},
+  year={1968},
+  publisher={John Wiley \& Sons},
+  note={Reprinted as SIAM Classics in Applied Mathematics 4, 1990},
+  doi={10.1137/1.9781611971316}
+}
+
+@article{mehrotra1992implementation,
+  title={On the implementation of a primal-dual interior point method},
+  author={Mehrotra, Sanjay},
+  journal={SIAM Journal on Optimization},
+  volume={2},
+  number={4},
+  pages={575--601},
+  year={1992},
+  publisher={SIAM},
+  doi={10.1137/0802028}
+}
+
+@article{byrd1999interior,
+  title={An interior point algorithm for large-scale nonlinear programming},
+  author={Byrd, Richard H and Hribar, Mary E and Nocedal, Jorge},
+  journal={SIAM Journal on Optimization},
+  volume={9},
+  number={4},
+  pages={877--900},
+  year={1999},
+  publisher={SIAM},
+  doi={10.1137/S1052623497325107}
+}
+
+@article{nocedal2008adaptive,
+  title={Adaptive barrier update strategies for nonlinear interior methods},
+  author={Nocedal, Jorge and W{\"a}chter, Andreas and Waltz, Richard A},
+  journal={SIAM Journal on Optimization},
+  volume={19},
+  number={4},
+  pages={1674--1693},
+  year={2008},
+  publisher={SIAM},
+  doi={10.1137/060649513}
+}
+
+@article{levenberg1944method,
+  title={A method for the solution of certain non-linear problems in least squares},
+  author={Levenberg, Kenneth},
+  journal={Quarterly of Applied Mathematics},
+  volume={2},
+  pages={164--168},
+  year={1944},
+  doi={10.1090/qam/10666}
+}
+
+@article{marquardt1963algorithm,
+  title={An algorithm for least-squares estimation of nonlinear parameters},
+  author={Marquardt, Donald W},
+  journal={Journal of the Society for Industrial and Applied Mathematics},
+  volume={11},
+  number={2},
+  pages={431--441},
+  year={1963},
+  publisher={SIAM},
+  doi={10.1137/0111030}
+}
+
+@article{forsgren2002interior,
+  title={Interior methods for nonlinear optimization},
+  author={Forsgren, Anders and Gill, Philip E and Wright, Margaret H},
+  journal={SIAM Review},
+  volume={44},
+  number={4},
+  pages={525--597},
+  year={2002},
+  publisher={SIAM},
+  doi={10.1137/S0036144502414942}
+}
+
+@book{conn2000trust,
+  title={Trust Region Methods},
+  author={Conn, Andrew R and Gould, Nicholas IM and Toint, Philippe L},
+  year={2000},
+  publisher={SIAM},
+  series={MPS/SIAM Series on Optimization},
+  doi={10.1137/1.9780898719857}
+}
+
+@unpublished{vanaret2024uno,
+  title={Implementing a unified solver for nonlinearly constrained optimization},
+  author={Vanaret, Charlie and Leyffer, Sven},
+  year={2024},
+  note={Submitted to Mathematical Programming Computation. Preprint available at \url{https://www.researchgate.net/publication/397446552}}
+}
+
+@article{pirnay2012optimal,
+  title={Optimal sensitivity based on {IPOPT}},
+  author={Pirnay, Hans and L{\'o}pez-Negrete, Rodrigo and Biegler, Lorenz T},
+  journal={Mathematical Programming Computation},
+  volume={4},
+  number={4},
+  pages={307--331},
+  year={2012},
+  publisher={Springer},
+  doi={10.1007/s12532-012-0043-2}
+}
+#+end_src
