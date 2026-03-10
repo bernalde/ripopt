@@ -311,6 +311,150 @@ final_primal_inf: ~1e-1 (not feasible)
 
 ---
 
+## Starting Point Strategies
+
+Interior point methods are local solvers. The starting point determines which
+basin of attraction the solver lands in. Changing `x0` is often more effective
+than tuning `SolverOptions`.
+
+### When to try a new starting point
+
+Look for these diagnostic patterns:
+
+- `final_primal_inf` is large → solver never reached feasibility from `x0`
+- `restoration_count` is high → solver kept losing feasibility, suggesting
+  `x0` is far from the feasible region
+- Status is `MaxIterations` with `final_mu` stuck → solver is cycling in a
+  bad region
+
+### How to change starting points
+
+The mechanism depends on how the problem is defined:
+
+**`.nl` file problems (AMPL/CUTEst):**
+
+The starting point is embedded in the `.nl` file. Claude Code can:
+
+1. **Edit the `.nl` file directly** — the initial `x` values appear in the
+   `x` segment of the file. Claude can parse and rewrite them:
+
+   ```bash
+   # Solve with default x0
+   ripopt_ampl problem.nl print_level=5
+
+   # Claude reads diagnostics, decides to try new x0
+   # Edits the x segment in problem.nl with new values
+   # Re-solves
+   ripopt_ampl problem.nl print_level=5
+   ```
+
+2. **Use the `.sol` file as warm-start** — after a failed solve, the `.sol`
+   file contains the best point found. Copy it back as the new `.nl` starting
+   point and re-solve with `warm_start_init_point=yes`:
+
+   ```bash
+   ripopt_ampl problem.nl print_level=5 warm_start_init_point=yes
+   ```
+
+**Rust-defined problems (examples, tests):**
+
+The starting point is hardcoded in `initial_point()`. Claude Code edits the
+source and recompiles (~2 seconds for ripopt). This is the simplest approach:
+
+```
+Claude Code:
+  1. Runs `cargo run --example debug_tp374 2>&1`
+  2. Reads diagnostics: final_primal_inf=0.12, restoration_count=8
+  3. Reasons: "x0=[0.1,...,0.1] is far from feasible. The trig constraints
+     need G(z,x) ≈ 1 at several z values. Let me try x0 that makes
+     A(z,x) ≈ 1, B(z,x) ≈ 0."
+  4. Edits initial_point() in the source:
+       x0[0] = 1.0;  // cos(z) ≈ 1 at z=0
+       for i in 1..9 { x0[i] = 0.0; }
+       x0[9] = 0.3;   // near known optimal
+  5. Runs `cargo run --example debug_tp374 2>&1`
+  6. Reads new diagnostics, compares
+```
+
+**Environment variable override (optional pattern):**
+
+For problems where you want to avoid recompilation, you can add a file-based
+override to `initial_point()`:
+
+```rust
+fn initial_point(&self, x0: &mut [f64]) {
+    // Default
+    for i in 0..10 { x0[i] = 0.1; }
+
+    // Override from file if RIPOPT_X0 is set
+    if let Ok(path) = std::env::var("RIPOPT_X0") {
+        if let Ok(contents) = std::fs::read_to_string(&path) {
+            for (i, val) in contents.split_whitespace().enumerate() {
+                if i < x0.len() {
+                    if let Ok(v) = val.parse::<f64>() { x0[i] = v; }
+                }
+            }
+        }
+    }
+}
+```
+
+Then Claude Code writes `x0.txt` and runs without recompiling:
+
+```bash
+echo "1.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.3" > x0.txt
+RIPOPT_X0=x0.txt cargo run --example debug_tp374
+```
+
+### Warm-start from previous result
+
+The most natural multistart pattern: use `result.x` from a failed run as the
+starting point for the next attempt. This avoids re-exploring territory the
+solver already covered.
+
+```rust
+// Attempt 1: default x0
+let r1 = ripopt::solve(&problem, &opts);
+
+if r1.status != SolveStatus::Optimal {
+    // Attempt 2: warm-start from r1's best point
+    problem.set_x0(r1.x.clone());
+    let mut opts2 = opts.clone();
+    opts2.warm_start = true;
+    // Resume near where r1 left off
+    opts2.mu_init = r1.diagnostics.final_mu.max(1e-4);
+    let r2 = ripopt::solve(&problem, &opts2);
+}
+```
+
+For `.nl` problems via the AMPL interface, warm-start works automatically:
+the `.sol` file from the first run becomes the starting point when you pass
+`warm_start_init_point=yes`.
+
+### Multistart strategies Claude Code can use
+
+1. **Perturbed multistart** — take the default `x0`, add random or structured
+   perturbations, try several. Keep the best result.
+
+2. **Constraint-informed initialization** — analyze the constraint structure
+   to pick `x0` that approximately satisfies some constraints. For TP374,
+   this means choosing `x[0..9]` so that the trigonometric sums `G(z,x)`
+   are in the right range.
+
+3. **Two-phase approach** — first minimize constraint violation (set
+   `objective ≡ 0` or use the restoration NLP), then use the feasible point
+   as `x0` for the real problem.
+
+4. **Scale-aware initialization** — if gradients at `x0` are huge
+   (`obj_scaling` is very small in the diagnostics), the starting point may
+   be in a steep region. Move `x0` toward where the gradient is moderate.
+
+5. **Literature / domain knowledge** — for known problem classes (e.g.,
+   optimal power flow, chemical equilibrium), there are standard
+   initialization heuristics. Claude Code can look these up and apply them.
+
+---
+
 ## Using Diagnostics with Claude Code
 
 There are two ways to use the diagnostics-driven steering loop: interactively
