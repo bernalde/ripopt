@@ -311,37 +311,200 @@ final_primal_inf: ~1e-1 (not feasible)
 
 ---
 
-## LLM-Guided Steering Workflow
+## Using Diagnostics with Claude Code
 
-The intended workflow for Claude Code or similar agents:
+There are two ways to use the diagnostics-driven steering loop: interactively
+inside a Claude Code session, or non-interactively from the command line with
+`claude -p`.
+
+### Mode 1: Interactive (inside Claude Code)
+
+You're in a Claude Code session working on your project. You ask Claude to
+solve a problem and it does the steering loop for you:
 
 ```
-1. Call ripopt::solve(&problem, &default_options)
-2. Read result.diagnostics
-3. IF status == Optimal: done
-4. ELSE: reason about diagnostics pattern
-   - "15 filter_rejects + 3 restorations + mu stuck at 1e-3"
-   - -> "Line search is fighting the filter. Try higher mu_init
-        and slack reformulation."
-5. Adjust SolverOptions accordingly
-6. Re-solve and compare
-7. Repeat (with memory of what was tried)
+You:  "Run the TP374 example. If it doesn't converge, read the diagnostics
+       and try adjusting options. Give it 3 attempts."
+
+Claude Code:
+  1. Runs `cargo run --example debug_tp374 2>&1`
+  2. Reads the `--- ripopt diagnostics ---` block from stderr
+  3. Sees: filter_rejects=47, restoration_count=8, final_mu=1.2e-2
+  4. Edits examples/debug_tp374.rs: changes mu_init to 1.0, kappa to 3.0
+  5. Re-runs, reads new diagnostics
+  6. Reports back: "Attempt 2 reduced filter_rejects to 12 but still
+     MaxIterations. Trying L-BFGS Hessian..."
+  7. Edits again, re-runs
+  8. Reports final result with comparison table
 ```
 
-The key SolverOptions knobs for steering:
+This is the natural workflow when you're developing interactively. Claude Code
+has full context of the codebase, can edit source files, and can reason about
+the diagnostic patterns across multiple attempts.
+
+**When to use:** Exploratory work, debugging a specific problem, developing
+new solver strategies.
+
+### Mode 2: Non-interactive (`claude -p` from the shell)
+
+You pipe a prompt to Claude Code from a script or the command line. Claude
+runs autonomously and returns the result:
+
+```bash
+# Single problem, automated steering
+claude -p "
+  Run: cargo run --example debug_tp374 2>&1
+  Parse the '--- ripopt diagnostics ---' block from stderr.
+  If status is not Optimal:
+    - Read the diagnostics pattern
+    - Edit the SolverOptions in examples/debug_tp374.rs based on:
+      * High filter_rejects -> increase mu_init, decrease kappa
+      * High restoration_count -> try enable_slack_fallback
+      * mu stuck high -> try mu_strategy_adaptive: false
+      * Large multipliers -> try hessian_approximation_lbfgs: true
+    - Re-run and compare
+    - Try up to 3 adjustments
+  Report the best result found.
+"
+```
+
+You can also write a shell script that loops over multiple problems:
+
+```bash
+#!/bin/bash
+# solve_batch.sh — run Claude Code steering on a list of problems
+PROBLEMS="debug_tp374 hs071 rosenbrock"
+
+for prob in $PROBLEMS; do
+  echo "=== Solving $prob ==="
+  claude -p "
+    Run cargo run --example $prob 2>&1.
+    If it converges (Optimal or Acceptable), report the result.
+    If not, read the diagnostics block, adjust SolverOptions, and
+    retry up to 3 times. Report what you tried and the best result.
+  "
+  echo ""
+done
+```
+
+**When to use:** Batch testing, CI pipelines, automated benchmarking,
+running the same steering strategy across many problems.
+
+### Architecture
+
+In both modes, the architecture is the same:
+
+```
+ripopt (Rust)                    Claude Code (LLM)
+  |                                  |
+  |  solve(&problem, &options)       |
+  |  -> prints iteration table       |
+  |  -> prints diagnostics block     |
+  |  -> returns SolveResult          |
+  |                                  |
+  |  stderr -----> reads output ---->|
+  |                                  |  reasons about patterns
+  |                                  |  decides new options
+  |                                  |  edits SolverOptions
+  |  <----- re-runs with new opts <--|
+  |                                  |
+  (repeat until converged or budget exhausted)
+```
+
+The Rust code is purely a reporter. It has no knowledge of Claude. All
+intelligence — pattern matching, strategy selection, option adjustment —
+lives in Claude Code's reasoning. The `SolverDiagnostics` struct just
+makes the solver's internal state visible in a structured, parseable format.
+
+### Programmatic access (Rust code)
+
+If you're writing Rust code that calls ripopt, you can also read diagnostics
+directly without parsing stderr:
+
+```rust
+let result = ripopt::solve(&problem, &options);
+
+if result.status != SolveStatus::Optimal {
+    let d = &result.diagnostics;
+
+    // Decide next options based on diagnostics
+    let mut opts2 = options.clone();
+    if d.filter_rejects > 5 {
+        opts2.mu_init = 1.0;
+        opts2.kappa = 3.0;
+    }
+    if d.restoration_count > 3 {
+        opts2.enable_slack_fallback = true;
+    }
+    if d.final_mu > 1e-4 {
+        opts2.mu_strategy_adaptive = false;
+    }
+
+    let result2 = ripopt::solve(&problem, &opts2);
+}
+```
+
+This is useful for building automated tuning loops or integration tests
+that adapt options based on solver behavior.
+
+---
+
+## SolverOptions Reference
+
+The key knobs for steering, grouped by what they control:
+
+### Barrier parameter
 
 | Option | Default | Effect |
 |---|---|---|
 | `mu_init` | 0.1 | Higher = more room for infeasible exploration |
+| `mu_min` | 1e-11 | Floor for barrier parameter |
 | `kappa` | 10.0 | Lower = slower mu decrease (more conservative) |
 | `mu_strategy_adaptive` | true | false = monotone decrease (simpler, sometimes better) |
 | `mu_linear_decrease_factor` | 0.2 | Controls monotone mu reduction speed |
-| `max_iter` | 3000 | Budget |
-| `max_soc` | 4 | More SOC = better for nonlinear constraints |
-| `hessian_approximation_lbfgs` | false | true = skip exact Hessian (robustness) |
-| `enable_slack_fallback` | true | Explicit slacks for inequalities |
-| `enable_al_fallback` | true | Augmented Lagrangian for equalities |
+| `mu_superlinear_decrease_power` | 1.5 | Exponent for superlinear mu decrease |
+| `barrier_tol_factor` | 10.0 | Subproblem tolerance = this * mu |
+
+### Convergence
+
+| Option | Default | Effect |
+|---|---|---|
+| `tol` | 1e-8 | Optimality tolerance |
+| `acceptable_tol` | 1e-4 | Relaxed tolerance for acceptable convergence |
+| `acceptable_iter` | 10 | Consecutive acceptable iterations needed |
+| `max_iter` | 3000 | Iteration budget |
+| `max_wall_time` | 0.0 | Wall-clock limit in seconds (0 = unlimited) |
+
+### Line search and corrections
+
+| Option | Default | Effect |
+|---|---|---|
+| `max_soc` | 4 | Max second-order corrections per step |
+| `watchdog_shortened_iter_trigger` | 10 | Consecutive short steps before watchdog |
+| `watchdog_trial_iter_max` | 3 | Watchdog trial iterations |
+
+### Hessian strategy
+
+| Option | Default | Effect |
+|---|---|---|
+| `hessian_approximation_lbfgs` | false | true = L-BFGS instead of exact Hessian |
+| `enable_lbfgs_hessian_fallback` | true | Auto-retry with L-BFGS if exact Hessian fails |
+
+### Fallback strategies
+
+| Option | Default | Effect |
+|---|---|---|
+| `enable_slack_fallback` | true | Reformulate inequalities with explicit slacks |
+| `enable_al_fallback` | true | Augmented Lagrangian for constrained problems |
 | `enable_sqp_fallback` | true | SQP for small constrained problems |
-| `mehrotra_pc` | false | Predictor-corrector (fewer iterations) |
-| `gondzio_mcc_max` | 0 | Centrality corrections (better centering) |
+| `enable_lbfgs_fallback` | true | L-BFGS for unconstrained problems |
+
+### Advanced
+
+| Option | Default | Effect |
+|---|---|---|
+| `mehrotra_pc` | false | Mehrotra predictor-corrector (fewer iterations) |
+| `gondzio_mcc_max` | 0 | Gondzio centrality corrections (better centering) |
 | `warm_start` | false | Reuse previous solution as starting point |
+| `enable_preprocessing` | true | Eliminate fixed vars and redundant constraints |
+| `detect_linear_constraints` | true | Skip Hessian for linear constraints |
