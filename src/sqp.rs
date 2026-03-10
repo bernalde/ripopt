@@ -36,6 +36,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             constraint_values: vec![],
             status: SolveStatus::NumericalError,
             iterations: 0,
+            diagnostics: Default::default(),
         };
     }
 
@@ -287,6 +288,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         constraint_values: g,
         status,
         iterations: iter,
+        diagnostics: Default::default(),
     }
 }
 

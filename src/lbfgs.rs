@@ -232,6 +232,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         constraint_values: g_out,
         status,
         iterations: iter,
+        diagnostics: Default::default(),
     }
 }
 

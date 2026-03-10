@@ -255,6 +255,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 constraint_values: g,
                 status,
                 iterations: total_iters,
+                diagnostics: Default::default(),
             };
         }
 
@@ -272,6 +273,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 constraint_values: g,
                 status: SolveStatus::Acceptable,
                 iterations: total_iters,
+                diagnostics: Default::default(),
             };
         }
 
@@ -313,6 +315,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         constraint_values: g,
         status: SolveStatus::MaxIterations,
         iterations: total_iters,
+        diagnostics: Default::default(),
     }
 }
 

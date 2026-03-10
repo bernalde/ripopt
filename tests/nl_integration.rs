@@ -413,6 +413,7 @@ fn nl_sol_writer() {
         constraint_values: vec![3.0],
         status: SolveStatus::Optimal,
         iterations: 10,
+        diagnostics: Default::default(),
     };
 
     let mut buf: Vec<u8> = Vec::new();

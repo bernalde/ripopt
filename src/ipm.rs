@@ -35,7 +35,7 @@ use crate::options::SolverOptions;
 use crate::problem::NlpProblem;
 use crate::restoration::RestorationPhase;
 use crate::restoration_nlp::RestorationNlp;
-use crate::result::{SolveResult, SolveStatus};
+use crate::result::{SolveResult, SolverDiagnostics, SolveStatus};
 use crate::slack_formulation::SlackFormulation;
 use crate::warmstart::WarmStartInitializer;
 
@@ -194,6 +194,8 @@ pub(crate) struct SolverState {
     pub obj_scaling: f64,
     /// Constraint scaling factors (for NLP scaling / result unscaling).
     pub g_scaling: Vec<f64>,
+    /// Accumulated solver diagnostics.
+    pub diagnostics: SolverDiagnostics,
 }
 
 /// Barrier parameter mode (Ipopt's adaptive mu strategy).
@@ -663,6 +665,7 @@ impl SolverState {
             consecutive_acceptable: 0,
             obj_scaling: 1.0,
             g_scaling: vec![1.0; m],
+            diagnostics: SolverDiagnostics::default(),
         }
     }
 
@@ -1139,6 +1142,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         constraint_values: g_out,
                         status: SolveStatus::MaxIterations,
                         iterations: ls_result.iterations,
+                        diagnostics: SolverDiagnostics::default(),
                     };
                 }
                 fallback_opts.max_wall_time = remaining;
@@ -1233,6 +1237,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             constraint_values: final_g,
             status: final_status,
             iterations: final_iters,
+            diagnostics: SolverDiagnostics::default(),
         };
     }
 
@@ -1315,6 +1320,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 );
             }
             result = lbfgs_result;
+            result.diagnostics.fallback_used = Some("lbfgs_hessian".into());
         } else if options.print_level >= 5 {
             eprintln!(
                 "ripopt: L-BFGS Hessian fallback did not improve ({:?})",
@@ -1365,6 +1371,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 );
             }
             result = al_result;
+            result.diagnostics.fallback_used = Some("augmented_lagrangian".into());
         } else if options.print_level >= 5 {
             eprintln!(
                 "ripopt: AL fallback did not improve ({:?})",
@@ -1418,6 +1425,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 );
             }
             result = sqp_result;
+            result.diagnostics.fallback_used = Some("sqp".into());
         } else if options.print_level >= 5 {
             eprintln!(
                 "ripopt: SQP fallback did not improve ({:?})",
@@ -1513,6 +1521,14 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             let z_l_out = slack_result.bound_multipliers_lower[..n].to_vec();
             let z_u_out = slack_result.bound_multipliers_upper[..n].to_vec();
 
+            let mut diag = slack_result.diagnostics;
+            diag.fallback_used = Some("slack".into());
+            diag.wall_time_secs = solve_start.elapsed().as_secs_f64();
+            let slack_status = slack_result.status;
+            let slack_iters = result.iterations + slack_result.iterations;
+            if options.print_level >= 5 {
+                diag.print_summary(slack_status, slack_iters);
+            }
             return SolveResult {
                 x: x_out,
                 objective: slack_result.objective,
@@ -1520,8 +1536,9 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 bound_multipliers_lower: z_l_out,
                 bound_multipliers_upper: z_u_out,
                 constraint_values: g_out,
-                status: slack_result.status,
-                iterations: result.iterations + slack_result.iterations,
+                status: slack_status,
+                iterations: slack_iters,
+                diagnostics: diag,
             };
         } else if options.print_level >= 5 {
             eprintln!(
@@ -1531,6 +1548,10 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
     }
 
+    result.diagnostics.wall_time_secs = solve_start.elapsed().as_secs_f64();
+    if options.print_level >= 5 {
+        result.diagnostics.print_summary(result.status, result.iterations);
+    }
     result
 }
 
@@ -3183,6 +3204,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 };
 
                 if let Some((x_soc, obj_soc, g_soc, alpha_soc)) = soc_accepted {
+                    state.diagnostics.soc_corrections += 1;
                     state.x = x_soc;
                     state.obj = obj_soc;
                     state.g = g_soc;
@@ -3198,6 +3220,8 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
 
         if !step_accepted {
+            state.diagnostics.filter_rejects += 1;
+
             // Add current point to filter before entering restoration (Ipopt convention).
             filter.add(theta_current, phi_current);
             filter.augment_for_restoration(theta_current);
@@ -3223,6 +3247,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             );
 
             if gn_success {
+                state.diagnostics.restoration_count += 1;
                 // GN restoration succeeded — apply standard restoration success handling
                 apply_restoration_success(
                     &mut state, &mut filter, &mut mu_state, options, n, m, problem, &x_rest,
@@ -3243,6 +3268,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 // making it prohibitively expensive for n+m > 10000.
                 let kkt_dim = n + m;
                 if fail_count == 2 && !options.disable_nlp_restoration && kkt_dim <= 10000 {
+                    state.diagnostics.nlp_restoration_count += 1;
                     let (x_nlp, outcome) = attempt_nlp_restoration(
                         problem, &state, &filter, options, theta_current,
                     );
@@ -3320,6 +3346,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     1 => {
                         // First failure: switch mode
                         if mu_state.mode == MuMode::Free {
+                            state.diagnostics.mu_mode_switches += 1;
                             mu_state.mode = MuMode::Fixed;
                             mu_state.first_iter_in_mode = true;
                             let avg_compl = compute_avg_complementarity(&state);
@@ -3390,6 +3417,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         if !watchdog_active
             && consecutive_shortened >= options.watchdog_shortened_iter_trigger
         {
+            state.diagnostics.watchdog_activations += 1;
             watchdog_active = true;
             watchdog_trial_count = 0;
             let wd_theta = state.constraint_violation();
@@ -3615,6 +3643,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     } else {
                         // Switch to fixed mode
                         log::debug!("Switching to fixed mu mode (insufficient progress or tiny step)");
+                        state.diagnostics.mu_mode_switches += 1;
                         mu_state.mode = MuMode::Fixed;
                         mu_state.first_iter_in_mode = true;
                         let avg_compl = compute_avg_complementarity(&state);
@@ -3634,6 +3663,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     if sufficient && !mu_state.tiny_step && !mu_state.first_iter_in_mode {
                         // Switch back to free mode
                         log::debug!("Switching back to free mu mode (sufficient progress)");
+                        state.diagnostics.mu_mode_switches += 1;
                         mu_state.mode = MuMode::Free;
                         mu_state.remember_accepted(kkt_error);
                         mu_state.first_iter_in_mode = true;
@@ -4749,9 +4779,22 @@ fn gradient_descent_fallback(state: &SolverState) -> Option<(Vec<f64>, Vec<f64>)
 /// Computes z from stationarity for more accurate output multipliers.
 /// Unscales all values from the internal scaled space to the original NLP space.
 fn make_result(state: &SolverState, status: SolveStatus) -> SolveResult {
-    // Compute optimal z from stationarity in scaled space: ∇f_s + J_s^T y_s - z_l_s + z_u_s = 0
     let n = state.n;
     let m = state.m;
+
+    // Fill in final convergence measures for diagnostics
+    let mut diag = state.diagnostics.clone();
+    diag.final_mu = state.mu;
+    diag.final_primal_inf = state.constraint_violation();
+    diag.final_dual_inf = convergence::dual_infeasibility(
+        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+        &state.y, &state.z_l, &state.z_u, n,
+    );
+    diag.final_compl = convergence::complementarity_error(
+        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
+    );
+
+    // Compute optimal z from stationarity in scaled space: ∇f_s + J_s^T y_s - z_l_s + z_u_s = 0
     let mut grad_jty = state.grad_f.clone();
     for (idx, (&row, &col)) in state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate() {
         grad_jty[col] += state.jac_vals[idx] * state.y[row];
@@ -4789,5 +4832,6 @@ fn make_result(state: &SolverState, status: SolveStatus) -> SolveResult {
         constraint_values: g_out,
         status,
         iterations: state.iter,
+        diagnostics: diag,
     }
 }
