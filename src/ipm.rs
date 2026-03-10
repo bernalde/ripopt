@@ -2255,10 +2255,11 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
 
         // Overall progress stall detection: terminate when the solver is stuck
-        // with negligible step sizes and no improvement in either primal or dual.
+        // with no improvement in either primal or dual infeasibility.
+        // Two triggers: (1) tiny steps for 15 iterations, (2) no metric improvement
+        // for 30 iterations regardless of step size.
         // Only activate after 50 iterations to avoid tripping during early phases.
         if iteration > 50 {
-            let tiny_alpha = state.alpha_primal < 1e-8 && state.alpha_dual < 1e-4;
             let pr_improved = primal_inf < 0.99 * stall_best_pr;
             let du_improved = dual_inf < 0.99 * stall_best_du;
             if pr_improved {
@@ -2267,15 +2268,19 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             if du_improved {
                 stall_best_du = dual_inf;
             }
-            if pr_improved || du_improved || !tiny_alpha {
+            if pr_improved || du_improved {
                 stall_no_progress_count = 0;
             } else {
                 stall_no_progress_count += 1;
-                if stall_no_progress_count >= 15 {
+                let tiny_alpha = state.alpha_primal < 1e-8 && state.alpha_dual < 1e-4;
+                // Terminate after 15 iters with truly negligible steps,
+                // or 30 iters with no metric improvement regardless of step size
+                let stall_limit = if tiny_alpha { 15 } else { 30 };
+                if stall_no_progress_count >= stall_limit {
                     if options.print_level >= 3 {
                         eprintln!(
-                            "ripopt: Stalled with tiny steps for 15 iterations (alpha_p={:.2e}, pr={:.2e}, du={:.2e}), terminating",
-                            state.alpha_primal, primal_inf, dual_inf
+                            "ripopt: Stalled for {} iterations without progress (alpha_p={:.2e}, pr={:.2e}, du={:.2e}), terminating",
+                            stall_no_progress_count, state.alpha_primal, primal_inf, dual_inf
                         );
                     }
                     return make_result(&state, SolveStatus::NumericalError);
@@ -3234,7 +3239,10 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 // At fail_count == 2: try full NLP restoration early.
                 // The NLP restoration is the most robust approach (Ipopt's primary method).
                 // Try it before exhausting simpler recovery strategies.
-                if fail_count == 2 && !options.disable_nlp_restoration {
+                // Skip for large problems: NLP restoration doubles the problem size,
+                // making it prohibitively expensive for n+m > 10000.
+                let kkt_dim = n + m;
+                if fail_count == 2 && !options.disable_nlp_restoration && kkt_dim <= 10000 {
                     let (x_nlp, outcome) = attempt_nlp_restoration(
                         problem, &state, &filter, options, theta_current,
                     );
@@ -3257,7 +3265,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     }
                 }
 
-                if fail_count > 6 {
+                // For large problems (no NLP restoration), give up sooner
+                let max_restore_attempts = if kkt_dim > 10000 { 3 } else { 6 };
+                if fail_count > max_restore_attempts {
                     // Exhausted recovery attempts: check infeasibility and give up
                     log::warn!("Restoration failed at iteration {} (attempt #{})", iteration, fail_count);
                     let current_theta = state.constraint_violation();
