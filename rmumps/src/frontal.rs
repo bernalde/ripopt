@@ -1,6 +1,11 @@
 use crate::dense::{DenseMat, gemm_nt_sub};
 use crate::pivot::{dense_ldlt_bunch_kaufman, BunchKaufmanResult};
 
+// Thread-local reusable buffer for W = L21 * D in Schur complement computation.
+thread_local! {
+    static W_BUF: std::cell::RefCell<Vec<f64>> = std::cell::RefCell::new(Vec::new());
+}
+
 /// A frontal matrix in the multifrontal method.
 ///
 /// Represents a dense submatrix indexed by a set of global indices.
@@ -230,46 +235,55 @@ impl FrontalMatrix {
 
         // S -= L21 * D * L21^T using cache-blocked GEMM
         // Step 1: Compute W = L21 * D (scale columns by block-diagonal D)
+        // Reuse thread-local buffer for W to avoid per-call allocation
         let l_data = &l21.data;
-        let mut w_data = vec![0.0f64; ncb * nfs];
-        {
-            let mut k = 0;
-            while k < nfs {
-                if k + 1 < nfs && bk.d_offdiag[k].abs() > 1e-12 {
-                    let d00 = bk.d_diag[k];
-                    let d01 = bk.d_offdiag[k];
-                    let d11 = bk.d_diag[k + 1];
-                    let l0 = &l_data[k * ncb..(k + 1) * ncb];
-                    let l1 = &l_data[(k + 1) * ncb..(k + 2) * ncb];
-                    let w0 = &mut w_data[k * ncb..(k + 1) * ncb];
-                    for i in 0..ncb {
-                        w0[i] = d00 * l0[i] + d01 * l1[i];
+        W_BUF.with(|buf| {
+            let mut w_buf = buf.borrow_mut();
+            let w_len = ncb * nfs;
+            if w_buf.len() < w_len {
+                w_buf.resize(w_len, 0.0);
+            } else {
+                w_buf[..w_len].fill(0.0);
+            }
+            let w_data = &mut w_buf[..w_len];
+            {
+                let mut k = 0;
+                while k < nfs {
+                    if k + 1 < nfs && bk.d_offdiag[k].abs() > 1e-12 {
+                        let d00 = bk.d_diag[k];
+                        let d01 = bk.d_offdiag[k];
+                        let d11 = bk.d_diag[k + 1];
+                        let l0 = &l_data[k * ncb..(k + 1) * ncb];
+                        let l1 = &l_data[(k + 1) * ncb..(k + 2) * ncb];
+                        let (w0, w_rest) = w_data[k * ncb..].split_at_mut(ncb);
+                        let w1 = &mut w_rest[..ncb];
+                        for i in 0..ncb {
+                            w0[i] = d00 * l0[i] + d01 * l1[i];
+                        }
+                        for i in 0..ncb {
+                            w1[i] = d01 * l0[i] + d11 * l1[i];
+                        }
+                        k += 2;
+                    } else {
+                        let dk = bk.d_diag[k];
+                        let l_col = &l_data[k * ncb..(k + 1) * ncb];
+                        let w_col = &mut w_data[k * ncb..(k + 1) * ncb];
+                        for i in 0..ncb {
+                            w_col[i] = dk * l_col[i];
+                        }
+                        k += 1;
                     }
-                    let w1 = &mut w_data[(k + 1) * ncb..(k + 2) * ncb];
-                    for i in 0..ncb {
-                        w1[i] = d01 * l0[i] + d11 * l1[i];
-                    }
-                    k += 2;
-                } else {
-                    let dk = bk.d_diag[k];
-                    let l_col = &l_data[k * ncb..(k + 1) * ncb];
-                    let w_col = &mut w_data[k * ncb..(k + 1) * ncb];
-                    for i in 0..ncb {
-                        w_col[i] = dk * l_col[i];
-                    }
-                    k += 1;
                 }
             }
-        }
 
-        // Step 2: S -= W * L21^T using cache-blocked GEMM-NT
-        // W is ncb × nfs (col-major, stride ncb), L21 is ncb × nfs (col-major, stride ncb)
-        gemm_nt_sub(
-            ncb, ncb, nfs,
-            &w_data, ncb,
-            l_data, ncb,
-            &mut contrib.data, ncb,
-        );
+            // Step 2: S -= W * L21^T using cache-blocked GEMM-NT
+            gemm_nt_sub(
+                ncb, ncb, nfs,
+                w_data, ncb,
+                l_data, ncb,
+                &mut contrib.data, ncb,
+            );
+        });
 
         PartialFactorResult {
             bk,

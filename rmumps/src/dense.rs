@@ -175,6 +175,12 @@ const MR: usize = 8;
 const MR: usize = 4;
 const NR: usize = 4;
 
+// Thread-local reusable packing buffers for GEMM to avoid per-call allocation.
+thread_local! {
+    static PACKED_A_BUF: std::cell::RefCell<Vec<f64>> = std::cell::RefCell::new(Vec::new());
+    static PACKED_B_BUF: std::cell::RefCell<Vec<f64>> = std::cell::RefCell::new(Vec::new());
+}
+
 /// Cache-blocked C -= A * B^T where A is m×k, B is n×k (both column-major).
 /// C is m×n column-major. Used for Schur complement: S -= W * L21^T.
 ///
@@ -196,11 +202,28 @@ pub fn gemm_nt_sub(
         return;
     }
 
-    // Pack A and B for contiguous micro-kernel access
+    // Reuse thread-local packing buffers to avoid allocation on each call
     let m_padded = (m + MR - 1) / MR * MR;
     let n_padded = (n + NR - 1) / NR * NR;
-    let mut packed_a = vec![0.0f64; m_padded * k];
-    let mut packed_b = vec![0.0f64; n_padded * k];
+    let a_len = m_padded * k;
+    let b_len = n_padded * k;
+
+    PACKED_A_BUF.with(|buf| {
+    PACKED_B_BUF.with(|bbuf| {
+    let mut packed_a = buf.borrow_mut();
+    let mut packed_b = bbuf.borrow_mut();
+
+    // Grow if needed, then zero the portion we'll use
+    if packed_a.len() < a_len {
+        packed_a.resize(a_len, 0.0);
+    } else {
+        packed_a[..a_len].fill(0.0);
+    }
+    if packed_b.len() < b_len {
+        packed_b.resize(b_len, 0.0);
+    } else {
+        packed_b[..b_len].fill(0.0);
+    }
 
     // Pack A: for each MR-wide panel, layout packed_a[panel * MR * k + p * MR + i]
     for ii in (0..m).step_by(MR) {
@@ -259,6 +282,9 @@ pub fn gemm_nt_sub(
             }
         }
     }
+
+    }); // PACKED_B_BUF
+    }); // PACKED_A_BUF
 }
 
 /// Scalar fallback for small GEMM-NT.
