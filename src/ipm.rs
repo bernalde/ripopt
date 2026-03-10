@@ -1270,8 +1270,11 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
     // L-BFGS Hessian fallback: retry with L-BFGS Hessian approximation when
     // the exact-Hessian IPM failed. Skip if already in limited-memory mode.
+    // Skip for large problems: L-BFGS forms an explicit dense n×n matrix (O(n²) memory).
+    let n_lbfgs = problem.num_variables();
     if options.enable_lbfgs_hessian_fallback
         && !options.hessian_approximation_lbfgs
+        && n_lbfgs <= 5000
         && matches!(
             result.status,
             SolveStatus::MaxIterations | SolveStatus::NumericalError | SolveStatus::RestorationFailed
@@ -1321,8 +1324,12 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     }
 
     // Augmented Lagrangian fallback for constrained problems
+    // Skip for large problems: AL creates penalized subproblems that each run a full IPM solve,
+    // which is prohibitively expensive at scale.
+    let kkt_dim_al = problem.num_variables() + problem.num_constraints();
     if options.enable_al_fallback
         && problem.num_constraints() > 0
+        && kkt_dim_al <= 5000
         && matches!(
             result.status,
             SolveStatus::MaxIterations | SolveStatus::NumericalError
@@ -1721,6 +1728,33 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let mut inertia_params = InertiaCorrectionParams::default();
     let mut restoration = RestorationPhase::new(500);
 
+    // Estimate Schur complement density from Jacobian structure.
+    // If J^T·D·J would be denser than the full augmented KKT system,
+    // disable sparse condensed and use the full (n+m)×(n+m) system instead.
+    let disable_sparse_condensed = if use_sparse && m > 0 {
+        let (jac_rows_est, _) = problem.jacobian_structure();
+        // Build row counts
+        let mut row_nnz = vec![0usize; m];
+        for &r in &jac_rows_est {
+            row_nnz[r] += 1;
+        }
+        // Estimate Schur complement nnz: Σ k_i*(k_i+1)/2 (before dedup)
+        let schur_nnz_upper: usize = row_nnz.iter().map(|&k| k * (k + 1) / 2).sum();
+        // Augmented KKT nnz: hess_nnz + jac_nnz + n (diagonal)
+        let (hess_rows_est, _) = problem.hessian_structure();
+        let augmented_nnz = hess_rows_est.len() + jac_rows_est.len() + n;
+        let disable = schur_nnz_upper > 2 * augmented_nnz;
+        if disable && options.print_level >= 3 {
+            eprintln!(
+                "ripopt: Disabling sparse condensed KKT: Schur complement nnz estimate ({}) > 2× augmented KKT nnz ({})",
+                schur_nnz_upper, augmented_nnz
+            );
+        }
+        disable
+    } else {
+        false
+    };
+
     // Initialize filter
     let mut filter = Filter::new(1e4);
 
@@ -1750,6 +1784,12 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
     // Tiny step counter (Ipopt: accept full step when relative step < 10*eps for 2 consecutive)
     let mut consecutive_tiny_steps: usize = 0;
+
+    // Overall progress stall detection: if neither primal nor dual infeasibility
+    // improves by at least 1% over many consecutive iterations, terminate early.
+    let mut stall_best_pr: f64 = f64::INFINITY;
+    let mut stall_best_du: f64 = f64::INFINITY;
+    let mut stall_no_progress_count: usize = 0;
 
     // Consecutive iterations with obj < -1e20 for robust unbounded detection
     let mut consecutive_unbounded: usize = 0;
@@ -2214,6 +2254,35 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             consecutive_unbounded = 0;
         }
 
+        // Overall progress stall detection: terminate when the solver is stuck
+        // with negligible step sizes and no improvement in either primal or dual.
+        // Only activate after 50 iterations to avoid tripping during early phases.
+        if iteration > 50 {
+            let tiny_alpha = state.alpha_primal < 1e-8 && state.alpha_dual < 1e-4;
+            let pr_improved = primal_inf < 0.99 * stall_best_pr;
+            let du_improved = dual_inf < 0.99 * stall_best_du;
+            if pr_improved {
+                stall_best_pr = primal_inf;
+            }
+            if du_improved {
+                stall_best_du = dual_inf;
+            }
+            if pr_improved || du_improved || !tiny_alpha {
+                stall_no_progress_count = 0;
+            } else {
+                stall_no_progress_count += 1;
+                if stall_no_progress_count >= 15 {
+                    if options.print_level >= 3 {
+                        eprintln!(
+                            "ripopt: Stalled with tiny steps for 15 iterations (alpha_p={:.2e}, pr={:.2e}, du={:.2e}), terminating",
+                            state.alpha_primal, primal_inf, dual_inf
+                        );
+                    }
+                    return make_result(&state, SolveStatus::NumericalError);
+                }
+            }
+        }
+
         // Compute sigma (barrier diagonal)
         let sigma = kkt::compute_sigma(&state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u);
 
@@ -2221,10 +2290,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         // Condensed cost is O(n^2*m + n^3) vs O((n+m)^3) — strictly better when m > n.
         let use_condensed = m >= 2 * n && n > 0 && !use_sparse;
 
-        // Use sparse condensed KKT when problem is large and has constraints.
-        // Reduces (n+m)×(n+m) sparse factorization to n×n sparse factorization.
-        // The condensed S = H + Σ + J^T·D_c^{-1}·J may be banded for PDE problems.
-        let use_sparse_condensed = use_sparse && m > 0 && !use_condensed;
+        // Use sparse condensed KKT when problem is large and has constraints,
+        // but only if the Schur complement is actually sparser than the augmented system.
+        let use_sparse_condensed = use_sparse && m > 0 && !use_condensed && !disable_sparse_condensed;
 
         let t_kkt = Instant::now();
         let condensed_system = if use_condensed {

@@ -154,6 +154,13 @@ fn apply_option(opts: &mut SolverOptions, key: &str, value: &str) {
         "proactive_infeasibility_detection" => {
             opts.proactive_infeasibility_detection = value == "yes" || value == "true" || value == "1";
         }
+        "hessian_approximation" => {
+            match value {
+                "limited-memory" => opts.hessian_approximation_lbfgs = true,
+                "exact" => opts.hessian_approximation_lbfgs = false,
+                _ => eprintln!("Warning: unknown hessian_approximation '{}'", value),
+            }
+        }
         _ => {
             eprintln!("Warning: unknown option '{}'", key);
         }

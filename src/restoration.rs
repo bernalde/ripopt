@@ -116,23 +116,26 @@ impl RestorationPhase {
             }
 
             // Try Gauss-Newton step with adaptive Levenberg-Marquardt regularization.
-            // Start with eps_factor=1e-8 (original value), increase by 10x on failure (up to 1e-2).
+            // Skip for large problems: gauss_newton_step forms a dense m_active × m_active
+            // matrix (J*J^T) which is O(m²) memory and O(m³) factorization.
             let mut gn_step = None;
-            let mut eps_factor = 1e-8;
-            while eps_factor <= 1e-2 {
-                gn_step = self.gauss_newton_step(
-                    &jac_rows,
-                    &jac_cols,
-                    &jac_vals,
-                    &violation,
-                    &active_indices,
-                    n,
-                    eps_factor,
-                );
-                if gn_step.is_some() {
-                    break;
+            if m_active <= 5000 {
+                let mut eps_factor = 1e-8;
+                while eps_factor <= 1e-2 {
+                    gn_step = self.gauss_newton_step(
+                        &jac_rows,
+                        &jac_cols,
+                        &jac_vals,
+                        &violation,
+                        &active_indices,
+                        n,
+                        eps_factor,
+                    );
+                    if gn_step.is_some() {
+                        break;
+                    }
+                    eps_factor *= 10.0;
                 }
-                eps_factor *= 10.0;
             }
 
             let mut step = match gn_step {
