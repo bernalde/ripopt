@@ -31,9 +31,11 @@ pub struct NlProblem {
     /// Map from (row, col) to position in Jacobian values array.
     jac_map: HashMap<(usize, usize), usize>,
 
-    /// Hessian sparsity (dense lower triangle).
+    /// Hessian sparsity (sparse lower triangle).
     hess_rows: Vec<usize>,
     hess_cols: Vec<usize>,
+    /// Map from (row, col) lower-triangle pair to position in hessian values array.
+    hess_map: HashMap<(usize, usize), usize>,
 }
 
 impl NlProblem {
@@ -49,7 +51,11 @@ impl NlProblem {
             .next()
             .unwrap_or((0, false, None));
 
-        let obj_tape = obj_expr.map(|expr| Tape::build(&expr, &data.common_exprs, n));
+        // Pre-build common expression tapes to avoid exponential inlining blowup
+        use super::autodiff::CommonExprCache;
+        let ce_cache = CommonExprCache::build(&data.common_exprs, n);
+
+        let obj_tape = obj_expr.map(|expr| Tape::build_cached(&expr, &data.common_exprs, n, &ce_cache));
 
         let obj_linear = if obj_idx < data.obj_linear.len() {
             data.obj_linear[obj_idx].clone()
@@ -61,7 +67,7 @@ impl NlProblem {
         let con_tapes: Vec<Option<Tape>> = data
             .con_exprs
             .iter()
-            .map(|expr| expr.as_ref().map(|e| Tape::build(e, &data.common_exprs, n)))
+            .map(|expr| expr.as_ref().map(|e| Tape::build_cached(e, &data.common_exprs, n, &ce_cache)))
             .collect();
 
         // Build Jacobian sparsity from con_linear entries + nonlinear variables
@@ -98,14 +104,48 @@ impl NlProblem {
         let jac_rows: Vec<usize> = jac_entries.iter().map(|&(r, _)| r).collect();
         let jac_cols: Vec<usize> = jac_entries.iter().map(|&(_, c)| c).collect();
 
-        // Dense lower-triangle Hessian sparsity
-        let mut hess_rows = Vec::with_capacity(n * (n + 1) / 2);
-        let mut hess_cols = Vec::with_capacity(n * (n + 1) / 2);
-        for i in 0..n {
-            for j in 0..=i {
-                hess_rows.push(i);
-                hess_cols.push(j);
+        // Compute exact sparse Hessian structure via sparsity propagation through tapes.
+        // This tracks which variables influence each tape node and emits structural
+        // nonzero pairs at each nonlinear op (like ASL does internally).
+        use std::collections::BTreeSet;
+        let mut hess_set: BTreeSet<(usize, usize)> = BTreeSet::new();
+
+        if let Some(ref tape) = obj_tape {
+            hess_set.extend(tape.hessian_sparsity());
+        }
+        for tape in &con_tapes {
+            if let Some(tape) = tape {
+                hess_set.extend(tape.hessian_sparsity());
             }
+        }
+
+        // Add diagonal entries for all nonlinear variables (for regularization)
+        let mut all_nonlinear_vars = BTreeSet::new();
+        if let Some(ref tape) = obj_tape {
+            for &v in &tape.variables() {
+                all_nonlinear_vars.insert(v);
+            }
+        }
+        for tape in &con_tapes {
+            if let Some(tape) = tape {
+                for &v in &tape.variables() {
+                    all_nonlinear_vars.insert(v);
+                }
+            }
+        }
+        for &v in &all_nonlinear_vars {
+            hess_set.insert((v, v));
+        }
+
+        log::info!("Hessian sparsity: {} structural nonzeros (from {} nonlinear vars)", hess_set.len(), all_nonlinear_vars.len());
+
+        let mut hess_rows = Vec::with_capacity(hess_set.len());
+        let mut hess_cols = Vec::with_capacity(hess_set.len());
+        let mut hess_map = HashMap::with_capacity(hess_set.len());
+        for (idx, &(r, c)) in hess_set.iter().enumerate() {
+            hess_rows.push(r);
+            hess_cols.push(c);
+            hess_map.insert((r, c), idx);
         }
 
         NlProblem {
@@ -126,6 +166,7 @@ impl NlProblem {
             jac_map: jac_set,
             hess_rows,
             hess_cols,
+            hess_map,
         }
     }
 
@@ -170,32 +211,6 @@ impl NlProblem {
         }
     }
 
-    /// Compute the Lagrangian gradient: obj_factor * ∇f + Σ lambda[i] * ∇g_i.
-    fn lagrangian_gradient(&self, x: &[f64], obj_factor: f64, lambda: &[f64], grad: &mut [f64]) {
-        grad.iter_mut().for_each(|v| *v = 0.0);
-
-        // Objective gradient
-        if obj_factor != 0.0 {
-            let mut obj_grad = vec![0.0; self.n];
-            self.obj_gradient(x, &mut obj_grad);
-            for i in 0..self.n {
-                grad[i] += obj_factor * obj_grad[i];
-            }
-        }
-
-        // Constraint gradients
-        let mut con_grad = vec![0.0; self.n];
-        for (j, &lam) in lambda.iter().enumerate() {
-            if lam == 0.0 {
-                continue;
-            }
-            con_grad.iter_mut().for_each(|v| *v = 0.0);
-            self.con_gradient(j, x, &mut con_grad);
-            for i in 0..self.n {
-                grad[i] += lam * con_grad[i];
-            }
-        }
-    }
 }
 
 impl NlpProblem for NlProblem {
@@ -291,46 +306,20 @@ impl NlpProblem for NlProblem {
     }
 
     fn hessian_values(&self, x: &[f64], obj_factor: f64, lambda: &[f64], vals: &mut [f64]) {
-        // Finite-difference Hessian of the Lagrangian.
-        // H[:,j] ≈ (∇L(x + h*e_j) - ∇L(x - h*e_j)) / (2h)
-        let n = self.n;
+        // Analytical Hessian via forward-over-reverse AD on each tape.
         vals.iter_mut().for_each(|v| *v = 0.0);
 
-        let mut x_plus = x.to_vec();
-        let mut x_minus = x.to_vec();
-        let mut grad_plus = vec![0.0; n];
-        let mut grad_minus = vec![0.0; n];
+        // Objective Hessian contribution
+        if let Some(ref tape) = self.obj_tape {
+            let weight = if self.maximize { -obj_factor } else { obj_factor };
+            tape.hessian_accumulate(x, weight, &self.hess_map, vals);
+        }
 
-        let mut idx = 0;
-        for j in 0..n {
-            let h = (1e-8_f64).max(x[j].abs() * 1e-8);
-
-            x_plus[j] = x[j] + h;
-            x_minus[j] = x[j] - h;
-
-            self.lagrangian_gradient(&x_plus, obj_factor, lambda, &mut grad_plus);
-            self.lagrangian_gradient(&x_minus, obj_factor, lambda, &mut grad_minus);
-
-            let inv_2h = 0.5 / h;
-
-            // Fill lower triangle column j: rows j..n
-            // Dense lower triangle ordering: for each row i, columns 0..=i
-            // We iterate (i,j) for i >= j, which for column j means i = j..n
-            // But our hess layout is row-major lower triangle:
-            //   (0,0), (1,0), (1,1), (2,0), (2,1), (2,2), ...
-            // For column j, the entries are at positions where col == j.
-            // We need to find those positions.
-            for i in j..n {
-                let hij = (grad_plus[i] - grad_minus[i]) * inv_2h;
-                // Position in lower triangle: row i, col j → index = i*(i+1)/2 + j
-                let pos = i * (i + 1) / 2 + j;
-                vals[pos] = hij;
+        // Constraint Hessian contributions
+        for (i, tape) in self.con_tapes.iter().enumerate() {
+            if let Some(tape) = tape {
+                tape.hessian_accumulate(x, lambda[i], &self.hess_map, vals);
             }
-
-            x_plus[j] = x[j];
-            x_minus[j] = x[j];
-            let _ = idx; // suppress warning
-            idx += 1;
         }
     }
 }
