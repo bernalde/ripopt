@@ -42,7 +42,8 @@ Each entry has this shape:
     "wall_time_secs": 4.2,
     "fallback_used": null
   },
-  "notes": "Baseline run with default options"
+  "hypothesis": "Baseline run to establish diagnostic profile",
+  "outcome": "MaxIterations — high filter_rejects (47) and restoration_count (8) indicate the filter line search is struggling. mu stuck at 1.2e-2."
 }
 ```
 
@@ -84,6 +85,31 @@ The experiment log tells you what's been tried.
 
 **If all rules have been tried:** Try starting point changes (see below).
 
+### Step 1b: Explain your reasoning
+
+Before running each attempt, print a reasoning block to the user:
+
+```
+## Attempt N: [short title, e.g. "Increase mu_init"]
+
+**What:** [1 sentence describing the concrete change being made]
+**Why:** [1-2 sentences explaining the hypothesis — what diagnostic pattern
+triggered this choice, what the change does mechanically in the solver, and
+why that should improve convergence]
+**Risk:** [1 sentence on what could go wrong or why this might not help]
+```
+
+This is mandatory for every attempt including the baseline. For the baseline:
+```
+## Attempt 1: Baseline
+
+**What:** Running with default SolverOptions to establish a diagnostic baseline.
+**Why:** We need to see how the solver behaves on this problem before making
+any adjustments. The diagnostics will reveal the primary bottleneck.
+**Risk:** The problem may be hard enough that defaults fail entirely, but we
+need this data to guide subsequent attempts.
+```
+
 ### Starting Point Rules
 
 Apply these in order when options alone aren't working:
@@ -124,39 +150,173 @@ Append a JSON line to `experiments.jsonl` with:
 - `x0_change`: description of starting point change, or null
 - `status`, `objective`, `iterations`: from the result
 - `diagnostics`: all fields from the diagnostics block
-- `notes`: your reasoning for this attempt (1-2 sentences)
+- `hypothesis`: why this change should help (written before running)
+- `outcome`: what actually happened and what the diagnostics reveal (written after running)
 
-### Step 5: Evaluate and loop
+### Step 5: Analyze and explain
 
-Compare this result to the best so far:
+After each attempt, print a post-run analysis:
 
-- **Optimal**: You're done. Report success.
+```
+**Result:** [status] — objective [value] in [N] iterations
+**Diagnosis:** [1-2 sentences interpreting the key diagnostics — what they
+reveal about solver behavior this time. Reference specific numbers.]
+**Verdict:** [Improved/No change/Worse] compared to best so far — [why,
+citing specific metric changes, e.g. "filter_rejects dropped from 47 to 3
+but restoration_count increased from 8 to 12"]
+```
+
+Then compare this result to the best so far:
+
+- **Optimal**: You're done. Report success (see Output Format).
 - **Acceptable**: Record as best so far, but keep trying for Optimal.
 - **Better objective than previous best** (even if not converged): Note improvement.
 - **Worse or same**: Note that this approach didn't help.
 
 If attempts < MAX_ATTEMPTS, go to Step 0.
 
-If attempts >= MAX_ATTEMPTS, stop and report:
-- Best result found (status, objective, iterations, which attempt)
-- Summary table of all attempts
-- What worked and what didn't
+If attempts >= MAX_ATTEMPTS, stop and report (see Output Format).
 
 ## Output Format
 
-At the end, produce a summary like:
+### On success (Optimal found)
 
 ```
-## Optimization Results: $PROBLEM
+## Optimization Results: $PROBLEM — SOLVED
 
-Best: Attempt 3, status=Acceptable, obj=0.2341, iters=847
-Known optimal: 0.233264
+Solved at attempt N with status=Optimal, obj=[value], iters=[N].
 
-| # | Status | Objective | Iters | Key change | Notes |
-|---|--------|-----------|-------|------------|-------|
+### How we got here
+[2-3 sentences tracing the key turning points across attempts. What was the
+main bottleneck and what change overcame it?]
+
+| # | Status | Objective | Iters | Key change | Verdict |
+|---|--------|-----------|-------|------------|---------|
 | 1 | MaxIter | 0.877 | 2999 | baseline | High filter_rejects |
-| 2 | MaxIter | 0.544 | 2999 | mu_init=1.0 | Reduced filter_rejects |
-| 3 | Accept | 0.234 | 847 | +slack+x0 | Near optimal |
+| 2 | MaxIter | 0.544 | 2999 | mu_init=1.0 | Improved but still stuck |
+| 3 | Optimal | 0.233 | 847 | +slack+x0 | Solved |
+```
+
+### On failure (MAX_ATTEMPTS exhausted)
+
+```
+## Optimization Results: $PROBLEM — NOT SOLVED
+
+Best: Attempt N, status=[status], obj=[value], iters=[N]
+
+| # | Status | Objective | Iters | Key change | Verdict |
+|---|--------|-----------|-------|------------|---------|
+| ... | ... | ... | ... | ... | ... |
+
+### Why this problem is hard
+[Explain the structural difficulty based on what you observed across all
+attempts. Reference specific diagnostic patterns. Examples of explanations:
+- "Non-convex with multiple local minima — the solver converges to different
+  stationary points depending on the starting point (attempts 3,5,7 found
+  three distinct local solutions)."
+- "Severely ill-conditioned constraints — restoration_count remained high
+  (>10) across all attempts regardless of mu_init or slack reformulation,
+  suggesting near-degenerate constraint qualification."
+- "Barrier parameter unable to decrease — final_mu never dropped below 1e-3
+  in any attempt, indicating the central path is disrupted, possibly by
+  complementarity degeneracy."]
+
+### What we learned
+[Summarize which approaches showed improvement and which didn't, with
+specific metrics. Identify the primary bottleneck that blocked convergence.
+Example: "Increasing mu_init reduced filter_rejects from 47 to 3 (attempt 2)
+but restoration_count remained at 12. Slack reformulation (attempt 4) reduced
+restoration_count to 2 but objective worsened. The core issue appears to be
+a narrow feasible region where the barrier subproblems become ill-conditioned
+as mu decreases."]
+
+### Suggestions for further investigation
+[2-3 concrete, specific next steps. Not generic advice — reference the
+actual diagnostic patterns observed. Examples:
+- "Try bound_push=1e-2 to keep iterates further from bounds (final_compl
+  was 1e-1 in all attempts, suggesting bound proximity issues)."
+- "The problem may benefit from a penalty method instead of barrier —
+  consider an external SQP solver."
+- "Attempt 6 found obj=0.234 at a local minimum. A multistart with 20
+  random initial points covering the full bound range may find the basin
+  of attraction for the global optimum."]
+```
+
+## Variant: .nl File Problems
+
+When the problem is an `.nl` file (from AMPL, CUTEst, or Pyomo) instead of a
+Rust example, the protocol is the same but the mechanics differ:
+
+### Setup
+
+```
+NL_FILE=problem.nl             # Path to the .nl file
+MAX_ATTEMPTS=10
+MAX_WALL_TIME=30
+```
+
+### Running (replaces Step 3)
+
+Use the `ripopt_ampl` binary with key=value options on the command line:
+
+```bash
+cargo run --bin ripopt_ampl -- $NL_FILE print_level=5 max_wall_time=30 2>&1
+```
+
+To change solver options, pass them as key=value arguments:
+
+```bash
+cargo run --bin ripopt_ampl -- $NL_FILE \
+  print_level=5 max_wall_time=30 \
+  mu_init=1.0 kappa=3.0 mu_strategy=adaptive \
+  slack_fallback=yes mehrotra_pc=yes 2>&1
+```
+
+Available CLI options: `tol`, `max_iter`, `acceptable_tol`, `mu_init`,
+`print_level`, `max_wall_time`, `bound_push`, `kappa`,
+`mu_linear_decrease_factor`, `mu_strategy` (adaptive/monotone),
+`warm_start_init_point` (yes/no), `max_soc`, `slack_fallback` (yes/no),
+`al_fallback` (yes/no), `sqp_fallback` (yes/no), `mehrotra_pc` (yes/no),
+`gondzio_mcc_max`, `proactive_infeasibility_detection` (yes/no),
+`hessian_approximation` (limited-memory/exact).
+
+### Applying changes (replaces Step 2)
+
+**Options:** No source editing needed — pass options as CLI arguments.
+
+**Starting points:** The `.nl` file contains the initial point in its `x`
+segment. To change the starting point:
+
+1. **Edit the `.nl` file directly.** The `x` segment starts with a line `x<N>`
+   (where N is the number of variables) followed by lines of the form
+   `<index> <value>`. Modify the values. Keep a backup of the original.
+
+2. **Warm-start from a previous solution.** After a solve, ripopt writes a
+   `.sol` file. To warm-start from it, pass `warm_start_init_point=yes`. The
+   AMPL driver reads the `.sol` file's primal values as the new starting point.
+
+3. **Generate a new `.nl` file** from the modeling language (AMPL/Pyomo) with
+   different initial values, if the source model is available.
+
+### Recording (same as Step 4)
+
+The diagnostics block format is identical. Parse `--- ripopt diagnostics ---`
+from stderr. The experiment log entry should include:
+
+```json
+{
+  "attempt": 2,
+  "mode": "nl",
+  "nl_file": "problem.nl",
+  "cli_options": "mu_init=1.0 kappa=3.0",
+  "x0_change": "edited x segment: x0=[1.0, 0.5, 0.5, 1.0]",
+  "status": "MaxIterations",
+  "objective": 0.544,
+  "iterations": 2999,
+  "diagnostics": { ... },
+  "hypothesis": "Higher mu_init should reduce filter rejects by starting further from the boundary",
+  "outcome": "filter_rejects dropped from 47 to 3, but restoration_count increased to 12"
+}
 ```
 
 ## Important Rules

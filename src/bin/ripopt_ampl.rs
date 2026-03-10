@@ -137,11 +137,35 @@ fn apply_option(opts: &mut SolverOptions, key: &str, value: &str) {
                 opts.bound_push = v;
             }
         }
+        "kappa" => {
+            if let Ok(v) = value.parse() {
+                opts.kappa = v;
+            }
+        }
+        "mu_linear_decrease_factor" => {
+            if let Ok(v) = value.parse() {
+                opts.mu_linear_decrease_factor = v;
+            }
+        }
         "mu_strategy" => {
             opts.mu_strategy_adaptive = value == "adaptive";
         }
         "warm_start_init_point" => {
             opts.warm_start = value == "yes";
+        }
+        "max_soc" => {
+            if let Ok(v) = value.parse() {
+                opts.max_soc = v;
+            }
+        }
+        "slack_fallback" => {
+            opts.enable_slack_fallback = value == "yes" || value == "true" || value == "1";
+        }
+        "al_fallback" => {
+            opts.enable_al_fallback = value == "yes" || value == "true" || value == "1";
+        }
+        "sqp_fallback" => {
+            opts.enable_sqp_fallback = value == "yes" || value == "true" || value == "1";
         }
         "mehrotra_pc" => {
             opts.mehrotra_pc = value == "yes" || value == "true" || value == "1";
