@@ -21,7 +21,7 @@ pub mod warmstart;
 
 pub use options::SolverOptions;
 pub use problem::NlpProblem;
-pub use result::{SolveResult, SolveStatus};
+pub use result::{SolveResult, SolverDiagnostics, SolveStatus};
 pub use sensitivity::{ParametricNlpProblem, SensitivityContext, SensitivityResult};
 
 /// Solve a nonlinear programming problem using the interior point method.

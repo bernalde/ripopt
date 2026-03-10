@@ -422,6 +422,7 @@ impl<'a> PreprocessedProblem<'a> {
             constraint_values: g_full,
             status: reduced.status,
             iterations: reduced.iterations,
+            diagnostics: reduced.diagnostics.clone(),
         }
     }
 }
@@ -653,6 +654,7 @@ mod tests {
             constraint_values: vec![4.0],
             status: SolveStatus::Optimal,
             iterations: 10,
+            diagnostics: Default::default(),
         };
 
         let full = prep.unmap_solution(&reduced_result);
