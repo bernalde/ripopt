@@ -461,22 +461,46 @@ impl FrontalMatrix {
                     k += 2;
                 }
                 PivotResult::Delayed => {
-                    // Move this FS column to the end of the FS region (effectively
-                    // to the CB region). Swap it with the last unprocessed FS column.
-                    // Swap active_start with the last remaining
-                    // FS position to push delayed columns toward the CB region.
-                    // The simplest approach: swap to the last position in the
-                    // remaining FS range and shrink the FS range.
-                    let swap_target = active_start + (orig_nfs - k - 1);
-                    if swap_target != active_start {
-                        swap_full(&mut a, n, active_start, swap_target);
-                        perm.swap(active_start, swap_target);
-                        for j in 0..nfs_elim {
-                            l_data.swap(j * n + active_start, j * n + swap_target);
+                    // No pivot passed the threshold test. Delaying pivots would
+                    // push FS indices into the contribution block, breaking the
+                    // symbolic structure (parent fronts don't include delayed indices).
+                    // Instead, use the best available 1x1 pivot regardless of threshold.
+                    let mut best_col = active_start;
+                    let mut best_diag = a[active_start * n + active_start].abs();
+                    let fs_end_local = active_start + (orig_nfs - k);
+                    for col in (active_start + 1)..fs_end_local {
+                        let d = a[col * n + col].abs();
+                        if d > best_diag {
+                            best_diag = d;
+                            best_col = col;
                         }
                     }
-                    // This column is now at swap_target, which will be part of the CB.
-                    // Advance k but don't advance nfs_elim.
+                    // Swap best_col to active_start and eliminate as 1x1
+                    if best_col != active_start {
+                        swap_full(&mut a, n, active_start, best_col);
+                        perm.swap(active_start, best_col);
+                        for j in 0..nfs_elim {
+                            l_data.swap(j * n + active_start, j * n + best_col);
+                        }
+                    }
+                    let akk = a[active_start * n + active_start];
+                    d_diag[nfs_elim] = akk;
+                    if akk.abs() > 1e-30 {
+                        let m = n - active_start - 1;
+                        for i in 0..m {
+                            work[i] = a[(active_start + 1 + i) * n + active_start] / akk;
+                            l_data[nfs_elim * n + (active_start + 1 + i)] = work[i];
+                        }
+                        for i in 0..m {
+                            let si = work[i] * akk;
+                            let base = (active_start + 1 + i) * n + (active_start + 1);
+                            for j in 0..m {
+                                a[base + j] -= si * work[j];
+                            }
+                        }
+                    }
+                    l_data[nfs_elim * n + active_start] = 1.0;
+                    nfs_elim += 1;
                     k += 1;
                 }
             }
@@ -492,29 +516,23 @@ impl FrontalMatrix {
 
         let inertia = compute_inertia(&d_diag, &d_offdiag, nfs_elim);
 
-        // Build perm/perm_inv for the eliminated block
-        // In our factorization, the BK perm maps factored position -> original front position
-        let bk_perm: Vec<usize> = (0..nfs_elim).map(|i| perm[i]).collect();
-        let mut bk_perm_inv = vec![0usize; orig_size];
-        for (i, &p) in bk_perm.iter().enumerate() {
-            bk_perm_inv[p] = i;
+        // Build perm/perm_inv for the eliminated block.
+        // fs_indices is already built in factored order (fs_indices[k] = global
+        // index of the k-th pivot), so the BK perm is the identity mapping.
+        // The solve code uses bk.perm to index into fs_indices.
+        let bk_perm: Vec<usize> = (0..nfs_elim).collect();
+        let mut bk_perm_inv = vec![0usize; nfs_elim];
+        for i in 0..nfs_elim {
+            bk_perm_inv[i] = i;
         }
 
         // Build L factor for the eliminated block (nfs_elim x nfs_elim)
-        let mut l_mat = DenseMat::zeros(nfs_elim, nfs_elim);
-        for col in 0..nfs_elim {
-            for row in 0..nfs_elim {
-                // l_data is stored as [col * n + front_row]
-                // We need to map front_row -> elim_row
-                l_mat.data[col * nfs_elim + row] = l_data[col * n + row + (perm[row] - perm[row] + row)];
-            }
-        }
-        // Actually, the L factor rows correspond to permuted positions 0..nfs_elim
-        // Let me rebuild this correctly.
+        // l_data is stored column-major: l_data[col * n + row] = L[row, col]
+        // but the solve code expects row-major: l.data[row * nfs + col] = L[row, col]
         let mut l_factor = DenseMat::zeros(nfs_elim, nfs_elim);
         for col in 0..nfs_elim {
             for row in 0..nfs_elim {
-                l_factor.data[col * nfs_elim + row] = l_data[col * n + row];
+                l_factor.data[row * nfs_elim + col] = l_data[col * n + row];
             }
         }
 
@@ -543,7 +561,7 @@ impl FrontalMatrix {
             d_diag,
             d_offdiag,
             perm: bk_perm,
-            perm_inv: bk_perm_inv[..orig_size].to_vec(),
+            perm_inv: bk_perm_inv,
             inertia,
         };
 

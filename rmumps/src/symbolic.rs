@@ -246,17 +246,16 @@ impl SymbolicFactorization {
                 let parent_front = &supernodes[parent_idx].front_indices;
                 let union = sorted_union(child_cb, parent_front);
 
-                // Fill budget: extra zeros = (union.len() - parent_front.len()) * merged_nfs
-                // This is the number of zero entries added to the frontal matrix rows.
+                // Only merge when child's CB is a subset of parent's front.
+                // Extra CB indices would appear in the merged node's contribution
+                // but ancestor supernodes won't have them, causing incorrect
+                // extend_add assembly or panics during numeric factorization.
                 let extra_rows = union.len() - parent_front.len();
-                let merged_nfs = supernodes[s].nfs + supernodes[parent_idx].nfs;
-                let extra_zeros = extra_rows * merged_nfs;
-
-                // Accept if fill is small: at most 256 extra zeros, or < 50% growth
-                let parent_front_area = parent_front.len() * supernodes[parent_idx].nfs;
-                if extra_zeros > 256 && extra_zeros * 2 > parent_front_area {
+                if extra_rows > 0 {
                     continue;
                 }
+
+                let merged_nfs = supernodes[s].nfs + supernodes[parent_idx].nfs;
 
                 // Merge: child absorbs parent's columns
                 supernodes[s].nfs = merged_nfs;
