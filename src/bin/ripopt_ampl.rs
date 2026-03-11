@@ -77,6 +77,9 @@ fn main() {
     );
     println!("Objective: {:.15e}", result.objective);
 
+    // Print diagnostics to stderr
+    result.diagnostics.print_summary(result.status, result.iterations);
+
     // Write SOL file (replace .nl extension with .sol)
     let sol_path = if nl_path.ends_with(".nl") {
         format!("{}sol", &nl_path[..nl_path.len() - 2])
