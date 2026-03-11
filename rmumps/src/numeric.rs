@@ -84,9 +84,22 @@ pub struct NodeFactor {
 /// Takes the CSC matrix (upper triangle, possibly permuted) and the symbolic factorization.
 /// Uses supernodal factorization with level-set parallelism: supernodes at the same
 /// tree depth are independent and factored concurrently via rayon.
+///
+/// `pivot_threshold` controls delayed pivoting:
+/// - 0.0: classic Bunch-Kaufman (no delays)
+/// - 0.01: threshold pivoting matching MA57/MUMPS default
 pub fn multifrontal_factor(
     csc: &CscMatrix,
     sym: &SymbolicFactorization,
+) -> NumericFactorization {
+    multifrontal_factor_threshold(csc, sym, 0.0)
+}
+
+/// Perform the numeric multifrontal factorization with threshold pivoting.
+pub fn multifrontal_factor_threshold(
+    csc: &CscMatrix,
+    sym: &SymbolicFactorization,
+    pivot_threshold: f64,
 ) -> NumericFactorization {
     let num_snodes = sym.supernodes.len();
     if num_snodes == 0 {
@@ -137,13 +150,13 @@ pub fn multifrontal_factor(
                 // SAFETY: within a level, each thread writes to a unique s.
                 // Children are at lower levels (already completed), so reads are safe.
                 unsafe {
-                    factor_supernode(s, csc, sym, &node_factors, &contributions);
+                    factor_supernode(s, csc, sym, &node_factors, &contributions, pivot_threshold);
                 }
             });
         } else {
             for &s in level_nodes {
                 unsafe {
-                    factor_supernode(s, csc, sym, &node_factors, &contributions);
+                    factor_supernode(s, csc, sym, &node_factors, &contributions, pivot_threshold);
                 }
             }
         }
@@ -181,57 +194,74 @@ unsafe fn factor_supernode(
     sym: &SymbolicFactorization,
     node_factors: &[SyncCell<Option<NodeFactor>>],
     contributions: &[SyncCell<Option<(crate::dense::DenseMat, Vec<usize>)>>],
+    pivot_threshold: f64,
 ) {
     let snode = &sym.supernodes[s];
     let nfs = snode.nfs;
     let mut front = FrontalMatrix::new(snode.front_indices.clone(), nfs);
 
     // Assemble original matrix entries for all FS columns in this supernode.
-    // Build a local index map for O(1) lookup instead of binary search.
     let fs_end = snode.start + nfs;
+    let size = front.mat.nrows;
 
-    // Build global-to-local index map for this front
-    // For small fronts, binary search in assemble_entry is fine.
-    // For larger fronts, a hash or direct-mapped array is faster.
-    // Since indices are sorted and we know the range, we can use partition_point.
+    // Build global-to-local index map for O(1) lookup.
+    // Use a thread-local vec of size n to avoid per-supernode allocation.
+    // Initialize only the entries we need, then clear them after.
+    let front_indices = &snode.front_indices;
+    thread_local! {
+        static INDEX_MAP: std::cell::RefCell<Vec<usize>> = std::cell::RefCell::new(Vec::new());
+    }
+    INDEX_MAP.with(|map_cell| {
+        let mut map = map_cell.borrow_mut();
+        if map.len() < csc.n {
+            map.resize(csc.n, usize::MAX);
+        }
+        // Set up the map
+        for (local, &global) in front_indices.iter().enumerate() {
+            map[global] = local;
+        }
 
-    for offset in 0..nfs {
-        let col = snode.start + offset;
-        let local_col = offset; // FS columns are first in front_indices
+        for offset in 0..nfs {
+            let col = snode.start + offset;
+            let local_col = offset; // FS columns are first in front_indices
 
-        for idx in csc.col_ptr[col]..csc.col_ptr[col + 1] {
-            let row = csc.row_idx[idx];
-            let val = csc.vals[idx];
-            // Find local row index via binary search on front_indices
-            if let Ok(local_row) = snode.front_indices.binary_search(&row) {
-                let size = front.mat.nrows;
-                front.mat.data[local_col * size + local_row] += val;
-                if local_row != local_col {
-                    front.mat.data[local_row * size + local_col] += val;
+            for idx in csc.col_ptr[col]..csc.col_ptr[col + 1] {
+                let row = csc.row_idx[idx];
+                let val = csc.vals[idx];
+                let local_row = map[row];
+                if local_row != usize::MAX {
+                    front.mat.data[local_col * size + local_row] += val;
+                    if local_row != local_col {
+                        front.mat.data[local_row * size + local_col] += val;
+                    }
                 }
             }
         }
-    }
 
-    // Off-diagonal entries: for columns gi > fs_end in the front
-    for (fi, &gi) in snode.front_indices[nfs..].iter().enumerate() {
-        let local_col = nfs + fi;
-        let col_start = csc.col_ptr[gi];
-        let col_end = csc.col_ptr[gi + 1];
-        let rows = &csc.row_idx[col_start..col_end];
-        let lo = rows.partition_point(|&r| r < snode.start);
-        for k in lo..rows.len() {
-            let row = rows[k];
-            if row >= fs_end {
-                break;
+        // Off-diagonal entries: for columns gi > fs_end in the front
+        for (fi, &gi) in front_indices[nfs..].iter().enumerate() {
+            let local_col = nfs + fi;
+            let col_start = csc.col_ptr[gi];
+            let col_end = csc.col_ptr[gi + 1];
+            let rows = &csc.row_idx[col_start..col_end];
+            let lo = rows.partition_point(|&r| r < snode.start);
+            for k in lo..rows.len() {
+                let row = rows[k];
+                if row >= fs_end {
+                    break;
+                }
+                let local_row = row - snode.start;
+                let val = csc.vals[col_start + k];
+                front.mat.data[local_col * size + local_row] += val;
+                front.mat.data[local_row * size + local_col] += val;
             }
-            let local_row = row - snode.start; // FS rows have direct offset
-            let size = front.mat.nrows;
-            let val = csc.vals[col_start + k];
-            front.mat.data[local_col * size + local_row] += val;
-            front.mat.data[local_row * size + local_col] += val;
         }
-    }
+
+        // Clean up: reset only the entries we set
+        for &global in front_indices.iter() {
+            map[global] = usize::MAX;
+        }
+    });
 
     // Extend-add contributions from children (already computed at a lower level)
     for &child_s in &sym.snode_children[s] {
@@ -240,10 +270,14 @@ unsafe fn factor_supernode(
         }
     }
 
-    // Partial factorization
-    let result = front.partial_factor();
+    // Partial factorization — use threshold pivoting if enabled
+    let result = if pivot_threshold > 0.0 {
+        front.partial_factor_threshold(pivot_threshold)
+    } else {
+        front.partial_factor()
+    };
 
-    let PartialFactorResult { bk, l21, contrib, contrib_indices, fs_indices } = result;
+    let PartialFactorResult { bk, l21, contrib, contrib_indices, fs_indices, .. } = result;
 
     *node_factors[s].get_mut() = Some(NodeFactor {
         bk,

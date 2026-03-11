@@ -1,6 +1,6 @@
 use crate::coo::CooMatrix;
 use crate::csc::CscMatrix;
-use crate::numeric::{multifrontal_factor, NumericFactorization};
+use crate::numeric::{multifrontal_factor, multifrontal_factor_threshold, NumericFactorization};
 use crate::ordering::{self, Ordering};
 use crate::scaling::{self, Scaling, ScalingFactors};
 use crate::solve::multifrontal_solve;
@@ -12,18 +12,23 @@ use crate::{Inertia, SolverError};
 pub struct SolverOptions {
     /// Fill-reducing ordering method.
     pub ordering: Ordering,
-    /// Number of iterative refinement steps (default: 2).
+    /// Number of iterative refinement steps (default: 10, adaptive stopping).
     pub refine_steps: usize,
     /// Matrix scaling method applied before factorization.
     pub scaling: Scaling,
+    /// Pivot threshold for delayed pivoting (0.0 to 1.0).
+    /// A value of 0.0 disables threshold pivoting (classic Bunch-Kaufman).
+    /// Default: 0.01 (matches MA57/MUMPS CNTL(1)).
+    pub pivot_threshold: f64,
 }
 
 impl Default for SolverOptions {
     fn default() -> Self {
         Self {
             ordering: Ordering::Amd,
-            refine_steps: 2,
-            scaling: Scaling::None,
+            refine_steps: 10,
+            scaling: Scaling::Ruiz { max_iter: 10 },
+            pivot_threshold: crate::pivot::DEFAULT_PIVOT_THRESHOLD,
         }
     }
 }
@@ -106,7 +111,7 @@ impl Solver {
         }
         self.scaling_factors = sf;
 
-        let numeric = multifrontal_factor(&permuted_csc, sym);
+        let numeric = multifrontal_factor_threshold(&permuted_csc, sym, self.options.pivot_threshold);
         let inertia = numeric.inertia;
         self.numeric = Some(numeric);
         self.permuted_csc = Some(permuted_csc);
@@ -155,17 +160,33 @@ impl Solver {
         let mut permuted_sol = vec![0.0; n];
         multifrontal_solve(num, sym, &permuted_rhs, &mut permuted_sol)?;
 
-        // Iterative refinement in permuted space (using the scaled+permuted matrix)
+        // Adaptive iterative refinement in permuted space (using the scaled+permuted matrix).
+        // Stops early when residual stagnates (ratio > 0.9) or is small enough.
         if self.options.refine_steps > 0 {
             if let Some(ref pcsc) = self.permuted_csc {
                 let mut residual = vec![0.0; n];
                 let mut correction = vec![0.0; n];
+                let mut prev_res_norm = f64::INFINITY;
                 for _ in 0..self.options.refine_steps {
                     // r = permuted_rhs - A_perm * permuted_sol
                     pcsc.matvec(&permuted_sol, &mut residual);
+                    let mut res_norm: f64 = 0.0;
                     for i in 0..n {
                         residual[i] = permuted_rhs[i] - residual[i];
+                        res_norm = res_norm.max(residual[i].abs());
                     }
+
+                    // Stop if residual is small enough
+                    if res_norm < 1e-14 {
+                        break;
+                    }
+
+                    // Stop if refinement has stagnated
+                    if res_norm > 0.9 * prev_res_norm {
+                        break;
+                    }
+                    prev_res_norm = res_norm;
+
                     // Solve A_perm * e = r
                     multifrontal_solve(num, sym, &residual, &mut correction)?;
                     // x += e

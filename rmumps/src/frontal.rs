@@ -1,5 +1,8 @@
 use crate::dense::{DenseMat, gemm_nt_sub};
-use crate::pivot::{dense_ldlt_bunch_kaufman, BunchKaufmanResult};
+use crate::pivot::{
+    dense_ldlt_bunch_kaufman, BunchKaufmanResult, PivotResult,
+    compute_inertia,
+};
 
 // Thread-local reusable buffer for W = L21 * D in Schur complement computation.
 thread_local! {
@@ -34,6 +37,8 @@ pub struct PartialFactorResult {
     pub contrib_indices: Vec<usize>,
     /// Global indices of the fully-summed variables (for storing L entries).
     pub fs_indices: Vec<usize>,
+    /// Number of FS columns that were actually eliminated (may be < original nfs due to delays).
+    pub nfs_eliminated: usize,
 }
 
 impl FrontalMatrix {
@@ -118,6 +123,7 @@ impl FrontalMatrix {
                 l21: DenseMat::zeros(0, nfs),
                 contrib: DenseMat::zeros(0, 0),
                 contrib_indices,
+                nfs_eliminated: nfs,
                 fs_indices,
             };
         }
@@ -285,13 +291,354 @@ impl FrontalMatrix {
             );
         });
 
+        let nfs_eliminated = nfs;
         PartialFactorResult {
             bk,
             l21,
             contrib,
             contrib_indices,
             fs_indices,
+            nfs_eliminated,
         }
+    }
+
+    /// Partial factorization with threshold pivoting and delayed pivots.
+    ///
+    /// Unlike `partial_factor`, this can reject pivots that fail the threshold test.
+    /// Rejected FS columns are moved to the contribution block (delayed to parent).
+    /// This is the key mechanism that makes MA57/MUMPS reliable on KKT systems.
+    pub fn partial_factor_threshold(self, threshold: f64) -> PartialFactorResult {
+        let orig_nfs = self.nfs;
+        let orig_size = self.size();
+
+        if orig_nfs == 0 {
+            // No FS columns — just pass through as contribution
+            return PartialFactorResult {
+                bk: BunchKaufmanResult {
+                    l: DenseMat::zeros(0, 0),
+                    d_diag: vec![],
+                    d_offdiag: vec![],
+                    perm: vec![],
+                    perm_inv: vec![],
+                    inertia: crate::Inertia { positive: 0, negative: 0, zero: 0 },
+                },
+                l21: DenseMat::zeros(orig_size, 0),
+                contrib: self.mat,
+                contrib_indices: self.indices,
+                fs_indices: vec![],
+                nfs_eliminated: 0,
+            };
+        }
+
+        // Work with the full dense matrix. We'll perform threshold pivoting
+        // on the FS block, rejecting columns that fail the threshold test.
+        let mut a = self.mat.data.clone();
+        let n = orig_size;
+
+        // Track which FS columns are eliminated vs delayed
+        // perm[k] = original column index in the front
+        let mut perm: Vec<usize> = (0..n).collect();
+        let mut nfs_elim = 0usize; // number of successfully eliminated columns
+        let mut d_diag = vec![0.0; orig_nfs];
+        let mut d_offdiag = vec![0.0; orig_nfs];
+
+        // L is stored column-major: l[col * n + row]
+        let mut l_data = vec![0.0; n * orig_nfs];
+        let mut work = vec![0.0; 2 * n];
+
+        let mut k = 0;
+        while k < orig_nfs {
+            // Only look for pivots among the remaining FS columns [k..orig_nfs]
+            // But we also need to consider the active submatrix starting at index nfs_elim
+            // in the permuted system.
+            //
+            // At this point, columns 0..nfs_elim have been eliminated.
+            // Columns nfs_elim..orig_nfs are remaining FS candidates.
+            // Columns orig_nfs..n are CB.
+
+            let active_start = nfs_elim;
+
+            // Find pivot in the active FS portion
+            let fs_remaining = orig_nfs - k;
+
+            // Find best pivot among remaining FS columns
+            let pivot = find_pivot_in_fs(
+                &a, n, active_start, fs_remaining, threshold,
+            );
+
+            match pivot {
+                PivotResult::OneByOne(p) => {
+                    // Swap p to position active_start
+                    if p != active_start {
+                        swap_full(&mut a, n, active_start, p);
+                        perm.swap(active_start, p);
+                        // Swap L entries for previously eliminated columns
+                        for j in 0..nfs_elim {
+                            l_data.swap(j * n + active_start, j * n + p);
+                        }
+                    }
+
+                    let akk = a[active_start * n + active_start];
+                    d_diag[nfs_elim] = akk;
+
+                    if akk.abs() > 1e-30 {
+                        let m = n - active_start - 1;
+                        for i in 0..m {
+                            work[i] = a[(active_start + 1 + i) * n + active_start] / akk;
+                            l_data[nfs_elim * n + (active_start + 1 + i)] = work[i];
+                        }
+                        // Update trailing matrix
+                        for i in 0..m {
+                            let si = work[i] * akk;
+                            let base = (active_start + 1 + i) * n + (active_start + 1);
+                            for j in 0..m {
+                                a[base + j] -= si * work[j];
+                            }
+                        }
+                    }
+                    l_data[nfs_elim * n + active_start] = 1.0;
+                    nfs_elim += 1;
+                    k += 1;
+                }
+                PivotResult::TwoByTwo(p1, p2) => {
+                    // Need to bring p2 to active_start+1, p1 to active_start
+                    if p2 != active_start + 1 {
+                        swap_full(&mut a, n, active_start + 1, p2);
+                        perm.swap(active_start + 1, p2);
+                        for j in 0..nfs_elim {
+                            l_data.swap(j * n + (active_start + 1), j * n + p2);
+                        }
+                    }
+                    if p1 != active_start {
+                        swap_full(&mut a, n, active_start, p1);
+                        perm.swap(active_start, p1);
+                        for j in 0..nfs_elim {
+                            l_data.swap(j * n + active_start, j * n + p1);
+                        }
+                    }
+
+                    let akk = a[active_start * n + active_start];
+                    let ak1k = a[(active_start + 1) * n + active_start];
+                    let ak1k1 = a[(active_start + 1) * n + (active_start + 1)];
+
+                    d_diag[nfs_elim] = akk;
+                    d_diag[nfs_elim + 1] = ak1k1;
+                    d_offdiag[nfs_elim] = ak1k;
+
+                    let det = akk * ak1k1 - ak1k * ak1k;
+
+                    if det.abs() > 1e-30 {
+                        let d_inv_00 = ak1k1 / det;
+                        let d_inv_01 = -ak1k / det;
+                        let d_inv_11 = akk / det;
+
+                        let m = n - active_start - 2;
+                        for i in 0..m {
+                            let aik = a[(active_start + 2 + i) * n + active_start];
+                            let aik1 = a[(active_start + 2 + i) * n + (active_start + 1)];
+                            work[i] = aik * d_inv_00 + aik1 * d_inv_01;
+                            work[m + i] = aik * d_inv_01 + aik1 * d_inv_11;
+                            l_data[nfs_elim * n + (active_start + 2 + i)] = work[i];
+                            l_data[(nfs_elim + 1) * n + (active_start + 2 + i)] = work[m + i];
+                        }
+
+                        // Update trailing matrix
+                        for i in 0..m {
+                            let li0 = work[i];
+                            let li1 = work[m + i];
+                            let si0 = li0 * akk + li1 * ak1k;
+                            let si1 = li0 * ak1k + li1 * ak1k1;
+                            let base = (active_start + 2 + i) * n + (active_start + 2);
+                            for j in 0..m {
+                                a[base + j] -= si0 * work[j] + si1 * work[m + j];
+                            }
+                        }
+                    }
+
+                    l_data[nfs_elim * n + active_start] = 1.0;
+                    l_data[(nfs_elim + 1) * n + (active_start + 1)] = 1.0;
+                    nfs_elim += 2;
+                    k += 2;
+                }
+                PivotResult::Delayed => {
+                    // Move this FS column to the end of the FS region (effectively
+                    // to the CB region). Swap it with the last unprocessed FS column.
+                    // Swap active_start with the last remaining
+                    // FS position to push delayed columns toward the CB region.
+                    // The simplest approach: swap to the last position in the
+                    // remaining FS range and shrink the FS range.
+                    let swap_target = active_start + (orig_nfs - k - 1);
+                    if swap_target != active_start {
+                        swap_full(&mut a, n, active_start, swap_target);
+                        perm.swap(active_start, swap_target);
+                        for j in 0..nfs_elim {
+                            l_data.swap(j * n + active_start, j * n + swap_target);
+                        }
+                    }
+                    // This column is now at swap_target, which will be part of the CB.
+                    // Advance k but don't advance nfs_elim.
+                    k += 1;
+                }
+            }
+        }
+
+        // Now nfs_elim columns have been eliminated. The remaining columns
+        // [nfs_elim..n] form the contribution block (including delayed FS columns).
+        let ncb_new = n - nfs_elim;
+
+        // Build the BK result from what we've computed
+        let d_diag = d_diag[..nfs_elim].to_vec();
+        let d_offdiag = d_offdiag[..nfs_elim].to_vec();
+
+        let inertia = compute_inertia(&d_diag, &d_offdiag, nfs_elim);
+
+        // Build perm/perm_inv for the eliminated block
+        // In our factorization, the BK perm maps factored position -> original front position
+        let bk_perm: Vec<usize> = (0..nfs_elim).map(|i| perm[i]).collect();
+        let mut bk_perm_inv = vec![0usize; orig_size];
+        for (i, &p) in bk_perm.iter().enumerate() {
+            bk_perm_inv[p] = i;
+        }
+
+        // Build L factor for the eliminated block (nfs_elim x nfs_elim)
+        let mut l_mat = DenseMat::zeros(nfs_elim, nfs_elim);
+        for col in 0..nfs_elim {
+            for row in 0..nfs_elim {
+                // l_data is stored as [col * n + front_row]
+                // We need to map front_row -> elim_row
+                l_mat.data[col * nfs_elim + row] = l_data[col * n + row + (perm[row] - perm[row] + row)];
+            }
+        }
+        // Actually, the L factor rows correspond to permuted positions 0..nfs_elim
+        // Let me rebuild this correctly.
+        let mut l_factor = DenseMat::zeros(nfs_elim, nfs_elim);
+        for col in 0..nfs_elim {
+            for row in 0..nfs_elim {
+                l_factor.data[col * nfs_elim + row] = l_data[col * n + row];
+            }
+        }
+
+        // Build L21: rows [nfs_elim..n], cols [0..nfs_elim]
+        let mut l21 = DenseMat::zeros(ncb_new, nfs_elim);
+        for col in 0..nfs_elim {
+            for row in 0..ncb_new {
+                l21.data[col * ncb_new + row] = l_data[col * n + (nfs_elim + row)];
+            }
+        }
+
+        // Extract contribution block from the trailing matrix
+        let mut contrib = DenseMat::zeros(ncb_new, ncb_new);
+        for j in 0..ncb_new {
+            for i in 0..ncb_new {
+                contrib.data[j * ncb_new + i] = a[(nfs_elim + j) * n + (nfs_elim + i)];
+            }
+        }
+
+        // Map global indices
+        let fs_indices: Vec<usize> = (0..nfs_elim).map(|i| self.indices[perm[i]]).collect();
+        let contrib_indices: Vec<usize> = (nfs_elim..n).map(|i| self.indices[perm[i]]).collect();
+
+        let bk = BunchKaufmanResult {
+            l: l_factor,
+            d_diag,
+            d_offdiag,
+            perm: bk_perm,
+            perm_inv: bk_perm_inv[..orig_size].to_vec(),
+            inertia,
+        };
+
+        PartialFactorResult {
+            bk,
+            l21,
+            contrib,
+            contrib_indices,
+            fs_indices,
+            nfs_eliminated: nfs_elim,
+        }
+    }
+}
+
+/// Find pivot among the first `fs_remaining` columns of the active submatrix
+/// starting at `start` in an n x n matrix.
+fn find_pivot_in_fs(
+    a: &[f64],
+    n: usize,
+    start: usize,
+    fs_remaining: usize,
+    threshold: f64,
+) -> PivotResult {
+    if fs_remaining == 0 {
+        return PivotResult::Delayed;
+    }
+
+    // Search for best 1x1 pivot among FS columns
+    let fs_end = start + fs_remaining;
+
+    // Try each FS column as a potential 1x1 pivot
+    let mut best_1x1: Option<(usize, f64)> = None; // (col, ratio)
+
+    for col in start..fs_end {
+        let diag = a[col * n + col].abs();
+        // Find max off-diagonal in column (full active submatrix)
+        let mut max_offdiag = 0.0f64;
+        for row in start..n {
+            if row != col {
+                max_offdiag = max_offdiag.max(a[row * n + col].abs());
+            }
+        }
+
+        if max_offdiag == 0.0 && diag == 0.0 {
+            continue; // skip zero columns
+        }
+
+        if max_offdiag == 0.0 {
+            // Pure diagonal — always acceptable
+            let ratio = f64::INFINITY;
+            if best_1x1.map_or(true, |(_, r)| ratio > r) {
+                best_1x1 = Some((col, ratio));
+            }
+            continue;
+        }
+
+        let ratio = diag / max_offdiag;
+        if ratio >= threshold {
+            if best_1x1.map_or(true, |(_, r)| ratio > r) {
+                best_1x1 = Some((col, ratio));
+            }
+        }
+    }
+
+    if let Some((col, _)) = best_1x1 {
+        return PivotResult::OneByOne(col);
+    }
+
+    // No 1x1 pivot passed threshold — try 2x2 pivots
+    for i in start..fs_end {
+        for j in (i + 1)..fs_end {
+            let akk = a[i * n + i];
+            let akj = a[j * n + i];
+            let ajj = a[j * n + j];
+            let det = (akk * ajj - akj * akj).abs();
+            let max_elem = akk.abs().max(ajj.abs()).max(akj.abs());
+            if max_elem > 1e-30 && det >= threshold * max_elem * max_elem {
+                return PivotResult::TwoByTwo(i, j);
+            }
+        }
+    }
+
+    PivotResult::Delayed
+}
+
+/// Swap rows and columns p and q in the full n x n matrix stored in `a`.
+fn swap_full(a: &mut [f64], n: usize, p: usize, q: usize) {
+    if p == q {
+        return;
+    }
+    for j in 0..n {
+        a.swap(p * n + j, q * n + j);
+    }
+    for i in 0..n {
+        a.swap(i * n + p, i * n + q);
     }
 }
 

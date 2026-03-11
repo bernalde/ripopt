@@ -108,6 +108,21 @@ const BK_ALPHA: f64 = 0.6404;
 /// Tolerance for zero pivot detection.
 const ZERO_PIVOT_TOL: f64 = 1e-12;
 
+/// Default threshold for pivot acceptance in multifrontal factorization.
+/// Matches MA57/MUMPS default CNTL(1) = 0.01.
+pub const DEFAULT_PIVOT_THRESHOLD: f64 = 0.01;
+
+/// Pivot selection result.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PivotResult {
+    /// 1x1 pivot at the given position.
+    OneByOne(usize),
+    /// 2x2 pivot at the given positions.
+    TwoByTwo(usize, usize),
+    /// Pivot rejected — should be delayed (passed to parent supernode).
+    Delayed,
+}
+
 /// Find pivot for Bunch-Kaufman algorithm.
 /// Returns (pivot_type, p1, p2):
 /// - pivot_type=1: 1x1 pivot at row/col p1
@@ -159,6 +174,90 @@ fn find_pivot(a: &[f64], n: usize, k: usize) -> (usize, usize, usize) {
     }
 
     (2, k, r) // 2x2 pivot
+}
+
+/// Find pivot with threshold-based rejection for multifrontal delayed pivots.
+///
+/// Unlike `find_pivot`, this can return `PivotResult::Delayed` when the candidate
+/// pivot is too small relative to the largest off-diagonal, indicating the column
+/// should be passed to the parent supernode for better numerical stability.
+pub fn find_pivot_threshold(
+    a: &[f64],
+    n: usize,
+    k: usize,
+    threshold: f64,
+) -> PivotResult {
+    if k == n - 1 {
+        // Last column — check if acceptable
+        let akk = a[k * n + k].abs();
+        if akk < ZERO_PIVOT_TOL {
+            return PivotResult::Delayed;
+        }
+        return PivotResult::OneByOne(k);
+    }
+
+    let akk = a[k * n + k].abs();
+
+    // Find largest off-diagonal |a[i][k]| for i > k
+    let mut lambda = 0.0f64;
+    let mut r = k;
+    for i in (k + 1)..n {
+        let v = a[i * n + k].abs();
+        if v > lambda {
+            lambda = v;
+            r = i;
+        }
+    }
+
+    if lambda == 0.0 && akk == 0.0 {
+        return PivotResult::Delayed; // zero column — delay it
+    }
+
+    // Threshold test: accept 1x1 pivot at k if |a_kk| >= threshold * max_off_diagonal
+    if akk >= threshold * lambda {
+        return PivotResult::OneByOne(k);
+    }
+
+    // Try standard BK selection
+    // Find largest off-diagonal in row r
+    let mut sigma = 0.0f64;
+    for j in k..n {
+        if j != r {
+            let v = a[r * n + j].abs();
+            if v > sigma {
+                sigma = v;
+            }
+        }
+    }
+
+    if akk * sigma >= BK_ALPHA * lambda * lambda {
+        // Recheck threshold for 1x1 pivot at k
+        if akk >= threshold * lambda {
+            return PivotResult::OneByOne(k);
+        }
+        return PivotResult::Delayed;
+    }
+
+    let arr = a[r * n + r].abs();
+    if arr >= threshold * sigma {
+        return PivotResult::OneByOne(r);
+    }
+
+    // Try 2x2 pivot — check that it's numerically adequate
+    let akr = a[k * n + r].abs().max(a[r * n + k].abs());
+    if akr > ZERO_PIVOT_TOL {
+        // 2x2 pivot det check
+        let d_kk = a[k * n + k];
+        let d_kr = a[r * n + k];
+        let d_rr = a[r * n + r];
+        let det = (d_kk * d_rr - d_kr * d_kr).abs();
+        let max_elem = akk.max(arr).max(akr);
+        if det >= threshold * max_elem * max_elem {
+            return PivotResult::TwoByTwo(k, r);
+        }
+    }
+
+    PivotResult::Delayed
 }
 
 /// Swap rows and columns p and q in the active submatrix [start..n, start..n].

@@ -436,6 +436,26 @@ pub fn solve_for_direction(
         }
     }
 
+    // Backward error monitoring: compute scaled backward error
+    // berr_i = |r_i| / (||A_row_i|| * ||x|| + |b_i|)
+    // If max berr > 1e-6, the linear solve is unreliable
+    {
+        kkt.matrix.matvec(&solution, &mut residual);
+        let x_norm: f64 = solution.iter().map(|v| v.abs()).fold(0.0f64, f64::max).max(1.0);
+        let mut max_berr: f64 = 0.0;
+        for i in 0..dim {
+            let abs_res = (kkt.rhs[i] - residual[i]).abs();
+            let denom = x_norm + kkt.rhs[i].abs().max(1e-30);
+            max_berr = max_berr.max(abs_res / denom);
+        }
+        if max_berr > 1e-6 {
+            log::debug!("KKT backward error {:.2e} exceeds 1e-6", max_berr);
+            return Err(crate::linear_solver::SolverError::NumericalFailure(
+                format!("KKT backward error {:.2e} exceeds tolerance", max_berr),
+            ));
+        }
+    }
+
     let dx = solution[..kkt.n].to_vec();
     let dy = solution[kkt.n..].to_vec();
 

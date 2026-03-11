@@ -1526,9 +1526,6 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             diag.wall_time_secs = solve_start.elapsed().as_secs_f64();
             let slack_status = slack_result.status;
             let slack_iters = result.iterations + slack_result.iterations;
-            if options.print_level >= 5 {
-                diag.print_summary(slack_status, slack_iters);
-            }
             return SolveResult {
                 x: x_out,
                 objective: slack_result.objective,
@@ -1549,9 +1546,6 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     }
 
     result.diagnostics.wall_time_secs = solve_start.elapsed().as_secs_f64();
-    if options.print_level >= 5 {
-        result.diagnostics.print_summary(result.status, result.iterations);
-    }
     result
 }
 
@@ -1781,6 +1775,10 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
     // Free/fixed mu mode state (replaces ad-hoc stall recovery)
     let mut mu_state = MuState::new();
+    // Monotone mu strategy: start in Fixed mode and never switch to Free
+    if !options.mu_strategy_adaptive {
+        mu_state.mode = MuMode::Fixed;
+    }
 
     // Wall-clock time limit
     let start_time = Instant::now();
@@ -2007,7 +2005,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     let theta_restart = state.constraint_violation();
                     filter.set_theta_min_from_initial(theta_restart);
                     state.mu = (state.mu * 100.0).max(1e-4).min(1e-1);
-                    mu_state.mode = MuMode::Free;
+                    if options.mu_strategy_adaptive {
+                        mu_state.mode = MuMode::Free;
+                    }
                     mu_state.first_iter_in_mode = true;
                     mu_state.consecutive_restoration_failures = 0;
                     inertia_params.delta_w_last = 0.0;
@@ -3267,7 +3267,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 // Skip for large problems: NLP restoration doubles the problem size,
                 // making it prohibitively expensive for n+m > 10000.
                 let kkt_dim = n + m;
-                if fail_count == 2 && !options.disable_nlp_restoration && kkt_dim <= 10000 {
+                if fail_count == 2 && !options.disable_nlp_restoration && kkt_dim <= 50000 {
                     state.diagnostics.nlp_restoration_count += 1;
                     let (x_nlp, outcome) = attempt_nlp_restoration(
                         problem, &state, &filter, options, theta_current,
@@ -3292,7 +3292,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 }
 
                 // For large problems (no NLP restoration), give up sooner
-                let max_restore_attempts = if kkt_dim > 10000 { 3 } else { 6 };
+                let max_restore_attempts = if kkt_dim > 50000 { 3 } else { 6 };
                 if fail_count > max_restore_attempts {
                     // Exhausted recovery attempts: check infeasibility and give up
                     log::warn!("Restoration failed at iteration {} (attempt #{})", iteration, fail_count);
@@ -3660,8 +3660,8 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     }
                 }
                 MuMode::Fixed => {
-                    if sufficient && !mu_state.tiny_step && !mu_state.first_iter_in_mode {
-                        // Switch back to free mode
+                    if options.mu_strategy_adaptive && sufficient && !mu_state.tiny_step && !mu_state.first_iter_in_mode {
+                        // Switch back to free mode (only in adaptive strategy)
                         log::debug!("Switching back to free mu mode (sufficient progress)");
                         state.diagnostics.mu_mode_switches += 1;
                         mu_state.mode = MuMode::Free;
@@ -4535,8 +4535,11 @@ fn apply_restoration_success<P: NlpProblem>(
         state.mu = mu_compl.max(options.mu_min).min(1e5);
     }
 
-    // Reset mu_state to free mode (restoration is a fresh start)
-    mu_state.mode = MuMode::Free;
+    // Reset mu_state mode (restoration is a fresh start)
+    // In monotone strategy, stay in Fixed mode
+    if options.mu_strategy_adaptive {
+        mu_state.mode = MuMode::Free;
+    }
     mu_state.first_iter_in_mode = true;
     mu_state.ref_vals.clear();
     mu_state.consecutive_restoration_failures = 0;
