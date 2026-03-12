@@ -89,6 +89,12 @@ pub mod solver;
 pub mod scaling;
 /// Supernodal symbolic factorization from sparsity pattern.
 pub mod symbolic;
+/// Preconditioner trait and basic implementations.
+pub mod precond;
+/// MINRES iterative solver for symmetric systems.
+pub mod minres;
+/// Incomplete LDL^T factorization for preconditioning.
+pub mod incomplete;
 
 use std::fmt;
 

@@ -1,5 +1,7 @@
 /// Approximate minimum degree ordering.
 pub mod amd;
+/// Nested dissection ordering.
+pub mod nested_dissection;
 /// Identity (no reordering) permutation.
 pub mod natural;
 
@@ -12,6 +14,8 @@ pub enum Ordering {
     Amd,
     /// No reordering (identity permutation). Useful for testing.
     Natural,
+    /// Nested dissection ordering (good for 2D/3D mesh problems).
+    NestedDissection,
 }
 
 /// Compute a fill-reducing permutation for the given symmetric CSC matrix.
@@ -20,6 +24,7 @@ pub fn compute_ordering(csc: &CscMatrix, ordering: Ordering) -> (Vec<usize>, Vec
     match ordering {
         Ordering::Amd => amd::amd_ordering(csc),
         Ordering::Natural => natural::natural_ordering(csc.n),
+        Ordering::NestedDissection => nested_dissection::nd_ordering(csc),
     }
 }
 
