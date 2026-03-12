@@ -1,3 +1,23 @@
+/// Choice of linear solver for the KKT system.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinearSolverChoice {
+    /// Direct multifrontal LDL^T (default). Exact solve, provides inertia.
+    Direct,
+    /// Iterative MINRES with incomplete LDL^T preconditioner.
+    /// Suitable for large problems where direct factorization is too expensive.
+    Iterative,
+    /// Hybrid: starts with direct solver, switches to iterative if the direct
+    /// solver fails or becomes too slow (factorization > 1 second).
+    /// Switches back to direct if MINRES fails to converge repeatedly.
+    Hybrid,
+}
+
+impl Default for LinearSolverChoice {
+    fn default() -> Self {
+        Self::Direct
+    }
+}
+
 /// Solver options matching Ipopt defaults.
 #[derive(Debug, Clone)]
 pub struct SolverOptions {
@@ -149,6 +169,12 @@ pub struct SolverOptions {
     ///
     /// Default: true.
     pub proactive_infeasibility_detection: bool,
+    /// Choice of sparse linear solver. Default: Direct.
+    pub linear_solver: LinearSolverChoice,
+    /// Maximum consecutive iterations without 1% improvement in primal or dual
+    /// infeasibility before declaring stall (NumericalError). 0 = disable stall detection.
+    /// Default: 30.
+    pub stall_iter_limit: usize,
 }
 
 impl Default for SolverOptions {
@@ -206,6 +232,8 @@ impl Default for SolverOptions {
             mehrotra_pc: false,
             gondzio_mcc_max: 0,
             proactive_infeasibility_detection: false,
+            linear_solver: LinearSolverChoice::default(),
+            stall_iter_limit: 30,
         }
     }
 }

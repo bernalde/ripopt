@@ -9,17 +9,49 @@ use crate::linear_solver::dense::DenseLdl;
 use crate::linear_solver::sparse::SparseLdl;
 #[cfg(feature = "rmumps")]
 use crate::linear_solver::multifrontal::MultifrontalLdl;
+#[cfg(feature = "rmumps")]
+use crate::linear_solver::iterative::IterativeMinres;
+#[cfg(feature = "rmumps")]
+use crate::linear_solver::hybrid::HybridSolver;
 use crate::linear_solver::{KktMatrix, LinearSolver, SymmetricMatrix};
+use crate::options::LinearSolverChoice;
 
 /// Create a new sparse linear solver using the best available backend.
 /// Prefers rmumps (multifrontal) when available, falls back to faer (SparseLdl).
 fn new_sparse_solver() -> Box<dyn LinearSolver> {
-    #[cfg(feature = "rmumps")]
-    { return Box::new(MultifrontalLdl::new()); }
-    #[cfg(all(not(feature = "rmumps"), feature = "faer"))]
-    { return Box::new(SparseLdl::new()); }
-    #[cfg(not(any(feature = "rmumps", feature = "faer")))]
-    { return Box::new(DenseLdl::new()); }
+    new_sparse_solver_with_choice(LinearSolverChoice::Direct)
+}
+
+/// Create a sparse linear solver with the specified choice.
+fn new_sparse_solver_with_choice(choice: LinearSolverChoice) -> Box<dyn LinearSolver> {
+    match choice {
+        LinearSolverChoice::Direct => {
+            #[cfg(feature = "rmumps")]
+            { return Box::new(MultifrontalLdl::new()); }
+            #[cfg(all(not(feature = "rmumps"), feature = "faer"))]
+            { return Box::new(SparseLdl::new()); }
+            #[cfg(not(any(feature = "rmumps", feature = "faer")))]
+            { return Box::new(DenseLdl::new()); }
+        }
+        LinearSolverChoice::Iterative => {
+            #[cfg(feature = "rmumps")]
+            { return Box::new(IterativeMinres::new()); }
+            #[cfg(not(feature = "rmumps"))]
+            {
+                log::warn!("Iterative solver requires rmumps feature; falling back to direct");
+                return new_sparse_solver_with_choice(LinearSolverChoice::Direct);
+            }
+        }
+        LinearSolverChoice::Hybrid => {
+            #[cfg(feature = "rmumps")]
+            { return Box::new(HybridSolver::new()); }
+            #[cfg(not(feature = "rmumps"))]
+            {
+                log::warn!("Hybrid solver requires rmumps feature; falling back to direct");
+                return new_sparse_solver_with_choice(LinearSolverChoice::Direct);
+            }
+        }
+    }
 }
 
 /// Create the appropriate linear solver for a fallback KKT system.
@@ -1736,7 +1768,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     // Initialize linear solver — use sparse for large KKT systems
     let use_sparse = (n + m) >= options.sparse_threshold;
     let mut lin_solver: Box<dyn LinearSolver> = if use_sparse {
-        new_sparse_solver()
+        new_sparse_solver_with_choice(options.linear_solver)
     } else {
         Box::new(DenseLdl::new())
     };
@@ -2280,7 +2312,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         // Two triggers: (1) tiny steps for 15 iterations, (2) no metric improvement
         // for 30 iterations regardless of step size.
         // Only activate after 50 iterations to avoid tripping during early phases.
-        if iteration > 50 {
+        if iteration > 50 && options.stall_iter_limit > 0 {
             let pr_improved = primal_inf < 0.99 * stall_best_pr;
             let du_improved = dual_inf < 0.99 * stall_best_du;
             if pr_improved {
@@ -2294,9 +2326,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             } else {
                 stall_no_progress_count += 1;
                 let tiny_alpha = state.alpha_primal < 1e-8 && state.alpha_dual < 1e-4;
-                // Terminate after 15 iters with truly negligible steps,
-                // or 30 iters with no metric improvement regardless of step size
-                let stall_limit = if tiny_alpha { 15 } else { 30 };
+                // Terminate after half the limit with truly negligible steps,
+                // or the full limit with no metric improvement regardless of step size
+                let stall_limit = if tiny_alpha { options.stall_iter_limit / 2 } else { options.stall_iter_limit };
                 if stall_no_progress_count >= stall_limit {
                     if options.print_level >= 3 {
                         eprintln!(

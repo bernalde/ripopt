@@ -19,7 +19,7 @@ pub mod slack_formulation;
 pub mod sqp;
 pub mod warmstart;
 
-pub use options::SolverOptions;
+pub use options::{SolverOptions, LinearSolverChoice};
 pub use problem::NlpProblem;
 pub use result::{SolveResult, SolverDiagnostics, SolveStatus};
 pub use sensitivity::{ParametricNlpProblem, SensitivityContext, SensitivityResult};

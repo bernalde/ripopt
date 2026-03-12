@@ -2,6 +2,10 @@ pub mod banded;
 pub mod dense;
 #[cfg(feature = "rmumps")]
 pub mod multifrontal;
+#[cfg(feature = "rmumps")]
+pub mod iterative;
+#[cfg(feature = "rmumps")]
+pub mod hybrid;
 #[cfg(feature = "faer")]
 pub mod sparse;
 
