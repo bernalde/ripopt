@@ -74,6 +74,8 @@ The contributions of this paper are:
 
 10. A C API that mirrors the Ipopt C interface, enabling direct linking from C, C++, Python (via =ctypes=/=cffi=), and other languages without subprocess overhead (Section [[*C API]]).
 
+11. An iterative KKT solver based on preconditioned MINRES citep:paige1975solution with an incomplete LDL$^T$ preconditioner citep:meijerink1977iterative, and a hybrid direct-iterative solver that automatically switches between direct and iterative modes based on factorization cost and convergence behavior (Section [[*Iterative Solver: Preconditioned MINRES]]).
+
 ** Notation and Conventions
 
 We denote the number of variables by $n$ and the number of constraints by $m$. The Jacobian of $g$ is $J \in \mathbb{R}^{m \times n}$. Following the Ipopt convention, the Lagrangian is $\mathcal{L}(x, y) = f(x) + y^T g(x)$, where $y \in \mathbb{R}^m$ are the constraint multipliers. Bound multipliers $z_L, z_U \in \mathbb{R}^n$ are associated with the variable bounds $x \ge x_L$ and $x \le x_U$ respectively. The barrier parameter is $\mu > 0$.
@@ -511,7 +513,7 @@ A correctness issue in many textbook implementations of Bunch-Kaufman is that wh
 
 ** Sparse LDL$^T$ Factorization
 
-For larger problems ($n + m \ge 100$), ripopt uses =rmumps=, a pure Rust multifrontal LDL$^T$ solver with Bunch-Kaufman pivoting. The multifrontal method organizes the factorization into dense operations on frontal matrices defined by a supernodal elimination tree, providing better cache utilization than simplicial methods. AMD ordering and symbolic analysis are computed once and cached; only the numeric factorization is repeated each iteration. The COO-to-CSC index mapping is also cached across calls, so that inertia correction re-factorizations only scatter values and call the numeric phase, avoiding repeated symbolic work and memory allocation.
+For larger problems ($n + m \ge 100$), ripopt uses =rmumps=, a pure Rust multifrontal LDL$^T$ solver with Bunch-Kaufman pivoting. The multifrontal method organizes the factorization into dense operations on frontal matrices defined by a supernodal elimination tree, providing better cache utilization than simplicial methods. Two fill-reducing orderings are available: AMD (approximate minimum degree, default) and nested dissection citep:george1973nested (Section [[*Nested Dissection Ordering]]). Ordering and symbolic analysis are computed once and cached; only the numeric factorization is repeated each iteration. The COO-to-CSC index mapping is also cached across calls, so that inertia correction re-factorizations only scatter values and call the numeric phase, avoiding repeated symbolic work and memory allocation.
 
 ** Inertia Correction
   :PROPERTIES:
@@ -528,6 +530,36 @@ A key design decision: when inertia correction fails after all 15 attempts, ripo
 
 After each KKT solve, up to 3 rounds of iterative refinement are applied using the already-factored matrix. Convergence is checked in the $\ell_\infty$ norm with tolerance $10^{-12}$. If a refinement solve fails, it degrades gracefully rather than returning an error.
 
+** Nested Dissection Ordering
+
+For large sparse systems, fill-reducing orderings are critical for factorization efficiency. In addition to the default AMD (approximate minimum degree) ordering, =rmumps= implements a multilevel nested dissection algorithm citep:george1973nested. The algorithm recursively bisects the adjacency graph of the matrix into two subgraphs connected by a small separator, then orders the separator last (so it appears at the bottom of the elimination tree). Each bisection uses a multilevel Fiduccia-Mattheyses refinement scheme citep:karypis1998fast: the graph is coarsened via heavy-edge matching, bisected at the coarsest level using breadth-first search from a pseudo-peripheral node, and then uncoarsened with boundary refinement passes that optimize cut size subject to a balance constraint ($\le 40\%$ imbalance). Recursion terminates at subgraphs below 200 nodes, where AMD ordering is applied. For problems with regular sparsity structure (e.g., finite-element meshes), nested dissection produces $O(n \log n)$ fill versus $O(n^{3/2})$ for minimum degree citep:george1973nested.
+
+** Iterative Solver: Preconditioned MINRES
+
+For very large problems where even sparse direct factorization is too expensive, ripopt provides an iterative linear solver based on the MINRES algorithm of citep:paige1975solution. MINRES is a Krylov subspace method that minimizes the residual norm $\|b - Ax\|_2$ for symmetric (possibly indefinite) systems---exactly the structure of the KKT system \eqref{eq:kkt}. Unlike CG (which requires positive definiteness) or GMRES (which requires nonsymmetric storage), MINRES exploits the symmetric indefinite structure directly with short recurrences, requiring only $O(n)$ storage beyond the matrix.
+
+The iterative solver uses an incomplete LDL$^T$ factorization citep:meijerink1977iterative,chow1997experimental as a preconditioner. The incomplete factorization reuses the same multifrontal elimination tree as the direct solver but applies dropping rules during each supernode's partial factorization: entries in $L_{21}$ and the Schur complement (contribution block) smaller than $\tau \cdot \|L_{\cdot,j}\|$ are zeroed, where $\tau = 0.01$ is the drop tolerance. This produces a sparser approximate factorization $\tilde{L} \tilde{D} \tilde{L}^T \approx A$ that can be applied as a preconditioner in $O(\text{nnz}(\tilde{L}))$ time per MINRES iteration. The pivot threshold for Bunch-Kaufman pivoting is relaxed to 0.01 (vs.\ 0.5 for the direct solver) to allow more aggressive dropping.
+
+The inertia from the incomplete factorization is returned as an approximation of the true inertia. While not exact, it is sufficient for the IPM's inertia correction to detect gross inertia errors (e.g., zero negative eigenvalues when $m > 0$) and add appropriate regularization.
+
+The iterative solver is selected via the =linear_solver = Iterative= option and activates when $n + m \ge$ =sparse_threshold= (default 110). Below this threshold, the dense Bunch-Kaufman solver is used regardless of the =linear_solver= setting.
+
+** Hybrid Direct-Iterative Solver
+
+The hybrid solver combines the reliability of direct factorization with the scalability of iterative methods. It starts in direct mode (multifrontal LDL$^T$) and automatically switches to iterative mode (preconditioned MINRES) under two conditions:
+
+1. *Factorization failure*: If the direct factorization fails (e.g., numerical breakdown), the hybrid solver switches to iterative mode for subsequent iterations.
+
+2. *Excessive factorization time*: If the direct factorization takes longer than a threshold (default 1.0 seconds wall-clock), the hybrid solver switches to iterative mode, where each "factorization" builds only the incomplete LDL$^T$ preconditioner.
+
+The hybrid solver also switches /back/ to direct mode when the iterative solver fails: if MINRES does not converge within its iteration limit on 3 consecutive KKT solves, the solver reverts to direct factorization. This bidirectional switching prevents the solver from getting stuck in an ineffective mode.
+
+The hybrid solver is selected via the =linear_solver = Hybrid= option. It is particularly effective for problems where the KKT system starts well-conditioned (direct factorization is fast) but becomes increasingly ill-conditioned as the barrier parameter decreases (making iterative methods more appropriate for the later, larger-regularization iterations).
+
+** Configurable Stall Detection
+
+The IPM includes a stall detector that terminates the solve when insufficient progress is detected over a configurable window. The =stall_iter_limit= parameter (default 30) specifies the maximum number of consecutive iterations without at least 1% improvement in either the primal infeasibility or the dual infeasibility. When the stall limit is reached, the solver checks whether the current iterate satisfies the acceptable convergence criteria before declaring =MaxIterations=. This prevents the solver from spending thousands of iterations making negligible progress on problems with slow tails, while the configurable threshold allows users to trade patience for robustness on difficult problems.
+
 * Implementation
   :PROPERTIES:
   :CUSTOM_ID: implementation
@@ -535,7 +567,7 @@ After each KKT solve, up to 3 rounds of iterative refinement are applied using t
 
 ** Language and Dependencies
 
-ripopt is implemented in Rust (approximately 14,400 lines of source code) with minimal external dependencies: the =rmumps= crate for sparse multifrontal LDL$^T$ factorization and the =log= crate for diagnostic output. =rmumps= is a pure Rust implementation of a multifrontal symmetric indefinite solver, included as a workspace member in the ripopt repository (licensed separately under CeCILL-C, an LGPL-compatible free software license). The dense Bunch-Kaufman factorization, KKT assembly, filter, restoration, and all algorithmic logic are implemented from scratch. The codebase includes dedicated modules for the L-BFGS solver (=lbfgs.rs=), augmented Lagrangian method (=augmented_lagrangian.rs=), and explicit slack reformulation (=slack_formulation.rs=). The library compiles to a single Cargo workspace with no C, C++, or Fortran dependencies, simplifying installation, cross-compilation, and embedding.
+ripopt is implemented in Rust (approximately 16,000 lines of source code) with minimal external dependencies: the =rmumps= crate for sparse multifrontal LDL$^T$ factorization and the =log= crate for diagnostic output. =rmumps= is a pure Rust implementation of a multifrontal symmetric indefinite solver, included as a workspace member in the ripopt repository (licensed separately under CeCILL-C, an LGPL-compatible free software license). =rmumps= includes AMD and nested dissection citep:george1973nested orderings, Bunch-Kaufman pivoting with threshold control, and an incomplete LDL$^T$ factorization mode citep:meijerink1977iterative for preconditioning iterative solvers. The dense Bunch-Kaufman factorization, KKT assembly, filter, restoration, and all algorithmic logic are implemented from scratch. The codebase includes dedicated modules for the L-BFGS solver (=lbfgs.rs=), augmented Lagrangian method (=augmented_lagrangian.rs=), explicit slack reformulation (=slack_formulation.rs=), and iterative/hybrid linear solvers (=linear_solver/iterative.rs=, =linear_solver/hybrid.rs=). The library compiles to a single Cargo workspace with no C, C++, or Fortran dependencies, simplifying installation, cross-compilation, and embedding.
 
 ** Problem Interface
 
@@ -912,7 +944,7 @@ The 28 =Timeout= failures indicate performance bottlenecks on larger problems. T
 
 - *Sparse Jacobian assembly*: For over-constrained problems (e.g., EXPFITC with $m = 502$, $n = 5$), the condensed KKT reduces the system to dimension $n$ but the dense Jacobian assembly ($O(mn)$) still dominates. Exploiting Jacobian sparsity in the condensation step could reduce per-iteration cost.
 
-- *Sparse factorization performance*: The pure Rust multifrontal solver (=rmumps=) provides supernodal factorization with good cache utilization, but further optimization of frontal matrix operations and parallelism could narrow the remaining gap with Fortran MUMPS on the largest problems.
+- *Sparse factorization performance*: The pure Rust multifrontal solver (=rmumps=) provides supernodal factorization with good cache utilization, but further optimization of frontal matrix operations and parallelism could narrow the remaining gap with Fortran MUMPS on the largest problems. The new iterative (MINRES) and hybrid solvers (Section [[*Iterative Solver: Preconditioned MINRES]]) offer an alternative path for very large problems where even optimized direct factorization is prohibitive.
 
 ** Quasi-Newton as Primary Solver
 
@@ -944,9 +976,11 @@ Uno (Unifying Nonlinear Optimization) citep:vanaret2024uno is a recent C++ frame
 
 The Bunch-Kaufman factorization citep:bunch1977some is standard for symmetric indefinite systems. The Gauss-Newton method and Levenberg-Marquardt regularization citep:levenberg1944method,marquardt1963algorithm are standard tools for nonlinear least-squares; our contribution is their application within the restoration phase of an interior point solver and the automatic NE-to-LS reformulation with full Hessian. Parametric sensitivity analysis for NLPs was formalized in the sIPOPT framework citep:pirnay2012optimal, which reuses the factored KKT matrix from the final IPM iteration to compute solution sensitivities with respect to problem parameters at near-zero cost.
 
+The use of iterative methods for KKT systems in interior point solvers has been explored by several authors. The MINRES algorithm citep:paige1975solution is the natural choice for symmetric indefinite systems, as it minimizes the residual norm with short recurrences. Incomplete factorization preconditioners citep:meijerink1977iterative,chow1997experimental are widely used to accelerate Krylov methods for sparse linear systems; our contribution is the integration of an incomplete multifrontal LDL$^T$ factorization (sharing the same elimination tree as the direct solver) as a preconditioner within a hybrid direct-iterative framework that automatically adapts to problem difficulty. Nested dissection ordering citep:george1973nested with multilevel refinement citep:karypis1998fast is standard for fill-reducing orderings of sparse matrices from finite element discretizations.
+
 * Conclusions
 
-We have presented ripopt, an interior point optimizer in approximately 14,400 lines of Rust that achieves superior performance to Ipopt through a combination of architectural simplification, algorithmic innovation, and a multi-solver fallback architecture. The implicit slack formulation produces smaller KKT systems and a cleaner interface. The stationarity-based convergence strategy, two-phase restoration, NE-to-LS reformulation, preprocessing, near-linear constraint detection, and fallback solvers (L-BFGS, augmented Lagrangian, SQP, explicit slack) compensate for the challenges introduced by eliminating explicit slack variables and provide novel algorithmic capabilities.
+We have presented ripopt, an interior point optimizer in approximately 16,000 lines of Rust that achieves superior performance to Ipopt through a combination of architectural simplification, algorithmic innovation, and a multi-solver fallback architecture. The implicit slack formulation produces smaller KKT systems and a cleaner interface. The stationarity-based convergence strategy, two-phase restoration, NE-to-LS reformulation, preprocessing, near-linear constraint detection, and fallback solvers (L-BFGS, augmented Lagrangian, SQP, explicit slack) compensate for the challenges introduced by eliminating explicit slack variables and provide novel algorithmic capabilities. A configurable linear solver infrastructure---offering direct multifrontal, iterative (preconditioned MINRES), and hybrid direct-iterative modes---enables ripopt to scale to larger problems while maintaining robustness through automatic mode switching.
 
 On the Hock-Schittkowski test suite, ripopt solves all 120 problems (100%) compared to Ipopt's 118 (98.3%). On the CUTEst benchmark suite, ripopt solves 598 of 727 problems (82.3%) compared to Ipopt's 555 (76.3%), with zero problems where Ipopt succeeds but ripopt fails. This demonstrates that the additional complexity of explicit slack variables is not necessary for a robust interior point solver---and that a multi-solver fallback architecture can strictly dominate the reference implementation. The geometric mean $8.2\times$ speedup on commonly-solved problems---rising to $124\times$ on the HS suite---makes ripopt particularly attractive for applications requiring rapid solves of small-to-medium NLPs, such as model predictive control, real-time optimization, and embedded systems.
 
@@ -1131,6 +1165,66 @@ The bibliography file ripopt.bib should contain the following entries:
   publisher={SIAM},
   series={MPS/SIAM Series on Optimization},
   doi={10.1137/1.9780898719857}
+}
+
+@article{paige1975solution,
+  title={Solution of sparse indefinite systems of linear equations},
+  author={Paige, Christopher C and Saunders, Michael A},
+  journal={SIAM Journal on Numerical Analysis},
+  volume={12},
+  number={4},
+  pages={617--629},
+  year={1975},
+  publisher={SIAM},
+  doi={10.1137/0712047}
+}
+
+@article{george1973nested,
+  title={Nested dissection of a regular finite element mesh},
+  author={George, Alan},
+  journal={SIAM Journal on Numerical Analysis},
+  volume={10},
+  number={2},
+  pages={345--363},
+  year={1973},
+  publisher={SIAM},
+  doi={10.1137/0710032}
+}
+
+@article{meijerink1977iterative,
+  title={An iterative solution method for linear systems of which the coefficient matrix is a symmetric {M}-matrix},
+  author={Meijerink, J A and van der Vorst, H A},
+  journal={Mathematics of Computation},
+  volume={31},
+  number={137},
+  pages={148--162},
+  year={1977},
+  publisher={American Mathematical Society},
+  doi={10.1090/S0025-5718-1977-0438681-4}
+}
+
+@article{chow1997experimental,
+  title={Experimental study of {ILU} preconditioners for indefinite matrices},
+  author={Chow, Edmond and Saad, Yousef},
+  journal={Journal of Computational and Applied Mathematics},
+  volume={86},
+  number={2},
+  pages={387--414},
+  year={1997},
+  publisher={Elsevier},
+  doi={10.1016/S0377-0427(97)00171-4}
+}
+
+@article{karypis1998fast,
+  title={A fast and high quality multilevel scheme for partitioning irregular graphs},
+  author={Karypis, George and Kumar, Vipin},
+  journal={SIAM Journal on Scientific Computing},
+  volume={20},
+  number={1},
+  pages={359--392},
+  year={1998},
+  publisher={SIAM},
+  doi={10.1137/S1064827595287997}
 }
 
 @unpublished{vanaret2024uno,

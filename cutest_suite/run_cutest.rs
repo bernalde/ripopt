@@ -368,8 +368,11 @@ fn get_problem_list_from_args_or_file(suite_dir: &Path) -> Vec<String> {
         return args;
     }
 
-    // Read from problem_list.txt
-    let list_path = suite_dir.join("problem_list.txt");
+    // Read from PROBLEM_LIST env var or default problem_list.txt
+    let list_path = match std::env::var("PROBLEM_LIST") {
+        Ok(p) => std::path::PathBuf::from(p),
+        Err(_) => suite_dir.join("problem_list.txt"),
+    };
     if list_path.exists() {
         let contents = std::fs::read_to_string(&list_path)
             .expect("Failed to read problem_list.txt");
@@ -385,8 +388,9 @@ fn get_problem_list_from_args_or_file(suite_dir: &Path) -> Vec<String> {
     }
 }
 
-/// Solve a single problem in subprocess mode. Outputs JSON lines to stdout.
-fn run_single_problem(name: &str) {
+/// Solve a single problem with a single solver in subprocess mode.
+/// Outputs one JSON line to stdout.
+fn run_single_solver(name: &str, solver: &str) {
     let n_timing_runs: usize = std::env::var("RIPOPT_TIMING_RUNS")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -409,90 +413,99 @@ fn run_single_problem(name: &str) {
         }
     };
 
-    let print_level: u8 = std::env::var("RIPOPT_PRINT_LEVEL")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
-    let options = SolverOptions {
-        tol: 1e-8,
-        max_iter: 3000,
-        print_level,
-        mu_strategy_adaptive: true,
-        max_wall_time: 30.0,
-        ..SolverOptions::default()
-    };
+    match solver {
+        "ripopt" => {
+            let print_level: u8 = std::env::var("RIPOPT_PRINT_LEVEL")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            let options = SolverOptions {
+                tol: 1e-8,
+                max_iter: 3000,
+                print_level,
+                mu_strategy_adaptive: true,
+                max_wall_time: 30.0,
+                ..SolverOptions::default()
+            };
 
-    // Solve with ripopt
-    let mut best_ripopt_time = f64::MAX;
-    let mut ripopt_result = None;
-    for run in 0..n_timing_runs {
-        let t0 = Instant::now();
-        let r = ripopt::solve(&problem, &options);
-        let elapsed = t0.elapsed().as_secs_f64();
-        if elapsed < best_ripopt_time {
-            best_ripopt_time = elapsed;
+            let mut best_time = f64::MAX;
+            let mut result = None;
+            for run in 0..n_timing_runs {
+                let t0 = Instant::now();
+                let r = ripopt::solve(&problem, &options);
+                let elapsed = t0.elapsed().as_secs_f64();
+                if elapsed < best_time {
+                    best_time = elapsed;
+                }
+                if run == 0 {
+                    result = Some(r);
+                }
+            }
+            let result = result.unwrap();
+            let cv = if problem.m > 0 {
+                let mut g_l = vec![0.0; problem.m];
+                let mut g_u = vec![0.0; problem.m];
+                problem.constraint_bounds(&mut g_l, &mut g_u);
+                compute_constraint_violation(&result.constraint_values, &g_l, &g_u)
+            } else {
+                0.0
+            };
+
+            let r = CutestResult {
+                name: name.to_string(),
+                solver: "ripopt".to_string(),
+                n: problem.n,
+                m: problem.m,
+                status: ripopt_status_to_string(result.status),
+                objective: if result.objective.is_finite() { result.objective } else { 0.0 },
+                x: result.x.iter().map(|v| if v.is_finite() { *v } else { 0.0 }).collect(),
+                constraint_violation: if cv.is_finite() { cv } else { 0.0 },
+                iterations: result.iterations,
+                solve_time: best_time,
+            };
+            println!("{}", serde_json::to_string(&r).unwrap());
+            eprintln!(
+                "ripopt: {} (obj={:.6e}, {:.1}ms)",
+                r.status, r.objective, best_time * 1000.0,
+            );
         }
-        if run == 0 {
-            ripopt_result = Some(r);
+        "ipopt" => {
+            let mut best_time = f64::MAX;
+            let mut result = None;
+            for run in 0..n_timing_runs {
+                let r = solve_with_ipopt(&problem);
+                if r.solve_time < best_time {
+                    best_time = r.solve_time;
+                }
+                if run == 0 {
+                    result = Some(r);
+                }
+            }
+            let result = result.unwrap();
+
+            let r = CutestResult {
+                name: name.to_string(),
+                solver: "ipopt".to_string(),
+                n: problem.n,
+                m: problem.m,
+                status: ipopt_status_to_string(result.status),
+                objective: result.objective,
+                x: result.x.clone(),
+                constraint_violation: result.constraint_violation,
+                iterations: result.iterations as usize,
+                solve_time: best_time,
+            };
+            println!("{}", serde_json::to_string(&r).unwrap());
+            eprintln!(
+                "ipopt: {} (obj={:.6e}, {:.1}ms)",
+                r.status, r.objective, best_time * 1000.0,
+            );
+        }
+        _ => {
+            eprintln!("Unknown solver: {}", solver);
+            std::process::exit(1);
         }
     }
-    let ripopt_result = ripopt_result.unwrap();
-    let ripopt_cv = if problem.m > 0 {
-        let mut g_l = vec![0.0; problem.m];
-        let mut g_u = vec![0.0; problem.m];
-        problem.constraint_bounds(&mut g_l, &mut g_u);
-        compute_constraint_violation(&ripopt_result.constraint_values, &g_l, &g_u)
-    } else {
-        0.0
-    };
-
-    let r1 = CutestResult {
-        name: name.to_string(),
-        solver: "ripopt".to_string(),
-        n: problem.n,
-        m: problem.m,
-        status: ripopt_status_to_string(ripopt_result.status),
-        objective: if ripopt_result.objective.is_finite() { ripopt_result.objective } else { 0.0 },
-        x: ripopt_result.x.iter().map(|v| if v.is_finite() { *v } else { 0.0 }).collect(),
-        constraint_violation: if ripopt_cv.is_finite() { ripopt_cv } else { 0.0 },
-        iterations: ripopt_result.iterations,
-        solve_time: best_ripopt_time,
-    };
-    println!("{}", serde_json::to_string(&r1).unwrap());
-
-    // Solve with Ipopt — use internal solve_time (IpoptSolve only, excludes setup/teardown)
-    let mut best_ipopt_time = f64::MAX;
-    let mut ipopt_result = None;
-    for run in 0..n_timing_runs {
-        let r = solve_with_ipopt(&problem);
-        if r.solve_time < best_ipopt_time {
-            best_ipopt_time = r.solve_time;
-        }
-        if run == 0 {
-            ipopt_result = Some(r);
-        }
-    }
-    let ipopt_result = ipopt_result.unwrap();
-
-    let r2 = CutestResult {
-        name: name.to_string(),
-        solver: "ipopt".to_string(),
-        n: problem.n,
-        m: problem.m,
-        status: ipopt_status_to_string(ipopt_result.status),
-        objective: ipopt_result.objective,
-        x: ipopt_result.x.clone(),
-        constraint_violation: ipopt_result.constraint_violation,
-        iterations: ipopt_result.iterations as usize,
-        solve_time: best_ipopt_time,
-    };
-    println!("{}", serde_json::to_string(&r2).unwrap());
-
-    eprintln!(
-        "    ripopt: {} (obj={:.6e}, {:.1}ms)  ipopt: {} (obj={:.6e}, {:.1}ms)",
-        r1.status, r1.objective, best_ripopt_time * 1000.0,
-        r2.status, r2.objective, best_ipopt_time * 1000.0,
-    );
 
     problem.cleanup();
 }
@@ -500,9 +513,18 @@ fn run_single_problem(name: &str) {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
-    // Subprocess mode: --single PROBLEM
-    if args.len() == 3 && args[1] == "--single" {
-        run_single_problem(&args[2]);
+    // Subprocess mode: --single PROBLEM --solver ripopt|ipopt
+    if args.len() >= 3 && args[1] == "--single" {
+        let name = &args[2];
+        let solver = if args.len() >= 5 && args[3] == "--solver" {
+            &args[4]
+        } else {
+            // Legacy: run both solvers (for backwards compatibility)
+            run_single_solver(name, "ripopt");
+            run_single_solver(name, "ipopt");
+            return;
+        };
+        run_single_solver(name, solver);
         return;
     }
 
@@ -568,75 +590,87 @@ fn main() {
 
         eprint!("  {} (n={}, m={}) ... ", name, n, m);
 
-        // Run as subprocess with timeout
-        let output = std::process::Command::new("timeout")
-            .arg(format!("{}s", timeout_secs))
-            .arg(&self_exe)
-            .arg("--single")
-            .arg(name)
-            .env("RIPOPT_TIMING_RUNS", n_timing_runs.to_string())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .output();
+        // Run each solver in its own subprocess with its own timeout
+        for solver in &["ripopt", "ipopt"] {
+            let output = std::process::Command::new("timeout")
+                .arg(format!("{}s", timeout_secs))
+                .arg(&self_exe)
+                .arg("--single")
+                .arg(name)
+                .arg("--solver")
+                .arg(solver)
+                .env("RIPOPT_TIMING_RUNS", n_timing_runs.to_string())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output();
 
-        match output {
-            Ok(out) => {
-                let stdout = String::from_utf8_lossy(&out.stdout);
-                let stderr = String::from_utf8_lossy(&out.stderr);
+            match output {
+                Ok(out) => {
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    let stderr = String::from_utf8_lossy(&out.stderr);
 
-                if !out.status.success() && stdout.is_empty() {
-                    // Timeout or crash
-                    eprintln!("TIMEOUT/CRASH (exit={})", out.status);
-                    all_results.push(CutestResult {
-                        name: name.clone(), solver: "ripopt".to_string(),
-                        n, m, status: "Timeout".to_string(),
-                        objective: f64::NAN, x: vec![],
-                        constraint_violation: f64::NAN, iterations: 0,
-                        solve_time: timeout_secs as f64,
-                    });
-                    all_results.push(CutestResult {
-                        name: name.clone(), solver: "ipopt".to_string(),
-                        n, m, status: "Timeout".to_string(),
-                        objective: f64::NAN, x: vec![],
-                        constraint_violation: f64::NAN, iterations: 0,
-                        solve_time: timeout_secs as f64,
-                    });
-                    continue;
-                }
-
-                // Parse JSON lines from stdout
-                let mut parsed_any = false;
-                for line in stdout.lines() {
-                    let line = line.trim();
-                    if line.is_empty() {
+                    if !out.status.success() && stdout.is_empty() {
+                        // Distinguish timeout (exit code 124) from crash
+                        let exit_code = out.status.code();
+                        let (status, label) = if exit_code == Some(124) {
+                            ("Timeout".to_string(), "TIMEOUT")
+                        } else {
+                            let code_str = match exit_code {
+                                Some(c) => format!("exit code {}", c),
+                                None => "signal".to_string(),
+                            };
+                            (format!("Crash({})", code_str), "CRASH")
+                        };
+                        eprint!("{}: {} ", solver, label);
+                        all_results.push(CutestResult {
+                            name: name.clone(), solver: solver.to_string(),
+                            n, m, status,
+                            objective: f64::NAN, x: vec![],
+                            constraint_violation: f64::NAN, iterations: 0,
+                            solve_time: timeout_secs as f64,
+                        });
                         continue;
                     }
-                    if let Ok(result) = serde_json::from_str::<CutestResult>(line) {
-                        all_results.push(result);
-                        parsed_any = true;
+
+                    // Parse JSON line from stdout
+                    let mut parsed = false;
+                    for line in stdout.lines() {
+                        let line = line.trim();
+                        if line.is_empty() {
+                            continue;
+                        }
+                        if let Ok(result) = serde_json::from_str::<CutestResult>(line) {
+                            all_results.push(result);
+                            parsed = true;
+                        }
+                    }
+
+                    // Print the solver's stderr summary line
+                    for line in stderr.lines() {
+                        let trimmed = line.trim();
+                        if trimmed.starts_with("ripopt:") || trimmed.starts_with("ipopt:") {
+                            eprint!("{} ", trimmed);
+                        }
+                    }
+
+                    if !parsed {
+                        eprint!("{}: PARSE_ERROR ", solver);
                     }
                 }
-
-                // Print the solver's stderr summary line
-                for line in stderr.lines() {
-                    if line.trim().starts_with("ripopt:") || line.trim().starts_with("ipopt:") {
-                        eprintln!("{}", line.trim());
-                    }
+                Err(e) => {
+                    eprint!("{}: SPAWN_ERROR({}) ", solver, e);
                 }
-
-                if !parsed_any {
-                    eprintln!("PARSE ERROR");
-                }
-            }
-            Err(e) => {
-                eprintln!("SPAWN ERROR: {}", e);
             }
         }
+        eprintln!(); // newline after both solvers
     }
 
-    // Write JSON to results.json (always saved) and also to stdout
+    // Write JSON to RESULTS_FILE (default: results.json) and also to stdout
     let json = serde_json::to_string_pretty(&all_results).unwrap();
-    let results_path = suite_dir.join("results.json");
+    let results_path = match std::env::var("RESULTS_FILE") {
+        Ok(p) => std::path::PathBuf::from(p),
+        Err(_) => suite_dir.join("results.json"),
+    };
     if let Err(e) = std::fs::write(&results_path, &json) {
         eprintln!("WARNING: Failed to write {}: {}", results_path.display(), e);
     } else {

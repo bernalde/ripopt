@@ -23,12 +23,14 @@ rmumps = { path = "rmumps", optional = true }
 default = ["rmumps"]
 ipopt-native = []
 cutest = []
+hs = []
 rmumps = ["dep:rmumps"]
 faer = ["dep:faer"]
 
 [[bin]]
 name = "hs_suite"
 path = "hs_suite/run_ripopt.rs"
+required-features = ["hs"]
 
 [[bin]]
 name = "ipopt_native"

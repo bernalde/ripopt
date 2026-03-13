@@ -1,7 +1,7 @@
 //! HS (Hock-Schittkowski) regression tests.
 //! These ensure ripopt continues to solve key benchmark problems correctly.
 
-#[path = "../hs_suite/generated/hs_problems.rs"]
+#[path = "hs_problems_subset.rs"]
 mod hs_problems;
 
 use ripopt::{SolveStatus, SolverOptions};
