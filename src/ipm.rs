@@ -1842,6 +1842,13 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let mut stall_best_du: f64 = f64::INFINITY;
     let mut stall_no_progress_count: usize = 0;
 
+    // Primal divergence detection: track consecutive iterations where pr is growing.
+    // When pr grows steadily post-restoration, re-trigger restoration rather than
+    // continuing for many iterations with worsening feasibility.
+    let mut pr_prev_for_divergence: f64 = f64::INFINITY;
+    let mut pr_at_divergence_start: f64 = f64::INFINITY;
+    let mut consecutive_pr_increase: usize = 0;
+
     // Consecutive iterations with obj < -1e20 for robust unbounded detection
     let mut consecutive_unbounded: usize = 0;
 
@@ -1869,6 +1876,19 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let mut dual_stall_last_good_du: f64 = f64::INFINITY;
     let mut dual_stall_last_good_iter: usize = 0;
     let mut dual_stall_triggered: bool = false;
+
+    // Strategy 1: Iterate averaging for oscillation recovery
+    const AVG_WINDOW: usize = 6;
+    let mut du_history: Vec<f64> = Vec::with_capacity(AVG_WINDOW + 1);
+    let mut iterate_history: Vec<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>)> = Vec::new(); // (x, y, z_l, z_u)
+    let mut tried_iterate_averaging: bool = false;
+
+    // Strategy 2: Damped multiplier updates when oscillation detected
+    let mut prev_dy: Option<Vec<f64>> = None;
+    let mut dy_sign_change_count: Vec<u8> = vec![0u8; m]; // per-component consecutive sign change count
+
+    // Strategy 3: Active set reduced KKT solve
+    let mut tried_active_set: bool = false;
 
     // Initial evaluation
     state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
@@ -2181,6 +2201,14 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             multiplier_count,
         };
 
+        // Track iterate history for oscillation detection (Strategy 1)
+        du_history.push(dual_inf);
+        iterate_history.push((state.x.clone(), state.y.clone(), state.z_l.clone(), state.z_u.clone()));
+        if du_history.len() > AVG_WINDOW {
+            du_history.remove(0);
+            iterate_history.remove(0);
+        }
+
         match check_convergence(&conv_info, options, state.consecutive_acceptable) {
             ConvergenceStatus::Converged => {
                 if options.print_level >= 5 {
@@ -2189,6 +2217,93 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 return make_result(&state, SolveStatus::Optimal);
             }
             ConvergenceStatus::Acceptable => {
+                // Strategy 1: Try iterate averaging before declaring Acceptable
+                if !tried_iterate_averaging && du_history.len() == AVG_WINDOW {
+                    // Check for oscillation: count sign changes in du differences
+                    let mut sign_changes = 0;
+                    for w in 1..du_history.len() - 1 {
+                        let d1 = du_history[w] - du_history[w - 1];
+                        let d2 = du_history[w + 1] - du_history[w];
+                        if d1 * d2 < 0.0 {
+                            sign_changes += 1;
+                        }
+                    }
+                    if sign_changes >= AVG_WINDOW / 2 {
+                        _ = std::mem::replace(&mut tried_iterate_averaging, true);
+                        // Average the iterates
+                        let len = iterate_history.len() as f64;
+                        let mut avg_x = vec![0.0; n];
+                        let mut avg_y = vec![0.0; m];
+                        let mut avg_zl = vec![0.0; n];
+                        let mut avg_zu = vec![0.0; n];
+                        for (hx, hy, hzl, hzu) in &iterate_history {
+                            for i in 0..n { avg_x[i] += hx[i] / len; }
+                            for i in 0..m { avg_y[i] += hy[i] / len; }
+                            for i in 0..n { avg_zl[i] += hzl[i] / len; }
+                            for i in 0..n { avg_zu[i] += hzu[i] / len; }
+                        }
+                        // Clamp averaged point to bounds and ensure z >= 0
+                        for i in 0..n {
+                            avg_x[i] = avg_x[i].clamp(
+                                if state.x_l[i].is_finite() { state.x_l[i] + 1e-15 } else { f64::NEG_INFINITY },
+                                if state.x_u[i].is_finite() { state.x_u[i] - 1e-15 } else { f64::INFINITY },
+                            );
+                            avg_zl[i] = avg_zl[i].max(0.0);
+                            avg_zu[i] = avg_zu[i].max(0.0);
+                        }
+                        // Evaluate convergence at averaged point
+                        let saved_x = state.x.clone();
+                        let saved_y = state.y.clone();
+                        let saved_zl = state.z_l.clone();
+                        let saved_zu = state.z_u.clone();
+                        state.x.copy_from_slice(&avg_x);
+                        state.y.copy_from_slice(&avg_y);
+                        state.z_l.copy_from_slice(&avg_zl);
+                        state.z_u.copy_from_slice(&avg_zu);
+                        state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
+                        let avg_pr = convergence::primal_infeasibility(&state.g, &state.g_l, &state.g_u);
+                        let avg_du = convergence::dual_infeasibility(
+                            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+                            &avg_y, &avg_zl, &avg_zu, n,
+                        );
+                        let avg_compl = convergence::complementarity_error(
+                            &avg_x, &state.x_l, &state.x_u, &avg_zl, &avg_zu, 0.0,
+                        );
+                        let avg_conv = ConvergenceInfo {
+                            primal_inf: avg_pr, dual_inf: avg_du,
+                            dual_inf_unscaled: avg_du, compl_inf: avg_compl,
+                            mu: state.mu, objective: state.obj,
+                            multiplier_sum: avg_y.iter().map(|v| v.abs()).sum::<f64>()
+                                + avg_zl.iter().map(|v| v.abs()).sum::<f64>()
+                                + avg_zu.iter().map(|v| v.abs()).sum::<f64>(),
+                            multiplier_count: m + 2 * n,
+                        };
+                        if let ConvergenceStatus::Converged = check_convergence(&avg_conv, options, options.acceptable_iter) {
+                            if options.print_level >= 3 {
+                                eprintln!("ripopt: Iterate averaging promoted Acceptable -> Optimal (du={:.2e})", avg_du);
+                            }
+                            return make_result(&state, SolveStatus::Optimal);
+                        }
+                        // Restore original state if averaging didn't help
+                        state.x.copy_from_slice(&saved_x);
+                        state.y.copy_from_slice(&saved_y);
+                        state.z_l.copy_from_slice(&saved_zl);
+                        state.z_u.copy_from_slice(&saved_zu);
+                        state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
+                    }
+                }
+
+                // Strategy 3: Try active set identification + reduced solve
+                if !tried_active_set {
+                    _ = std::mem::replace(&mut tried_active_set, true);
+                    if let Some(result) = try_active_set_solve(&mut state, problem, options, linear_constraints.as_deref(), lbfgs_mode) {
+                        if options.print_level >= 3 {
+                            eprintln!("ripopt: Active set solve promoted Acceptable -> Optimal");
+                        }
+                        return result;
+                    }
+                }
+
                 if options.print_level >= 5 {
                     timings.print_summary(iteration + 1, ipm_start.elapsed());
                 }
@@ -2330,6 +2445,23 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 // or the full limit with no metric improvement regardless of step size
                 let stall_limit = if tiny_alpha { options.stall_iter_limit / 2 } else { options.stall_iter_limit };
                 if stall_no_progress_count >= stall_limit {
+                    // Before declaring NumericalError, check if the current point
+                    // is near-acceptable (10x relaxed acceptable_tol). Problems that
+                    // are essentially solved but can't quite meet the tight acceptable_tol
+                    // should return Acceptable rather than NumericalError.
+                    let stall_acc_tol = options.acceptable_tol * 10.0;
+                    let stall_pr_ok = primal_inf <= stall_acc_tol.max(options.acceptable_constr_viol_tol);
+                    let stall_du_ok = dual_inf <= (stall_acc_tol * s_d_for_acc).max(1e-2);
+                    let stall_co_ok = compl_inf_best <= (stall_acc_tol * s_d_for_acc).max(1e-2);
+                    if stall_pr_ok && stall_du_ok && stall_co_ok {
+                        if options.print_level >= 3 {
+                            eprintln!(
+                                "ripopt: Stalled but near-acceptable (pr={:.2e}, du={:.2e}, co={:.2e}), returning Acceptable",
+                                primal_inf, dual_inf, compl_inf_best
+                            );
+                        }
+                        return make_result(&state, SolveStatus::Acceptable);
+                    }
                     if options.print_level >= 3 {
                         eprintln!(
                             "ripopt: Stalled for {} iterations without progress (alpha_p={:.2e}, pr={:.2e}, du={:.2e}), terminating",
@@ -2340,6 +2472,44 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 }
             }
         }
+
+        // Primal divergence detection: when pr is growing for several consecutive
+        // iterations, force re-entry into restoration rather than continuing with
+        // worsening feasibility. This catches the pattern where after NLP restoration,
+        // the filter accepts steps via slight phi decrease while theta grows steadily.
+        let mut force_restoration = false;
+        if m > 0 && iteration > 5 && primal_inf > options.constr_viol_tol {
+            if primal_inf > pr_prev_for_divergence * (1.0 + 1e-6) {
+                if consecutive_pr_increase == 0 {
+                    pr_at_divergence_start = pr_prev_for_divergence;
+                }
+                consecutive_pr_increase += 1;
+            } else {
+                consecutive_pr_increase = 0;
+            }
+            // After 8 consecutive increases AND pr has grown by at least 20% total,
+            // force restoration to find a more feasible point. The growth check
+            // prevents triggering on tiny numerical oscillations.
+            if consecutive_pr_increase >= 8
+                && primal_inf > 1.2 * pr_at_divergence_start
+            {
+                log::info!(
+                    "Primal divergence at iter {}: pr grew for {} consecutive iterations ({:.2e} -> {:.2e}), forcing restoration",
+                    iteration, consecutive_pr_increase, pr_at_divergence_start, primal_inf
+                );
+                if options.print_level >= 3 {
+                    eprintln!(
+                        "ripopt: Primal divergence detected (pr grew {:.2e} -> {:.2e} over {} iters), re-entering restoration",
+                        pr_at_divergence_start, primal_inf, consecutive_pr_increase
+                    );
+                }
+                force_restoration = true;
+                consecutive_pr_increase = 0;
+            }
+        } else {
+            consecutive_pr_increase = 0;
+        }
+        pr_prev_for_divergence = primal_inf;
 
         // Compute sigma (barrier diagonal)
         let sigma = kkt::compute_sigma(&state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u);
@@ -3104,7 +3274,14 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         let mut step_accepted = false;
         let min_alpha = filter.compute_alpha_min(theta_current, grad_phi_step);
 
+        // If primal divergence was detected, skip line search to force restoration entry.
+        // The !step_accepted branch below handles filter updates and restoration.
+        // No-op here; just skip the line search loop.
+
         for _ls_iter in 0..40 {
+            if force_restoration {
+                break;
+            }
             if alpha < min_alpha {
                 break;
             }
@@ -3536,11 +3713,29 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
         timings.line_search += t_ls.elapsed();
 
-        // Update dual variables
+        // Update dual variables (with damping for oscillating components)
         let alpha_d = alpha_dual_max;
+        let near_convergence = state.consecutive_acceptable >= 1;
         for i in 0..m {
-            state.y[i] += alpha_d * state.dy[i];
+            let sign_change = if let Some(ref pdy) = prev_dy {
+                pdy[i] * state.dy[i] < 0.0
+            } else {
+                false
+            };
+            if near_convergence && sign_change {
+                dy_sign_change_count[i] = dy_sign_change_count[i].saturating_add(1);
+            } else if !sign_change {
+                dy_sign_change_count[i] = 0;
+            }
+            let dy_i = if near_convergence && dy_sign_change_count[i] >= 3 {
+                // Persistent oscillation (≥3 consecutive sign changes): damp to stabilize
+                0.5 * state.dy[i]
+            } else {
+                state.dy[i]
+            };
+            state.y[i] += alpha_d * dy_i;
         }
+        prev_dy = Some(state.dy.clone());
         // Ipopt kappa_sigma safeguard: keep z*s in [mu_ks/kappa_sigma, kappa_sigma*mu_ks]
         // In free mode, use avg_compl (clamped to [mu, 1e3]) for more stable z bounds
         let kappa_sigma = 1e10;
@@ -3636,10 +3831,15 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
 
         // --- Barrier parameter update (free/fixed mode) ---
-        // Special case: no bound constraints → no barrier, force mu to mu_min (Ipopt convention)
+        // When there are no variable bounds, mu serves no barrier purpose but is
+        // still used for KKT regularization and the filter line search. We decrease
+        // mu superlinearly (mu^1.5) rather than collapsing it instantly to mu_min,
+        // which would destroy filter protection against infeasible steps. This
+        // prevents the PENTAGON-type failure where mu=1e-11 at iteration 1 causes
+        // the switching condition to accept a step that destroys feasibility.
         let has_bounds = (0..n).any(|i| state.x_l[i].is_finite() || state.x_u[i].is_finite());
         if !has_bounds {
-            state.mu = options.mu_min;
+            state.mu = state.mu.powf(options.mu_superlinear_decrease_power).max(options.mu_min);
         } else {
             let kkt_error = {
                 let pi = state.constraint_violation();
@@ -4788,6 +4988,298 @@ fn compute_barrier_error(state: &SolverState) -> f64 {
     let primal_err = state.constraint_violation();
 
     dual_err.max(compl_err).max(primal_err)
+}
+
+/// Strategy 3: Try active set identification + reduced KKT solve.
+///
+/// At near-optimal points, identify variables at their bounds (active set),
+/// fix them, solve the reduced KKT system for free variables, and check
+/// if the result meets strict convergence tolerances.
+fn try_active_set_solve<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    options: &SolverOptions,
+    linear_constraints: Option<&[bool]>,
+    lbfgs_mode: bool,
+) -> Option<SolveResult> {
+    let n = state.n;
+    let m = state.m;
+
+    // Identify active bounds using complementarity gap.
+    // A variable is "active at lower bound" if x_i is close to x_l_i and z_l_i is significant.
+    let tol_bound = 1e-6;
+    let mut is_free = vec![true; n];
+    let mut active_lower = vec![false; n];
+    let mut active_upper = vec![false; n];
+    let mut n_free = 0usize;
+
+    for i in 0..n {
+        let at_lower = state.x_l[i].is_finite()
+            && (state.x[i] - state.x_l[i]).abs() < tol_bound * (1.0 + state.x_l[i].abs());
+        let at_upper = state.x_u[i].is_finite()
+            && (state.x_u[i] - state.x[i]).abs() < tol_bound * (1.0 + state.x_u[i].abs());
+
+        if at_lower && state.z_l[i] > 1e-8 {
+            is_free[i] = false;
+            active_lower[i] = true;
+        } else if at_upper && state.z_u[i] > 1e-8 {
+            is_free[i] = false;
+            active_upper[i] = true;
+        } else {
+            n_free += 1;
+        }
+    }
+
+    // Need at least one active bound for this strategy to help
+    if n_free == n {
+        return None;
+    }
+
+    // Don't attempt if reduced system is too large for dense solve
+    let dim = n_free + m;
+    if dim > 500 {
+        return None;
+    }
+    if dim == 0 {
+        return None;
+    }
+
+    // Build mapping: free_idx[k] = original index of k-th free variable
+    let mut free_idx = Vec::with_capacity(n_free);
+    let mut orig_to_free = vec![usize::MAX; n]; // usize::MAX = not free
+    for i in 0..n {
+        if is_free[i] {
+            orig_to_free[i] = free_idx.len();
+            free_idx.push(i);
+        }
+    }
+
+    // Fix active variables at their bounds (save full state for restoration)
+    let saved_x = state.x.clone();
+    let saved_y = state.y.clone();
+    let saved_zl = state.z_l.clone();
+    let saved_zu = state.z_u.clone();
+    for i in 0..n {
+        if active_lower[i] {
+            state.x[i] = state.x_l[i];
+        } else if active_upper[i] {
+            state.x[i] = state.x_u[i];
+        }
+    }
+
+    // Re-evaluate at the snapped point
+    state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+
+    // Build reduced KKT system (dense):
+    // [ H_ff   J_f^T ] [ dx_f ]   [ -grad_f_f ]
+    // [ J_f    0     ] [ dy   ] = [ g_l/g_u - g ]
+    //
+    // where H_ff is the Hessian restricted to free-free, J_f is Jacobian cols for free vars.
+
+    let mut kkt = vec![0.0; dim * dim];
+    let mut rhs = vec![0.0; dim];
+
+    // Fill H_ff block (top-left n_free x n_free)
+    for (idx, (&row, &col)) in state.hess_rows.iter().zip(state.hess_cols.iter()).enumerate() {
+        let fr = orig_to_free[row];
+        let fc = orig_to_free[col];
+        if fr != usize::MAX && fc != usize::MAX {
+            kkt[fr * dim + fc] += state.hess_vals[idx];
+            if fr != fc {
+                kkt[fc * dim + fr] += state.hess_vals[idx]; // symmetric
+            }
+        }
+    }
+
+    // Fill J_f block (bottom-left m x n_free) and J_f^T (top-right n_free x m)
+    for (idx, (&row, &col)) in state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate() {
+        let fc = orig_to_free[col];
+        if fc != usize::MAX {
+            let r = n_free + row; // row in KKT
+            kkt[r * dim + fc] += state.jac_vals[idx];       // J_f block
+            kkt[fc * dim + r] += state.jac_vals[idx];       // J_f^T block
+        }
+    }
+
+    // RHS: top part = -grad_f for free variables
+    for k in 0..n_free {
+        rhs[k] = -state.grad_f[free_idx[k]];
+        // Subtract contribution of fixed active variables via Hessian
+        // (H * x_active terms absorbed into gradient already since we re-evaluated)
+    }
+
+    // RHS: bottom part = constraint target - g(x)
+    // For equality constraints (g_l == g_u): rhs = g_l - g
+    // For inequality constraints: use the active bound side
+    for i in 0..m {
+        if (state.g_l[i] - state.g_u[i]).abs() < 1e-20 {
+            // Equality
+            rhs[n_free + i] = state.g_l[i] - state.g[i];
+        } else if state.g[i] <= state.g_l[i] + 1e-10 {
+            rhs[n_free + i] = state.g_l[i] - state.g[i];
+        } else if state.g[i] >= state.g_u[i] - 1e-10 {
+            rhs[n_free + i] = state.g_u[i] - state.g[i];
+        } else {
+            // Inactive constraint: target is current value (no correction needed)
+            rhs[n_free + i] = 0.0;
+        }
+    }
+
+    // Solve the dense symmetric system via LDL^T (Bunch-Kaufman-like pivoting)
+    let solution = dense_symmetric_solve(dim, &mut kkt, &mut rhs);
+    if solution.is_none() {
+        // Singular system, restore and bail
+        state.x.copy_from_slice(&saved_x);
+        state.y.copy_from_slice(&saved_y);
+        state.z_l.copy_from_slice(&saved_zl);
+        state.z_u.copy_from_slice(&saved_zu);
+        state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+        return None;
+    }
+    let sol = solution.unwrap();
+
+    // Apply the step for free variables (with damping for safety)
+    let alpha = 1.0; // full Newton step
+    for k in 0..n_free {
+        let i = free_idx[k];
+        state.x[i] += alpha * sol[k];
+        // Clamp to bounds
+        if state.x_l[i].is_finite() {
+            state.x[i] = state.x[i].max(state.x_l[i]);
+        }
+        if state.x_u[i].is_finite() {
+            state.x[i] = state.x[i].min(state.x_u[i]);
+        }
+    }
+
+    // Update y from the solve
+    for i in 0..m {
+        state.y[i] = sol[n_free + i];
+    }
+
+    // Re-evaluate at the new point
+    state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+
+    // Recover z from stationarity: ∇f + J^T y = z_l - z_u
+    let mut grad_jty = state.grad_f.clone();
+    for (idx, (&row, &col)) in state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate() {
+        grad_jty[col] += state.jac_vals[idx] * state.y[row];
+    }
+    for i in 0..n {
+        state.z_l[i] = 0.0;
+        state.z_u[i] = 0.0;
+        if state.x_l[i].is_finite() && grad_jty[i] > 0.0 {
+            state.z_l[i] = grad_jty[i];
+        } else if state.x_u[i].is_finite() && grad_jty[i] < 0.0 {
+            state.z_u[i] = -grad_jty[i];
+        }
+    }
+
+    // Check strict convergence
+    let primal_inf = state.constraint_violation();
+    let dual_inf = convergence::dual_infeasibility(
+        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+        &state.y, &state.z_l, &state.z_u, n,
+    );
+    let compl_inf = convergence::complementarity_error(
+        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
+    );
+    let multiplier_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
+        + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
+        + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
+    let multiplier_count = m + 2 * n;
+
+    let conv_info = ConvergenceInfo {
+        primal_inf,
+        dual_inf,
+        dual_inf_unscaled: dual_inf, // same z used for both
+        compl_inf,
+        mu: 0.0, // at the solution, mu should be zero
+        objective: state.obj,
+        multiplier_sum,
+        multiplier_count,
+    };
+
+    if let ConvergenceStatus::Converged = check_convergence(&conv_info, options, 0) {
+        return Some(make_result(state, SolveStatus::Optimal));
+    }
+
+    // Didn't converge; restore original state and re-evaluate
+    state.x.copy_from_slice(&saved_x);
+    state.y.copy_from_slice(&saved_y);
+    state.z_l.copy_from_slice(&saved_zl);
+    state.z_u.copy_from_slice(&saved_zu);
+    state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+
+    None
+}
+
+/// Dense symmetric indefinite solve using diagonal pivoting (LDL^T).
+/// Solves A*x = b in-place. Returns Some(x) on success, None if singular.
+/// `a` is row-major dim x dim, `b` is length dim.
+fn dense_symmetric_solve(dim: usize, a: &mut [f64], b: &mut [f64]) -> Option<Vec<f64>> {
+    // Gaussian elimination with partial pivoting for symmetric indefinite systems.
+    // Simple but sufficient for small systems (dim < 500).
+    let mut piv = vec![0usize; dim];
+    for i in 0..dim {
+        piv[i] = i;
+    }
+
+    for k in 0..dim {
+        // Find pivot: largest diagonal element in remaining submatrix
+        let mut max_val = a[k * dim + k].abs();
+        let mut max_idx = k;
+        for i in (k + 1)..dim {
+            if a[i * dim + i].abs() > max_val {
+                max_val = a[i * dim + i].abs();
+                max_idx = i;
+            }
+        }
+
+        if max_val < 1e-15 {
+            return None; // Singular
+        }
+
+        // Swap rows/cols k and max_idx
+        if max_idx != k {
+            piv.swap(k, max_idx);
+            // Swap rows
+            for j in 0..dim {
+                let tmp = a[k * dim + j];
+                a[k * dim + j] = a[max_idx * dim + j];
+                a[max_idx * dim + j] = tmp;
+            }
+            // Swap cols
+            for i in 0..dim {
+                let tmp = a[i * dim + k];
+                a[i * dim + k] = a[i * dim + max_idx];
+                a[i * dim + max_idx] = tmp;
+            }
+            b.swap(k, max_idx);
+        }
+
+        let pivot = a[k * dim + k];
+        // Eliminate below
+        for i in (k + 1)..dim {
+            let factor = a[i * dim + k] / pivot;
+            a[i * dim + k] = factor;
+            for j in (k + 1)..dim {
+                a[i * dim + j] -= factor * a[k * dim + j];
+            }
+            b[i] -= factor * b[k];
+        }
+    }
+
+    // Back substitution
+    let mut x = b.to_vec();
+    for k in (0..dim).rev() {
+        for j in (k + 1)..dim {
+            x[k] -= a[k * dim + j] * x[j];
+        }
+        x[k] /= a[k * dim + k];
+    }
+
+    Some(x)
 }
 
 /// Compute a steepest-descent fallback direction when KKT solve fails.

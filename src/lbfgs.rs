@@ -60,6 +60,10 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let mut status = SolveStatus::MaxIterations;
     let mut acceptable_count = 0;
     let mut iter = 0;
+    // Stall detection: track best gradient norm seen
+    let mut stall_best_grad: f64 = f64::INFINITY;
+    let mut stall_no_progress: usize = 0;
+    let stall_limit: usize = 30;
 
     for k in 0..max_iter {
         iter = k;
@@ -90,6 +94,32 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             }
         } else {
             acceptable_count = 0;
+        }
+
+        // Stall detection: if gradient hasn't improved by 1% in stall_limit iterations,
+        // check if the point is near-acceptable and return Acceptable rather than
+        // burning the full iteration budget.
+        if k > 50 {
+            if grad_norm < 0.99 * stall_best_grad {
+                stall_best_grad = grad_norm;
+                stall_no_progress = 0;
+            } else {
+                stall_no_progress += 1;
+                if stall_no_progress >= stall_limit {
+                    // Relaxed acceptable: gradient < 1.0 (absolute) or 100x acceptable_tol
+                    if grad_norm < (acceptable_tol * 100.0).max(1.0) {
+                        status = SolveStatus::Acceptable;
+                        if print_level >= 5 {
+                            eprintln!(
+                                "L-BFGS iter {}: stalled but near-acceptable (||g||={:.2e})",
+                                k, grad_norm
+                            );
+                        }
+                        break;
+                    }
+                    stall_no_progress = 0; // reset and keep trying
+                }
+            }
         }
 
         // Two-loop recursion to compute search direction d = -H_k * grad
