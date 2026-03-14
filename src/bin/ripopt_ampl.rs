@@ -197,6 +197,7 @@ fn print_help() {
     println!("    enable_preprocessing=<bool>          Eliminate fixed vars & redundant constraints [yes]");
     println!("    proactive_infeasibility_detection=<bool> Early infeasibility detection [no]");
     println!("    print_level=<int>                    Verbosity: 0=silent, 5=verbose [5]");
+    println!("    early_stall_timeout=<float>          Max seconds for first 3 iters (0=off) [10.0]");
     println!();
     println!("  Boolean values accept: yes, true, 1 (anything else is false).");
 }
@@ -447,6 +448,11 @@ fn apply_option(opts: &mut SolverOptions, key: &str, value: &str) {
         "stall_iter_limit" => {
             if let Ok(v) = value.parse() {
                 opts.stall_iter_limit = v;
+            }
+        }
+        "early_stall_timeout" => {
+            if let Ok(v) = value.parse() {
+                opts.early_stall_timeout = v;
             }
         }
         _ => {

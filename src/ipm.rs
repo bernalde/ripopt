@@ -2196,10 +2196,25 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     for iteration in 0..options.max_iter {
         state.iter = iteration;
 
-        // Check wall-clock time limit (every 10 iterations to avoid syscall overhead)
-        if iteration % 10 == 0 && options.max_wall_time > 0.0 {
+        // Check wall-clock time limit (every iteration in early phase, every 10 after)
+        if (iteration < 10 || iteration % 10 == 0) && options.max_wall_time > 0.0 {
             if start_time.elapsed().as_secs_f64() >= options.max_wall_time {
                 return make_result(&state, SolveStatus::MaxIterations);
+            }
+        }
+
+        // Early stall detection: bail out if stuck in early iterations.
+        // Some problems cause the solver to spend excessive time in the first
+        // few iterations (typically in factorization, restoration, or line search).
+        if iteration < 3 && options.early_stall_timeout > 0.0 {
+            if start_time.elapsed().as_secs_f64() > options.early_stall_timeout {
+                if options.print_level >= 3 {
+                    eprintln!(
+                        "ripopt: Early stall at iteration {} ({:.1}s elapsed), terminating",
+                        iteration, start_time.elapsed().as_secs_f64()
+                    );
+                }
+                return make_result(&state, SolveStatus::NumericalError);
             }
         }
 
@@ -3574,6 +3589,12 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             if force_restoration {
                 break;
             }
+            // Intra-iteration early stall check
+            if iteration < 3 && options.early_stall_timeout > 0.0 {
+                if start_time.elapsed().as_secs_f64() > options.early_stall_timeout {
+                    return make_result(&state, SolveStatus::NumericalError);
+                }
+            }
             if alpha < min_alpha {
                 break;
             }
@@ -3768,7 +3789,11 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 // Skip for large problems: NLP restoration doubles the problem size,
                 // making it prohibitively expensive for n+m > 10000.
                 let kkt_dim = n + m;
-                if (fail_count == 2 || fail_count == 4) && !options.disable_nlp_restoration && kkt_dim <= 50000 {
+                // Early stall: skip expensive NLP restoration if we've already exceeded timeout
+                let skip_nlp_restoration = iteration < 3
+                    && options.early_stall_timeout > 0.0
+                    && start_time.elapsed().as_secs_f64() > options.early_stall_timeout * 0.5;
+                if (fail_count == 2 || fail_count == 4) && !options.disable_nlp_restoration && kkt_dim <= 50000 && !skip_nlp_restoration {
                     state.diagnostics.nlp_restoration_count += 1;
                     let (x_nlp, outcome) = attempt_nlp_restoration(
                         problem, &state, &filter, options, theta_current,
@@ -4151,21 +4176,43 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 MuMode::Free => {
                     if sufficient && !mu_state.tiny_step {
                         mu_state.remember_accepted(kkt_error);
-                        // Adaptive mu: prefer Mehrotra sigma when available, fall back to Loqo
                         let avg_compl = compute_avg_complementarity(&state);
-                        if let Some(sigma) = last_mehrotra_sigma.take() {
-                            // Mehrotra-guided: use sigma to blend between current mu and
-                            // the Loqo oracle. When sigma is small (affine step near full),
-                            // weight toward aggressive decrease. When sigma is large (far
-                            // from solution), stay close to the Loqo estimate.
+                        // Consume Mehrotra sigma (used as lower bound hint for quality function)
+                        let sigma = last_mehrotra_sigma.take();
+                        if options.mu_oracle_quality_function && avg_compl > 0.0 {
+                            // Quality function: evaluate Q(mu) for explicit candidates and
+                            // pick the one with lowest barrier KKT error. This is safer than
+                            // a continuous search because the candidates are all "reasonable"
+                            // mu values that standard strategies would produce.
                             let mu_loqo = avg_compl / options.kappa;
-                            let mu_sigma = (sigma * state.mu).max(options.mu_min);
-                            // Blend: take the geometric mean weighted by sigma
-                            // sigma ≈ 0 → mu ≈ mu_sigma (aggressive)
-                            // sigma ≈ 1 → mu ≈ mu_loqo (conservative)
-                            state.mu = (mu_sigma.powf(1.0 - sigma) * mu_loqo.powf(sigma))
-                                .clamp(options.mu_min, 1e5);
+                            let mu_linear = options.mu_linear_decrease_factor * state.mu;
+                            let mu_third = state.mu / 3.0;
+                            let mu_tenth = state.mu / 10.0;
+
+                            let pi = state.constraint_violation();
+                            let di = convergence::dual_infeasibility(
+                                &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+                                &state.y, &state.z_l, &state.z_u, state.n,
+                            );
+                            let fixed_q = pi * pi + di * di;
+
+                            let mut best_mu = mu_loqo;
+                            let mut best_q = f64::INFINITY;
+                            for &mu_c in &[mu_loqo, mu_linear, mu_third, mu_tenth] {
+                                let mu_c = mu_c.clamp(options.mu_min, state.mu);
+                                let ci = convergence::complementarity_error(
+                                    &state.x, &state.x_l, &state.x_u,
+                                    &state.z_l, &state.z_u, mu_c,
+                                );
+                                let q = fixed_q + ci * ci;
+                                if q < best_q {
+                                    best_q = q;
+                                    best_mu = mu_c;
+                                }
+                            }
+                            state.mu = best_mu.clamp(options.mu_min, 1e5);
                         } else if avg_compl > 0.0 {
+                            // Loqo fallback
                             state.mu = (avg_compl / options.kappa).clamp(options.mu_min, 1e5);
                         } else {
                             // No complementarity products (all bounds inactive) → decrease mu
@@ -5215,6 +5262,51 @@ fn attempt_nlp_restoration<P: NlpProblem>(
 }
 
 /// Compute average complementarity for recomputing mu after restoration.
+/// Quality function for barrier parameter selection.
+///
+/// Evaluates Q(mu) = dual_inf² + primal_inf² + compl_err(mu)² for log-spaced
+/// candidate mu values and returns the minimizer. The first two terms are fixed
+/// at the current iterate; only the complementarity term varies with mu.
+///
+/// This replaces the Loqo oracle (mu = avg_compl / kappa) with a global search
+/// that can make aggressive mu decreases when the iterate is well-centered.
+fn quality_function_mu(state: &SolverState, mu_lower: f64, mu_upper: f64, n_candidates: usize) -> f64 {
+    if mu_upper <= mu_lower || n_candidates < 2 {
+        return mu_upper;
+    }
+
+    let n = state.n;
+    let pi = state.constraint_violation();
+    let di = convergence::dual_infeasibility(
+        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+        &state.y, &state.z_l, &state.z_u, n,
+    );
+    let fixed_part = pi * pi + di * di;
+
+    let log_min = mu_lower.max(1e-20).ln();
+    let log_max = mu_upper.ln();
+
+    let mut best_mu = mu_upper;
+    let mut best_q = f64::INFINITY;
+
+    for k in 0..n_candidates {
+        let t = k as f64 / (n_candidates - 1) as f64;
+        let mu_candidate = (log_min + t * (log_max - log_min)).exp();
+
+        let ci = convergence::complementarity_error(
+            &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, mu_candidate,
+        );
+        let q = fixed_part + ci * ci;
+
+        if q < best_q {
+            best_q = q;
+            best_mu = mu_candidate;
+        }
+    }
+
+    best_mu
+}
+
 fn compute_avg_complementarity(state: &SolverState) -> f64 {
     let mut sum_compl = 0.0;
     let mut count = 0;

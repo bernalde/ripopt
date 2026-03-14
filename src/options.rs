@@ -175,6 +175,18 @@ pub struct SolverOptions {
     /// infeasibility before declaring stall (NumericalError). 0 = disable stall detection.
     /// Default: 30.
     pub stall_iter_limit: usize,
+    /// Maximum wall-clock seconds allowed for the first few iterations.
+    /// If the solver has completed fewer than 3 iterations after this many seconds,
+    /// it returns NumericalError to trigger fallback strategies.
+    /// 0.0 disables early stall detection.
+    /// Default: 10.0.
+    pub early_stall_timeout: f64,
+    /// Use quality function for barrier parameter selection in adaptive mode.
+    /// Evaluates Q(mu) = barrier KKT error for several candidate mu values and
+    /// picks the minimizer. Allows more aggressive mu decreases than the Loqo
+    /// oracle when the iterate is well-centered.
+    /// Default: true.
+    pub mu_oracle_quality_function: bool,
 }
 
 impl Default for SolverOptions {
@@ -234,6 +246,8 @@ impl Default for SolverOptions {
             proactive_infeasibility_detection: false,
             linear_solver: LinearSolverChoice::default(),
             stall_iter_limit: 30,
+            early_stall_timeout: 10.0,
+            mu_oracle_quality_function: false,
         }
     }
 }
