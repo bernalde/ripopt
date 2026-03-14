@@ -1010,6 +1010,54 @@ impl<P: NlpProblem> NlpProblem for LeastSquaresProblem<'_, P> {
 /// - ∇f(x0) ≈ 0 (zero gradient)
 /// - All constraints are equalities (g_l[i] == g_u[i])
 /// - m >= n (square or more constraints than variables)
+/// Dense Cholesky solve: solve A*x = b where A is n×n symmetric positive definite.
+/// Returns None if A is not positive definite (factorization fails).
+fn dense_cholesky_solve(a: &[f64], b: &[f64], n: usize) -> Option<Vec<f64>> {
+    // Cholesky: A = L * L^T
+    let mut l = vec![0.0; n * n];
+    for j in 0..n {
+        let mut sum = 0.0;
+        for k in 0..j {
+            sum += l[j * n + k] * l[j * n + k];
+        }
+        let diag = a[j * n + j] - sum;
+        if diag <= 0.0 {
+            return None;
+        }
+        l[j * n + j] = diag.sqrt();
+
+        for i in (j + 1)..n {
+            let mut sum = 0.0;
+            for k in 0..j {
+                sum += l[i * n + k] * l[j * n + k];
+            }
+            l[i * n + j] = (a[i * n + j] - sum) / l[j * n + j];
+        }
+    }
+
+    // Forward solve: L * y = b
+    let mut y = vec![0.0; n];
+    for i in 0..n {
+        let mut sum = 0.0;
+        for k in 0..i {
+            sum += l[i * n + k] * y[k];
+        }
+        y[i] = (b[i] - sum) / l[i * n + i];
+    }
+
+    // Back solve: L^T * x = y
+    let mut x = vec![0.0; n];
+    for i in (0..n).rev() {
+        let mut sum = 0.0;
+        for k in (i + 1)..n {
+            sum += l[k * n + i] * x[k];
+        }
+        x[i] = (y[i] - sum) / l[i * n + i];
+    }
+
+    Some(x)
+}
+
 fn detect_ne_problem<P: NlpProblem>(problem: &P) -> bool {
     let n = problem.num_variables();
     let m = problem.num_constraints();
@@ -1124,7 +1172,125 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         let mut g_l = vec![0.0; m];
         let mut g_u = vec![0.0; m];
         problem.constraint_bounds(&mut g_l, &mut g_u);
-        let theta = convergence::primal_infeasibility(&g_final, &g_l, &g_u);
+        let mut theta = convergence::primal_infeasibility(&g_final, &g_l, &g_u);
+
+        // Newton polish: if theta is close but not quite at tol, try a few
+        // Gauss-Newton steps on the original system g(x) = target to drive
+        // constraint violation below tol.
+        let mut polished_x = ls_result.x.clone();
+        if theta > options.tol && theta < 1e-2 {
+            let mut x_l_var = vec![0.0; n];
+            let mut x_u_var = vec![0.0; n];
+            problem.bounds(&mut x_l_var, &mut x_u_var);
+            let (jac_rows, jac_cols) = problem.jacobian_structure();
+            let nnz = jac_rows.len();
+
+            // Target values for each constraint (midpoint of [g_l, g_u] for equalities)
+            let target: Vec<f64> = (0..m).map(|i| {
+                if (g_u[i] - g_l[i]).abs() < 1e-15 { g_l[i] } else { 0.5 * (g_l[i] + g_u[i]) }
+            }).collect();
+
+            let max_newton_iters = 20;
+            for newton_iter in 0..max_newton_iters {
+                // Residual: r = g(x) - target
+                let r: Vec<f64> = (0..m).map(|i| g_final[i] - target[i]).collect();
+
+                // Get Jacobian at current point
+                let mut jac_vals = vec![0.0; nnz];
+                problem.jacobian_values(&polished_x, &mut jac_vals);
+
+                // Build dense J (m x n)
+                let mut j_dense = vec![0.0; m * n];
+                for k in 0..nnz {
+                    j_dense[jac_rows[k] * n + jac_cols[k]] += jac_vals[k];
+                }
+
+                // Solve for dx using normal equations: (J^T J) dx = -J^T r
+                // Form J^T J (n x n) and J^T r (n)
+                let mut jtj = vec![0.0; n * n];
+                let mut jtr = vec![0.0; n];
+                for i in 0..n {
+                    for j in 0..n {
+                        let mut s = 0.0;
+                        for k in 0..m {
+                            s += j_dense[k * n + i] * j_dense[k * n + j];
+                        }
+                        jtj[i * n + j] = s;
+                    }
+                    let mut s = 0.0;
+                    for k in 0..m {
+                        s += j_dense[k * n + i] * r[k];
+                    }
+                    jtr[i] = s;
+                }
+
+                // Add small regularization for numerical stability
+                for i in 0..n {
+                    jtj[i * n + i] += 1e-14;
+                }
+
+                // Solve with dense Cholesky (J^T J is SPD when J has full column rank)
+                let dx = match dense_cholesky_solve(&jtj, &jtr, n) {
+                    Some(dx) => dx,
+                    None => break, // J^T J singular, stop polishing
+                };
+
+                // Line search with fraction-to-boundary for variable bounds
+                let mut alpha = 1.0;
+                let tau = 0.995;
+                for i in 0..n {
+                    if dx[i] < 0.0 && x_l_var[i].is_finite() {
+                        let max_step = -tau * (polished_x[i] - x_l_var[i]) / dx[i];
+                        if max_step < alpha { alpha = max_step; }
+                    }
+                    if dx[i] > 0.0 && x_u_var[i].is_finite() {
+                        let max_step = tau * (x_u_var[i] - polished_x[i]) / dx[i];
+                        if max_step < alpha { alpha = max_step; }
+                    }
+                }
+                alpha = alpha.max(0.0).min(1.0);
+
+                // Backtracking: ensure theta actually decreases
+                let mut trial_x = vec![0.0; n];
+                let mut trial_g = vec![0.0; m];
+                let mut best_alpha = alpha;
+                let mut best_theta = theta;
+                for _ in 0..10 {
+                    for i in 0..n {
+                        trial_x[i] = polished_x[i] - best_alpha * dx[i];
+                    }
+                    problem.constraints(&trial_x, &mut trial_g);
+                    let trial_theta = convergence::primal_infeasibility(&trial_g, &g_l, &g_u);
+                    if trial_theta < theta {
+                        best_theta = trial_theta;
+                        break;
+                    }
+                    best_alpha *= 0.5;
+                }
+
+                if best_theta >= theta * 0.999 {
+                    break; // No progress
+                }
+
+                // Accept step
+                for i in 0..n {
+                    polished_x[i] -= best_alpha * dx[i];
+                }
+                problem.constraints(&polished_x, &mut g_final);
+                theta = best_theta;
+
+                if options.print_level >= 5 {
+                    eprintln!(
+                        "ripopt: Newton polish iter {}: theta={:.2e}, alpha={:.4}",
+                        newton_iter + 1, theta, best_alpha,
+                    );
+                }
+
+                if theta < options.tol {
+                    break; // Converged!
+                }
+            }
+        }
 
         // g_final is from the original (unscaled) problem, no unscaling needed
         let g_out = g_final;
@@ -1252,11 +1418,11 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             theta_lb, theta
                         );
                     }
-                    (ls_result.x, status, g_out, ls_result.iterations,
+                    (polished_x, status, g_out, ls_result.iterations,
                      ls_result.bound_multipliers_lower, ls_result.bound_multipliers_upper)
                 }
             } else {
-                (ls_result.x, status, g_out, ls_result.iterations,
+                (polished_x, status, g_out, ls_result.iterations,
                  ls_result.bound_multipliers_lower, ls_result.bound_multipliers_upper)
             };
 
@@ -1890,6 +2056,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     // Strategy 3: Active set reduced KKT solve
     let mut tried_active_set: bool = false;
 
+    // Strategy 4: Complementarity polishing — force mu small when compl is bottleneck
+    let mut tried_compl_polish: bool = false;
+
     // Initial evaluation
     state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
         if let Some(ref mut lbfgs) = lbfgs_state {
@@ -2301,6 +2470,78 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             eprintln!("ripopt: Active set solve promoted Acceptable -> Optimal");
                         }
                         return result;
+                    }
+                }
+
+                // Strategy 4: Complementarity polishing via multiplier snap
+                // When complementarity is the bottleneck (primal/dual already good enough),
+                // snap bound multipliers to reduce complementarity, then recheck convergence.
+                if !tried_compl_polish {
+                    let compl_inf_now = conv_info.compl_inf;
+                    let s_d_now = {
+                        let s_max: f64 = 100.0;
+                        let s_d_max: f64 = 1e4;
+                        if conv_info.multiplier_count > 0 {
+                            ((s_max.max(conv_info.multiplier_sum / conv_info.multiplier_count as f64)) / s_max).min(s_d_max)
+                        } else { 1.0 }
+                    };
+                    let compl_tol_scaled = options.tol * s_d_now;
+                    if compl_inf_now > compl_tol_scaled
+                        && conv_info.primal_inf <= options.acceptable_tol
+                        && conv_info.dual_inf <= options.acceptable_tol * s_d_now
+                    {
+                        tried_compl_polish = true;
+                        // For variables near bounds, snap multipliers to reduce complementarity:
+                        // If x_i ≈ x_l_i (gap < tol), keep z_l_i from stationarity (z_opt)
+                        // If x_i is interior (gap > tol), set z_l_i = 0
+                        let saved_zl = state.z_l.clone();
+                        let saved_zu = state.z_u.clone();
+                        let gap_tol = 1e-6;
+                        for i in 0..n {
+                            let gap_l = if state.x_l[i].is_finite() { state.x[i] - state.x_l[i] } else { f64::INFINITY };
+                            let gap_u = if state.x_u[i].is_finite() { state.x_u[i] - state.x[i] } else { f64::INFINITY };
+                            // If clearly interior to lower bound, zero out z_l
+                            if gap_l > gap_tol {
+                                state.z_l[i] = 0.0;
+                            }
+                            // If clearly interior to upper bound, zero out z_u
+                            if gap_u > gap_tol {
+                                state.z_u[i] = 0.0;
+                            }
+                        }
+                        // Recompute convergence with snapped multipliers
+                        let snap_du = convergence::dual_infeasibility(
+                            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+                            &state.y, &state.z_l, &state.z_u, n,
+                        );
+                        let snap_compl = convergence::complementarity_error(
+                            &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
+                        );
+                        let snap_mult_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
+                            + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
+                            + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
+                        let snap_conv = ConvergenceInfo {
+                            primal_inf: conv_info.primal_inf,
+                            dual_inf: snap_du,
+                            dual_inf_unscaled: snap_du,
+                            compl_inf: snap_compl,
+                            mu: state.mu,
+                            objective: state.obj,
+                            multiplier_sum: snap_mult_sum,
+                            multiplier_count: m + 2 * n,
+                        };
+                        if let ConvergenceStatus::Converged = check_convergence(&snap_conv, options, options.acceptable_iter) {
+                            if options.print_level >= 3 {
+                                eprintln!(
+                                    "ripopt: Complementarity snap promoted Acceptable -> Optimal (compl {:.2e} -> {:.2e}, du {:.2e})",
+                                    compl_inf_now, snap_compl, snap_du
+                                );
+                            }
+                            return make_result(&state, SolveStatus::Optimal);
+                        }
+                        // Snap didn't work — restore multipliers
+                        state.z_l.copy_from_slice(&saved_zl);
+                        state.z_u.copy_from_slice(&saved_zu);
                     }
                 }
 
@@ -3476,7 +3717,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 // Skip for large problems: NLP restoration doubles the problem size,
                 // making it prohibitively expensive for n+m > 10000.
                 let kkt_dim = n + m;
-                if fail_count == 2 && !options.disable_nlp_restoration && kkt_dim <= 50000 {
+                if (fail_count == 2 || fail_count == 4) && !options.disable_nlp_restoration && kkt_dim <= 50000 {
                     state.diagnostics.nlp_restoration_count += 1;
                     let (x_nlp, outcome) = attempt_nlp_restoration(
                         problem, &state, &filter, options, theta_current,
@@ -4808,15 +5049,27 @@ fn attempt_nlp_restoration<P: NlpProblem>(
         );
     }
 
+    // Adaptive rho: just large enough to exceed current multiplier magnitude.
+    // Ipopt (Wächter & Biegler 2006, §3.3) uses rho = max(rho_prev, 2*||y||_inf + rho_small).
+    // Static rho=1000 causes ill-conditioning: dual infeasibility stagnates because
+    // the KKT system must offset the huge penalty gradient. Floor of 100 ensures
+    // slacks are still penalized heavily enough to drive them toward zero.
+    let y_inf = state.y.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+    let rho = (2.0 * y_inf + 1.0).max(100.0).min(1000.0);
+
     // Build restoration NLP
-    let resto_nlp = RestorationNlp::new(problem, &state.x, state.mu, 1000.0, 1.0);
+    let resto_nlp = RestorationNlp::new(problem, &state.x, state.mu, rho, 1.0);
 
     // Configure inner solver options
     let mut inner_opts = options.clone();
-    inner_opts.max_iter = options.restoration_max_iter;
+    inner_opts.max_iter = options.restoration_max_iter.max(500);
     inner_opts.disable_nlp_restoration = true; // prevent recursion
     inner_opts.print_level = if options.print_level >= 5 { 3 } else { 0 };
     inner_opts.mu_init = state.mu.max(1e-2);
+    // Disable stall detection for inner solve: the restoration NLP makes slow
+    // but steady progress toward feasibility, and the 30-iter stall limit kills
+    // it prematurely. max_iter provides a hard cap.
+    inner_opts.stall_iter_limit = 0;
     // Relax convergence tolerances — we just need feasibility, not optimality
     inner_opts.tol = 1e-7;
     inner_opts.acceptable_tol = 1e-3;
@@ -4837,9 +5090,12 @@ fn attempt_nlp_restoration<P: NlpProblem>(
     let phi_new = problem.objective(&x_nlp);
 
     if options.print_level >= 5 {
+        // Log slack residuals to diagnose restoration effectiveness
+        let sum_p: f64 = result.x[n..n + m].iter().sum();
+        let sum_n: f64 = result.x[n + m..n + 2 * m].iter().sum();
         eprintln!(
-            "ripopt: NLP restoration result: status={:?}, theta_new={:.2e} (was {:.2e}), phi_new={:.2e}",
-            result.status, theta_new, theta_current, phi_new
+            "ripopt: NLP restoration result: status={:?}, theta_new={:.2e} (was {:.2e}), phi_new={:.2e}, sum_p={:.2e}, sum_n={:.2e}, iters={}",
+            result.status, theta_new, theta_current, phi_new, sum_p, sum_n, result.iterations
         );
     }
 
@@ -5321,6 +5577,21 @@ fn make_result(state: &SolverState, status: SolveStatus) -> SolveResult {
         &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
     );
 
+    // Compute dual scaling factor s_d (same formula as check_convergence)
+    {
+        let s_max: f64 = 100.0;
+        let s_d_max: f64 = 1e4;
+        let mult_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
+            + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
+            + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
+        let mult_count = m + 2 * n;
+        diag.final_s_d = if mult_count > 0 {
+            ((s_max.max(mult_sum / mult_count as f64)) / s_max).min(s_d_max)
+        } else {
+            1.0
+        };
+    }
+
     // Compute optimal z from stationarity in scaled space: ∇f_s + J_s^T y_s - z_l_s + z_u_s = 0
     let mut grad_jty = state.grad_f.clone();
     for (idx, (&row, &col)) in state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate() {
@@ -5328,15 +5599,25 @@ fn make_result(state: &SolverState, status: SolveStatus) -> SolveResult {
     }
 
     // z from stationarity (scaled), then unscale: z_unscaled = z_scaled / obj_scaling
+    let mut z_l_opt_scaled = vec![0.0; n];
+    let mut z_u_opt_scaled = vec![0.0; n];
     let mut z_l_out = vec![0.0; n];
     let mut z_u_out = vec![0.0; n];
     for i in 0..n {
         if grad_jty[i] > 0.0 && state.x_l[i].is_finite() {
+            z_l_opt_scaled[i] = grad_jty[i];
             z_l_out[i] = grad_jty[i] / state.obj_scaling;
         } else if grad_jty[i] < 0.0 && state.x_u[i].is_finite() {
+            z_u_opt_scaled[i] = -grad_jty[i];
             z_u_out[i] = -grad_jty[i] / state.obj_scaling;
         }
     }
+
+    // z_opt-based dual infeasibility (used in scaled convergence gate)
+    diag.final_dual_inf_scaled = convergence::dual_infeasibility(
+        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+        &state.y, &z_l_opt_scaled, &z_u_opt_scaled, n,
+    );
 
     // Unscale constraint multipliers: y_unscaled[i] = y_scaled[i] * g_scaling[i] / obj_scaling
     let mut y_out = state.y.clone();

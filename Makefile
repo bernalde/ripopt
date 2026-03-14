@@ -1,5 +1,37 @@
 SHELL = /bin/bash
-.PHONY: test test-c install uninstall cutest-prepare cutest-run cutest-report cutest cutest-maxiter cutest-smoke cutest-large
+.PHONY: help test test-c test-iterative install uninstall cutest-prepare cutest-run cutest-full cutest-report cutest cutest-maxiter cutest-smoke cutest-large hs-run large-scale benchmark benchmark-report
+
+# Show available targets
+help:
+	@echo "Usage: make <target> [CUTEST_MAX_N=N]"
+	@echo ""
+	@echo "Build & Install:"
+	@echo "  install          Build and install ripopt binary, shared library, and Pyomo plugin"
+	@echo "  uninstall        Remove ripopt binary, shared library, and Pyomo plugin"
+	@echo ""
+	@echo "Testing:"
+	@echo "  test             Run unit/integration tests (cargo test)"
+	@echo "  test-iterative   Run iterative/hybrid solver tests (release, large-scale)"
+	@echo ""
+	@echo "Benchmarks:"
+	@echo "  benchmark        Full benchmark: HS + CUTEst + large-scale + report"
+	@echo "  benchmark-report Generate unified report from existing results"
+	@echo "  hs-run           Run HS suite benchmark (ripopt + ipopt)"
+	@echo "  large-scale      Run synthetic large-scale tests (up to 100K vars)"
+	@echo "  test-c           Build shared library and run C API examples"
+	@echo ""
+	@echo "CUTEst Benchmarks:"
+	@echo "  cutest           Full pipeline: prepare, run, report"
+	@echo "  cutest-prepare   Compile SIF problems -> .dylib (reads problem_list.txt)"
+	@echo "  cutest-run       Run benchmark on all prepared problems (results.json)"
+	@echo "  cutest-report    Generate comparison report from results.json"
+	@echo "  cutest-full      Full benchmark: all 1542 SIF problems (full_results.json)"
+	@echo "  cutest-smoke     Quick smoke test (~20 small problems, n+m < 50)"
+	@echo "  cutest-large     Large problems (n+m >= 100, sparse solver)"
+	@echo "  cutest-maxiter   Re-run the 35 MaxIterations failures"
+	@echo ""
+	@echo "Environment variables:"
+	@echo "  CUTEST_MAX_N=N   Skip problems with n > N (default: 100)"
 
 # Detect shared library extension
 UNAME_S := $(shell uname -s)
@@ -57,6 +89,10 @@ uninstall:
 test:
 	cargo test
 
+# Run iterative/hybrid linear solver integration tests (includes ignored large-scale tests)
+test-iterative:
+	cargo test --release -- --ignored iterative hybrid
+
 # Build shared library and compile/run all C API examples
 test-c:
 	cargo build --release
@@ -81,9 +117,16 @@ cutest-prepare:
 
 # Run CUTEst benchmark (saves results to cutest_suite/results.json)
 cutest-run:
+	RESULTS_FILE=cutest_suite/results.json \
 	cargo run --bin cutest_suite --features cutest,ipopt-native --release \
-		2> >(tee cutest_suite/benchmark_stderr.txt >&2) \
-		> cutest_suite/results.json
+		2> >(tee cutest_suite/benchmark_stderr.txt >&2)
+
+# Run full CUTEst benchmark (all 1542 SIF problems)
+cutest-full:
+	PROBLEM_LIST=cutest_suite/problem_list_full.txt \
+	RESULTS_FILE=cutest_suite/full_results.json \
+	cargo run --bin cutest_suite --features cutest,ipopt-native --release \
+		2> >(tee cutest_suite/full_stderr.txt >&2)
 
 # Generate comparison report from results
 cutest-report:
@@ -92,6 +135,7 @@ cutest-report:
 # Smoke test: ~20 fast, diverse problems (unconstrained, bounds, equality,
 # inequality, NE-to-LS, mixed). All n+m < 50, finishes in seconds.
 cutest-smoke:
+	RESULTS_FILE=cutest_suite/smoke_results.json \
 	cargo run --bin cutest_suite --features cutest,ipopt-native --release -- \
 		ROSENBR BEALE CUBE DENSCHNB BROWNBS \
 		HS6 HS10 HS35 HS71 HS106 \
@@ -104,6 +148,7 @@ cutest-smoke:
 # Large problems: n+m >= 100, exercises the sparse multifrontal solver.
 # Includes over-constrained (m >> n), large-n, and NE systems.
 cutest-large:
+	RESULTS_FILE=cutest_suite/large_results.json \
 	cargo run --bin cutest_suite --features cutest,ipopt-native --release -- \
 		HIMMELBI AIRPORT LAKES SWOPF QPCBLEND QPNBLEND SPANHYD LINSPANH \
 		ACOPP14 ACOPR14 ACOPP30 ACOPR30 BATCH CORE1 MSS1 HAIFAM FEEDLOC \
@@ -118,14 +163,39 @@ cutest-large:
 
 # Run only the 35 MaxIterations failures for fast iteration
 cutest-maxiter:
+	RESULTS_FILE=cutest_suite/maxiter_results.json \
 	cargo run --bin cutest_suite --features cutest,ipopt-native --release -- \
 		AIRCRFTB ALLINIT BENNETT5LS BIGGS3 BIGGS5 BOX2 BQPGABIM CHWIRUT2LS \
 		DJTL HAHN1LS MEYER3 MGH10LS MINSURF OSBORNEA RAT43LS SIM2BQP THURBERLS \
 		AIRCRFTA CONCON DECONVC DECONVNE DECONVU DNIEPER HS109 HS67 HS83 HS84 \
 		HS85 HS99EXP MCONCON OPTCNTRL QC QCNEW SSINE TRIGGER \
-		2> >(tee cutest_suite/maxiter_stderr.txt >&2) \
-		> cutest_suite/maxiter_results.json
+		2> >(tee cutest_suite/maxiter_stderr.txt >&2)
 
 # Full CUTEst pipeline: prepare, run, report
 cutest: cutest-prepare cutest-run cutest-report
 	@echo "CUTEst benchmark complete. Report: cutest_suite/CUTEST_REPORT.md"
+
+# Run HS suite benchmark (ripopt + ipopt native)
+hs-run:
+	cargo run --bin hs_suite --features hs,ipopt-native --release \
+		> hs_suite/hs_ripopt_results.json \
+		2> >(tee hs_suite/hs_ripopt_stderr.txt >&2)
+	cargo run --bin ipopt_native --features ipopt-native --release \
+		> hs_suite/hs_ipopt_native_results.json \
+		2> >(tee hs_suite/hs_ipopt_native_stderr.txt >&2)
+	@echo "HS benchmark complete."
+
+# Run synthetic large-scale tests (5K to 100K variables)
+large-scale:
+	cargo test --release -- --ignored large_scale --nocapture \
+		2>&1 | tee large_scale_results.txt
+	@echo "Large-scale tests complete. Output: large_scale_results.txt"
+
+# Full benchmark: HS + CUTEst + large-scale + unified report
+benchmark: hs-run cutest-run large-scale benchmark-report
+	@echo "Full benchmark complete. Report: BENCHMARK_REPORT.md"
+
+# Generate unified benchmark report from existing results
+benchmark-report:
+	python benchmark_report.py
+	@echo "Report: BENCHMARK_REPORT.md"

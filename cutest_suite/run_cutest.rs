@@ -30,6 +30,14 @@ struct CutestResult {
     constraint_violation: f64,
     iterations: usize,
     solve_time: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    final_primal_inf: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    final_dual_inf: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    final_compl: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    final_mu: Option<f64>,
 }
 
 // ---- Ipopt C API FFI (copied from hs_suite/run_ipopt_native.rs) ----
@@ -462,6 +470,10 @@ fn run_single_solver(name: &str, solver: &str) {
                 constraint_violation: if cv.is_finite() { cv } else { 0.0 },
                 iterations: result.iterations,
                 solve_time: best_time,
+                final_primal_inf: Some(result.diagnostics.final_primal_inf),
+                final_dual_inf: Some(result.diagnostics.final_dual_inf),
+                final_compl: Some(result.diagnostics.final_compl),
+                final_mu: Some(result.diagnostics.final_mu),
             };
             println!("{}", serde_json::to_string(&r).unwrap());
             eprintln!(
@@ -494,6 +506,10 @@ fn run_single_solver(name: &str, solver: &str) {
                 constraint_violation: result.constraint_violation,
                 iterations: result.iterations as usize,
                 solve_time: best_time,
+                final_primal_inf: None,
+                final_dual_inf: None,
+                final_compl: None,
+                final_mu: None,
             };
             println!("{}", serde_json::to_string(&r).unwrap());
             eprintln!(
@@ -628,6 +644,8 @@ fn main() {
                             objective: f64::NAN, x: vec![],
                             constraint_violation: f64::NAN, iterations: 0,
                             solve_time: timeout_secs as f64,
+                            final_primal_inf: None, final_dual_inf: None,
+                            final_compl: None, final_mu: None,
                         });
                         continue;
                     }

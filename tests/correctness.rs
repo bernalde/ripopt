@@ -1406,8 +1406,77 @@ fn ne_to_ls_nonlinear() {
     let problem = OverdeterminedNonlinear;
     let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
     let result = ripopt::solve(&problem, &options);
-    assert!(result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
-        "Consistent nonlinear NE should solve, got {:?}", result.status);
-    assert!((result.x[0] - 1.0).abs() < 1e-2, "x0={}", result.x[0]);
-    assert!((result.x[1] - 2.0).abs() < 1e-2, "x1={}", result.x[1]);
+    assert_eq!(result.status, SolveStatus::Optimal,
+        "Consistent nonlinear NE should get Optimal (with Newton polish), got {:?}", result.status);
+    assert!((result.x[0] - 1.0).abs() < 1e-4, "x0={}", result.x[0]);
+    assert!((result.x[1] - 2.0).abs() < 1e-4, "x1={}", result.x[1]);
+}
+
+// ---------------------------------------------------------------------------
+// 22. NE Newton polish: overdetermined system where LS gets close but
+//     Newton polish is needed to reach strict tolerance.
+//     g1(x) = exp(x1) + x2 - 2       = 0  (target: exp(1)+1=3.718..)
+//     g2(x) = x1^3 + x2 - 2          = 0  (target: 1+1=2)
+//     g3(x) = x1 + x2^2 - 5          = 0  (target: 1+4=5)
+//     g4(x) = sin(x1)*x2 - sin(1)*2  = 0
+//     g5(x) = x1^2 + x2^2 - 5        = 0  (target: 1+4=5)
+//     Solution: x = (1, 2), 5 equations, 2 unknowns
+// ---------------------------------------------------------------------------
+struct HarderOverdeterminedNE;
+
+impl NlpProblem for HarderOverdeterminedNE {
+    fn num_variables(&self) -> usize { 2 }
+    fn num_constraints(&self) -> usize { 5 }
+    fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+        x_l[0] = f64::NEG_INFINITY; x_u[0] = f64::INFINITY;
+        x_l[1] = f64::NEG_INFINITY; x_u[1] = f64::INFINITY;
+    }
+    fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+        // g(1,2) values:
+        let t0 = 1.0_f64.exp() + 2.0;   // exp(1) + 2 = 4.71828...
+        let t1 = 1.0 + 2.0;              // 1^3 + 2 = 3
+        let t2 = 1.0 + 4.0;              // 1 + 2^2 = 5
+        let t3 = 1.0_f64.sin() * 2.0;    // sin(1)*2 = 1.6829...
+        let t4 = 1.0 + 4.0;              // 1^2 + 2^2 = 5
+        g_l[0] = t0; g_u[0] = t0;
+        g_l[1] = t1; g_u[1] = t1;
+        g_l[2] = t2; g_u[2] = t2;
+        g_l[3] = t3; g_u[3] = t3;
+        g_l[4] = t4; g_u[4] = t4;
+    }
+    fn initial_point(&self, x0: &mut [f64]) { x0[0] = 0.8; x0[1] = 2.3; }
+    fn objective(&self, _x: &[f64]) -> f64 { 0.0 }
+    fn gradient(&self, _x: &[f64], grad: &mut [f64]) { grad[0] = 0.0; grad[1] = 0.0; }
+    fn constraints(&self, x: &[f64], g: &mut [f64]) {
+        g[0] = x[0].exp() + x[1];
+        g[1] = x[0].powi(3) + x[1];
+        g[2] = x[0] + x[1].powi(2);
+        g[3] = x[0].sin() * x[1];
+        g[4] = x[0].powi(2) + x[1].powi(2);
+    }
+    fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+        // 5 rows, 2 cols, each row has 2 entries
+        (vec![0,0, 1,1, 2,2, 3,3, 4,4],
+         vec![0,1, 0,1, 0,1, 0,1, 0,1])
+    }
+    fn jacobian_values(&self, x: &[f64], vals: &mut [f64]) {
+        vals[0] = x[0].exp();    vals[1] = 1.0;           // dg0
+        vals[2] = 3.0*x[0]*x[0]; vals[3] = 1.0;           // dg1
+        vals[4] = 1.0;           vals[5] = 2.0*x[1];      // dg2
+        vals[6] = x[0].cos()*x[1]; vals[7] = x[0].sin();  // dg3
+        vals[8] = 2.0*x[0];     vals[9] = 2.0*x[1];      // dg4
+    }
+    fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) { (vec![], vec![]) }
+    fn hessian_values(&self, _x: &[f64], _obj_factor: f64, _lambda: &[f64], _vals: &mut [f64]) {}
+}
+
+#[test]
+fn ne_newton_polish_promotes_optimal() {
+    let problem = HarderOverdeterminedNE;
+    let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
+    let result = ripopt::solve(&problem, &options);
+    assert_eq!(result.status, SolveStatus::Optimal,
+        "Overdetermined NE with Newton polish should get Optimal, got {:?} (x={:?})", result.status, result.x);
+    assert!((result.x[0] - 1.0).abs() < 1e-4, "x0={}", result.x[0]);
+    assert!((result.x[1] - 2.0).abs() < 1e-4, "x1={}", result.x[1]);
 }

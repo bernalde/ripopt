@@ -11,7 +11,7 @@ fn main() {
     let n_timing_runs: usize = std::env::var("RIPOPT_TIMING_RUNS")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(5);
+        .unwrap_or(1);
 
     let force_sparse = std::env::var("RIPOPT_FORCE_SPARSE").is_ok();
     let options = SolverOptions {

@@ -475,7 +475,7 @@ fn main() {
     let n_timing_runs: usize = std::env::var("RIPOPT_TIMING_RUNS")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(5);
+        .unwrap_or(1);
 
     eprintln!("Solving all HS problems with native Ipopt ({} timing runs)...", n_timing_runs);
 

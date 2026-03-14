@@ -47,10 +47,14 @@ pub struct SolverDiagnostics {
     pub final_mu: f64,
     /// Final primal infeasibility.
     pub final_primal_inf: f64,
-    /// Final dual infeasibility.
+    /// Final dual infeasibility (iterative z, used in unscaled gate).
     pub final_dual_inf: f64,
+    /// Final dual infeasibility (z_opt, used in scaled gate).
+    pub final_dual_inf_scaled: f64,
     /// Final complementarity error.
     pub final_compl: f64,
+    /// Dual scaling factor s_d.
+    pub final_s_d: f64,
     /// Total wall-clock time in seconds.
     pub wall_time_secs: f64,
     /// Fallback strategy used, if any.

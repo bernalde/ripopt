@@ -5653,19 +5653,19 @@ impl NlpProblem for HsTp116 {
         x_l[5] = 0.1;
         x_u[5] = 0.9;
         x_l[6] = 0.1;
-        x_u[6] = 1000.0;
+        x_u[6] = 0.0;
         x_l[7] = 0.1;
-        x_u[7] = 1000.0;
+        x_u[7] = 0.0;
         x_l[8] = 500.0;
-        x_u[8] = 1000.0;
+        x_u[8] = 0.0;
         x_l[9] = 0.1;
         x_u[9] = 500.0;
         x_l[10] = 1.0;
-        x_u[10] = 150.0;
+        x_u[10] = 0.0;
         x_l[11] = 0.0001;
-        x_u[11] = 150.0;
+        x_u[11] = 0.0;
         x_l[12] = 0.0001;
-        x_u[12] = 150.0;
+        x_u[12] = 0.0;
     }
 
     fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
@@ -9011,29 +9011,6 @@ impl NlpProblem for HsTp354 {
 
 pub struct HsTp374;
 
-// Helper functions for TP374 trigonometric constraints (from Fortran TP374A, TP374B, TP374G)
-fn tp374_a(z: f64, x: &[f64]) -> f64 {
-    let mut val = 0.0;
-    for k in 1..=9 {
-        val += x[k - 1] * (k as f64 * z).cos();
-    }
-    val
-}
-
-fn tp374_b(z: f64, x: &[f64]) -> f64 {
-    let mut val = 0.0;
-    for k in 1..=9 {
-        val += x[k - 1] * (k as f64 * z).sin();
-    }
-    val
-}
-
-fn tp374_gfn(z: f64, x: &[f64]) -> f64 {
-    let a = tp374_a(z, x);
-    let b = tp374_b(z, x);
-    a * a + b * b
-}
-
 impl NlpProblem for HsTp374 {
     fn num_variables(&self) -> usize {
         10
@@ -9044,178 +9021,158 @@ impl NlpProblem for HsTp374 {
     }
 
     fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
-        for i in 0..10 {
-            x_l[i] = f64::NEG_INFINITY;
-            x_u[i] = f64::INFINITY;
-        }
+        x_l[0] = f64::NEG_INFINITY;
+        x_u[0] = f64::INFINITY;
+        x_l[1] = f64::NEG_INFINITY;
+        x_u[1] = f64::INFINITY;
+        x_l[2] = f64::NEG_INFINITY;
+        x_u[2] = f64::INFINITY;
+        x_l[3] = f64::NEG_INFINITY;
+        x_u[3] = f64::INFINITY;
+        x_l[4] = f64::NEG_INFINITY;
+        x_u[4] = f64::INFINITY;
+        x_l[5] = f64::NEG_INFINITY;
+        x_u[5] = f64::INFINITY;
+        x_l[6] = f64::NEG_INFINITY;
+        x_u[6] = f64::INFINITY;
+        x_l[7] = f64::NEG_INFINITY;
+        x_u[7] = f64::INFINITY;
+        x_l[8] = f64::NEG_INFINITY;
+        x_u[8] = f64::INFINITY;
+        x_l[9] = f64::NEG_INFINITY;
+        x_u[9] = f64::INFINITY;
     }
 
     fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
-        for i in 0..35 {
-            g_l[i] = 0.0;
-            g_u[i] = f64::INFINITY;
-        }
+        g_l[0] = 0.0;
+        g_u[0] = f64::INFINITY;
+        g_l[1] = 0.0;
+        g_u[1] = f64::INFINITY;
+        g_l[2] = 0.0;
+        g_u[2] = f64::INFINITY;
+        g_l[3] = 0.0;
+        g_u[3] = f64::INFINITY;
+        g_l[4] = 0.0;
+        g_u[4] = f64::INFINITY;
+        g_l[5] = 0.0;
+        g_u[5] = f64::INFINITY;
+        g_l[6] = 0.0;
+        g_u[6] = f64::INFINITY;
+        g_l[7] = 0.0;
+        g_u[7] = f64::INFINITY;
+        g_l[8] = 0.0;
+        g_u[8] = f64::INFINITY;
+        g_l[9] = 0.0;
+        g_u[9] = f64::INFINITY;
+        g_l[10] = 0.0;
+        g_u[10] = f64::INFINITY;
+        g_l[11] = 0.0;
+        g_u[11] = f64::INFINITY;
+        g_l[12] = 0.0;
+        g_u[12] = f64::INFINITY;
+        g_l[13] = 0.0;
+        g_u[13] = f64::INFINITY;
+        g_l[14] = 0.0;
+        g_u[14] = f64::INFINITY;
+        g_l[15] = 0.0;
+        g_u[15] = f64::INFINITY;
+        g_l[16] = 0.0;
+        g_u[16] = f64::INFINITY;
+        g_l[17] = 0.0;
+        g_u[17] = f64::INFINITY;
+        g_l[18] = 0.0;
+        g_u[18] = f64::INFINITY;
+        g_l[19] = 0.0;
+        g_u[19] = f64::INFINITY;
+        g_l[20] = 0.0;
+        g_u[20] = f64::INFINITY;
+        g_l[21] = 0.0;
+        g_u[21] = f64::INFINITY;
+        g_l[22] = 0.0;
+        g_u[22] = f64::INFINITY;
+        g_l[23] = 0.0;
+        g_u[23] = f64::INFINITY;
+        g_l[24] = 0.0;
+        g_u[24] = f64::INFINITY;
+        g_l[25] = 0.0;
+        g_u[25] = f64::INFINITY;
+        g_l[26] = 0.0;
+        g_u[26] = f64::INFINITY;
+        g_l[27] = 0.0;
+        g_u[27] = f64::INFINITY;
+        g_l[28] = 0.0;
+        g_u[28] = f64::INFINITY;
+        g_l[29] = 0.0;
+        g_u[29] = f64::INFINITY;
+        g_l[30] = 0.0;
+        g_u[30] = f64::INFINITY;
+        g_l[31] = 0.0;
+        g_u[31] = f64::INFINITY;
+        g_l[32] = 0.0;
+        g_u[32] = f64::INFINITY;
+        g_l[33] = 0.0;
+        g_u[33] = f64::INFINITY;
+        g_l[34] = 0.0;
+        g_u[34] = f64::INFINITY;
     }
 
     fn initial_point(&self, x0: &mut [f64]) {
-        for i in 0..10 {
-            x0[i] = 0.1;
-        }
+        x0[0] = 0.1;
+        x0[1] = 0.1;
+        x0[2] = 0.1;
+        x0[3] = 0.1;
+        x0[4] = 0.1;
+        x0[5] = 0.1;
+        x0[6] = 0.1;
+        x0[7] = 0.1;
+        x0[8] = 0.1;
+        x0[9] = 0.1;
     }
 
     fn objective(&self, x: &[f64]) -> f64 {
         x[9]
     }
 
-    fn gradient(&self, _x: &[f64], grad: &mut [f64]) {
-        for i in 0..9 { grad[i] = 0.0; }
+    fn gradient(&self, x: &[f64], grad: &mut [f64]) {
+        grad[0] = 0.0;
+        grad[1] = 0.0;
+        grad[2] = 0.0;
+        grad[3] = 0.0;
+        grad[4] = 0.0;
+        grad[5] = 0.0;
+        grad[6] = 0.0;
+        grad[7] = 0.0;
+        grad[8] = 0.0;
         grad[9] = 1.0;
     }
 
     fn constraints(&self, x: &[f64], g: &mut [f64]) {
-        use std::f64::consts::PI;
-        // Constraints 0..9: G(z_i, x) - (1 - x[9])^2 >= 0
-        for i in 0..10 {
-            let z = PI / 4.0 * (i as f64 * 0.1);
-            g[i] = tp374_gfn(z, x) - (1.0 - x[9]).powi(2);
-        }
-        // Constraints 10..19: (1 + x[9])^2 - G(z_i, x) >= 0
-        for i in 10..20 {
-            let z = PI / 4.0 * ((i - 10) as f64 * 0.1);
-            g[i] = (1.0 + x[9]).powi(2) - tp374_gfn(z, x);
-        }
-        // Constraints 20..34: x[9]^2 - G(z_i, x) >= 0
-        for i in 20..35 {
-            let z = PI / 4.0 * (1.2 + (i - 20) as f64 * 0.2);
-            g[i] = x[9].powi(2) - tp374_gfn(z, x);
-        }
+        let _ = (x, g);
     }
 
     fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
-        // Each of the 35 constraints depends on all 10 variables (dense)
-        let mut rows = Vec::with_capacity(350);
-        let mut cols = Vec::with_capacity(350);
-        for i in 0..35 {
-            for j in 0..10 {
-                rows.push(i);
-                cols.push(j);
-            }
-        }
-        (rows, cols)
+        (vec![], vec![])
     }
 
     fn jacobian_values(&self, x: &[f64], vals: &mut [f64]) {
-        use std::f64::consts::PI;
-        let mut idx = 0;
-
-        // Constraints 0..9: g_i = G(z, x) - (1 - x[9])^2
-        for i in 0..10 {
-            let z = PI / 4.0 * (i as f64 * 0.1);
-            let a = tp374_a(z, x);
-            let b = tp374_b(z, x);
-            for k in 1..=9 {
-                vals[idx] = 2.0 * (a * (k as f64 * z).cos() + b * (k as f64 * z).sin());
-                idx += 1;
-            }
-            vals[idx] = 2.0 * (1.0 - x[9]);
-            idx += 1;
-        }
-
-        // Constraints 10..19: g_i = (1 + x[9])^2 - G(z, x)
-        for i in 10..20 {
-            let z = PI / 4.0 * ((i - 10) as f64 * 0.1);
-            let a = tp374_a(z, x);
-            let b = tp374_b(z, x);
-            for k in 1..=9 {
-                vals[idx] = -2.0 * (a * (k as f64 * z).cos() + b * (k as f64 * z).sin());
-                idx += 1;
-            }
-            vals[idx] = 2.0 * (1.0 + x[9]);
-            idx += 1;
-        }
-
-        // Constraints 20..34: g_i = x[9]^2 - G(z, x)
-        for i in 20..35 {
-            let z = PI / 4.0 * (1.2 + (i - 20) as f64 * 0.2);
-            let a = tp374_a(z, x);
-            let b = tp374_b(z, x);
-            for k in 1..=9 {
-                vals[idx] = -2.0 * (a * (k as f64 * z).cos() + b * (k as f64 * z).sin());
-                idx += 1;
-            }
-            vals[idx] = 2.0 * x[9];
-            idx += 1;
-        }
+        let _ = (x, vals);
     }
 
     fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
-        // 10x10 lower triangle
-        let mut rows = Vec::new();
-        let mut cols = Vec::new();
-        for i in 0..10 {
-            for j in 0..=i {
-                rows.push(i);
-                cols.push(j);
-            }
-        }
-        (rows, cols)
+        (vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9], vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
     }
 
-    fn hessian_values(&self, _x: &[f64], _obj_factor: f64, lambda: &[f64], vals: &mut [f64]) {
-        use std::f64::consts::PI;
-        // Objective Hessian is zero (f = x[9] is linear).
-        for v in vals.iter_mut() { *v = 0.0; }
-
-        // Lower-triangle index: (i,j) -> i*(i+1)/2 + j
-        let lt = |i: usize, j: usize| -> usize { i * (i + 1) / 2 + j };
-
-        // Group 1 (constraints 0..9): g = A^2 + B^2 - (1-x9)^2
-        //   d2g/dx[j-1]dx[k-1] = 2*cos((j-k)*z) for j,k in 1..9
-        //   d2g/dx9^2 = 2
-        for ci in 0..10 {
-            let lam = lambda[ci];
-            if lam == 0.0 { continue; }
-            let z = PI / 4.0 * (ci as f64 * 0.1);
-            for j in 1..=9usize {
-                for k in 1..=j {
-                    let h = 2.0 * ((j as f64 - k as f64) * z).cos();
-                    vals[lt(j - 1, k - 1)] += lam * h;
-                }
-            }
-            vals[lt(9, 9)] += lam * 2.0;
-        }
-
-        // Group 2 (constraints 10..19): g = (1+x9)^2 - A^2 - B^2
-        //   d2g/dx[j-1]dx[k-1] = -2*cos((j-k)*z)
-        //   d2g/dx9^2 = 2
-        for ci in 10..20 {
-            let lam = lambda[ci];
-            if lam == 0.0 { continue; }
-            let z = PI / 4.0 * ((ci - 10) as f64 * 0.1);
-            for j in 1..=9usize {
-                for k in 1..=j {
-                    let h = -2.0 * ((j as f64 - k as f64) * z).cos();
-                    vals[lt(j - 1, k - 1)] += lam * h;
-                }
-            }
-            vals[lt(9, 9)] += lam * 2.0;
-        }
-
-        // Group 3 (constraints 20..34): g = x9^2 - A^2 - B^2
-        //   d2g/dx[j-1]dx[k-1] = -2*cos((j-k)*z)
-        //   d2g/dx9^2 = 2
-        for ci in 20..35 {
-            let lam = lambda[ci];
-            if lam == 0.0 { continue; }
-            let z = PI / 4.0 * (1.2 + (ci - 20) as f64 * 0.2);
-            for j in 1..=9usize {
-                for k in 1..=j {
-                    let h = -2.0 * ((j as f64 - k as f64) * z).cos();
-                    vals[lt(j - 1, k - 1)] += lam * h;
-                }
-            }
-            vals[lt(9, 9)] += lam * 2.0;
-        }
+    fn hessian_values(&self, x: &[f64], obj_factor: f64, lambda: &[f64], vals: &mut [f64]) {
+        vals[0] = 0.0;
+        vals[1] = 0.0;
+        vals[2] = 0.0;
+        vals[3] = 0.0;
+        vals[4] = 0.0;
+        vals[5] = 0.0;
+        vals[6] = 0.0;
+        vals[7] = 0.0;
+        vals[8] = 0.0;
+        vals[9] = 0.0;
     }
 }
 
@@ -9424,7 +9381,6 @@ impl NlpProblem for HsTp376 {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct HsProblemEntry {
     pub number: usize,
     pub name: &'static str,
@@ -9585,6 +9541,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[0].known_fopt,
             n: HS_PROBLEMS[0].n,
             m: HS_PROBLEMS[0].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -9608,6 +9570,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[1].known_fopt,
             n: HS_PROBLEMS[1].n,
             m: HS_PROBLEMS[1].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -9631,6 +9599,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[2].known_fopt,
             n: HS_PROBLEMS[2].n,
             m: HS_PROBLEMS[2].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -9654,6 +9628,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[3].known_fopt,
             n: HS_PROBLEMS[3].n,
             m: HS_PROBLEMS[3].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -9677,6 +9657,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[4].known_fopt,
             n: HS_PROBLEMS[4].n,
             m: HS_PROBLEMS[4].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -9700,6 +9686,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[5].known_fopt,
             n: HS_PROBLEMS[5].n,
             m: HS_PROBLEMS[5].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -9723,6 +9715,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[6].known_fopt,
             n: HS_PROBLEMS[6].n,
             m: HS_PROBLEMS[6].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -9746,6 +9744,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[7].known_fopt,
             n: HS_PROBLEMS[7].n,
             m: HS_PROBLEMS[7].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -9769,6 +9773,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[8].known_fopt,
             n: HS_PROBLEMS[8].n,
             m: HS_PROBLEMS[8].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -9792,6 +9802,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[9].known_fopt,
             n: HS_PROBLEMS[9].n,
             m: HS_PROBLEMS[9].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -9815,6 +9831,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[10].known_fopt,
             n: HS_PROBLEMS[10].n,
             m: HS_PROBLEMS[10].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -9838,6 +9860,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[11].known_fopt,
             n: HS_PROBLEMS[11].n,
             m: HS_PROBLEMS[11].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -9861,6 +9889,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[12].known_fopt,
             n: HS_PROBLEMS[12].n,
             m: HS_PROBLEMS[12].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -9884,6 +9918,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[13].known_fopt,
             n: HS_PROBLEMS[13].n,
             m: HS_PROBLEMS[13].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -9907,6 +9947,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[14].known_fopt,
             n: HS_PROBLEMS[14].n,
             m: HS_PROBLEMS[14].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -9930,6 +9976,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[15].known_fopt,
             n: HS_PROBLEMS[15].n,
             m: HS_PROBLEMS[15].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -9953,6 +10005,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[16].known_fopt,
             n: HS_PROBLEMS[16].n,
             m: HS_PROBLEMS[16].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -9976,6 +10034,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[17].known_fopt,
             n: HS_PROBLEMS[17].n,
             m: HS_PROBLEMS[17].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -9999,6 +10063,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[18].known_fopt,
             n: HS_PROBLEMS[18].n,
             m: HS_PROBLEMS[18].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10022,6 +10092,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[19].known_fopt,
             n: HS_PROBLEMS[19].n,
             m: HS_PROBLEMS[19].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10045,6 +10121,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[20].known_fopt,
             n: HS_PROBLEMS[20].n,
             m: HS_PROBLEMS[20].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10068,6 +10150,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[21].known_fopt,
             n: HS_PROBLEMS[21].n,
             m: HS_PROBLEMS[21].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10091,6 +10179,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[22].known_fopt,
             n: HS_PROBLEMS[22].n,
             m: HS_PROBLEMS[22].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10114,6 +10208,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[23].known_fopt,
             n: HS_PROBLEMS[23].n,
             m: HS_PROBLEMS[23].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10137,6 +10237,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[24].known_fopt,
             n: HS_PROBLEMS[24].n,
             m: HS_PROBLEMS[24].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10160,6 +10266,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[25].known_fopt,
             n: HS_PROBLEMS[25].n,
             m: HS_PROBLEMS[25].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10183,6 +10295,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[26].known_fopt,
             n: HS_PROBLEMS[26].n,
             m: HS_PROBLEMS[26].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10206,6 +10324,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[27].known_fopt,
             n: HS_PROBLEMS[27].n,
             m: HS_PROBLEMS[27].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10229,6 +10353,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[28].known_fopt,
             n: HS_PROBLEMS[28].n,
             m: HS_PROBLEMS[28].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10252,6 +10382,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[29].known_fopt,
             n: HS_PROBLEMS[29].n,
             m: HS_PROBLEMS[29].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10275,6 +10411,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[30].known_fopt,
             n: HS_PROBLEMS[30].n,
             m: HS_PROBLEMS[30].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10298,6 +10440,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[31].known_fopt,
             n: HS_PROBLEMS[31].n,
             m: HS_PROBLEMS[31].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10321,6 +10469,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[32].known_fopt,
             n: HS_PROBLEMS[32].n,
             m: HS_PROBLEMS[32].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10344,6 +10498,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[33].known_fopt,
             n: HS_PROBLEMS[33].n,
             m: HS_PROBLEMS[33].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10367,6 +10527,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[34].known_fopt,
             n: HS_PROBLEMS[34].n,
             m: HS_PROBLEMS[34].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10390,6 +10556,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[35].known_fopt,
             n: HS_PROBLEMS[35].n,
             m: HS_PROBLEMS[35].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10413,6 +10585,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[36].known_fopt,
             n: HS_PROBLEMS[36].n,
             m: HS_PROBLEMS[36].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10436,6 +10614,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[37].known_fopt,
             n: HS_PROBLEMS[37].n,
             m: HS_PROBLEMS[37].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10459,6 +10643,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[38].known_fopt,
             n: HS_PROBLEMS[38].n,
             m: HS_PROBLEMS[38].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10482,6 +10672,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[39].known_fopt,
             n: HS_PROBLEMS[39].n,
             m: HS_PROBLEMS[39].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10505,6 +10701,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[40].known_fopt,
             n: HS_PROBLEMS[40].n,
             m: HS_PROBLEMS[40].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10528,6 +10730,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[41].known_fopt,
             n: HS_PROBLEMS[41].n,
             m: HS_PROBLEMS[41].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10551,6 +10759,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[42].known_fopt,
             n: HS_PROBLEMS[42].n,
             m: HS_PROBLEMS[42].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10574,6 +10788,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[43].known_fopt,
             n: HS_PROBLEMS[43].n,
             m: HS_PROBLEMS[43].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10597,6 +10817,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[44].known_fopt,
             n: HS_PROBLEMS[44].n,
             m: HS_PROBLEMS[44].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10620,6 +10846,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[45].known_fopt,
             n: HS_PROBLEMS[45].n,
             m: HS_PROBLEMS[45].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10643,6 +10875,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[46].known_fopt,
             n: HS_PROBLEMS[46].n,
             m: HS_PROBLEMS[46].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10666,6 +10904,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[47].known_fopt,
             n: HS_PROBLEMS[47].n,
             m: HS_PROBLEMS[47].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10689,6 +10933,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[48].known_fopt,
             n: HS_PROBLEMS[48].n,
             m: HS_PROBLEMS[48].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10712,6 +10962,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[49].known_fopt,
             n: HS_PROBLEMS[49].n,
             m: HS_PROBLEMS[49].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10735,6 +10991,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[50].known_fopt,
             n: HS_PROBLEMS[50].n,
             m: HS_PROBLEMS[50].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10758,6 +11020,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[51].known_fopt,
             n: HS_PROBLEMS[51].n,
             m: HS_PROBLEMS[51].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10781,6 +11049,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[52].known_fopt,
             n: HS_PROBLEMS[52].n,
             m: HS_PROBLEMS[52].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10804,6 +11078,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[53].known_fopt,
             n: HS_PROBLEMS[53].n,
             m: HS_PROBLEMS[53].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10827,6 +11107,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[54].known_fopt,
             n: HS_PROBLEMS[54].n,
             m: HS_PROBLEMS[54].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10850,6 +11136,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[55].known_fopt,
             n: HS_PROBLEMS[55].n,
             m: HS_PROBLEMS[55].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10873,6 +11165,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[56].known_fopt,
             n: HS_PROBLEMS[56].n,
             m: HS_PROBLEMS[56].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10896,6 +11194,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[57].known_fopt,
             n: HS_PROBLEMS[57].n,
             m: HS_PROBLEMS[57].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10919,6 +11223,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[58].known_fopt,
             n: HS_PROBLEMS[58].n,
             m: HS_PROBLEMS[58].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10942,6 +11252,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[59].known_fopt,
             n: HS_PROBLEMS[59].n,
             m: HS_PROBLEMS[59].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10965,6 +11281,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[60].known_fopt,
             n: HS_PROBLEMS[60].n,
             m: HS_PROBLEMS[60].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -10988,6 +11310,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[61].known_fopt,
             n: HS_PROBLEMS[61].n,
             m: HS_PROBLEMS[61].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11011,6 +11339,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[62].known_fopt,
             n: HS_PROBLEMS[62].n,
             m: HS_PROBLEMS[62].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11034,6 +11368,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[63].known_fopt,
             n: HS_PROBLEMS[63].n,
             m: HS_PROBLEMS[63].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11057,6 +11397,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[64].known_fopt,
             n: HS_PROBLEMS[64].n,
             m: HS_PROBLEMS[64].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11080,6 +11426,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[65].known_fopt,
             n: HS_PROBLEMS[65].n,
             m: HS_PROBLEMS[65].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11103,6 +11455,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[66].known_fopt,
             n: HS_PROBLEMS[66].n,
             m: HS_PROBLEMS[66].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11126,6 +11484,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[67].known_fopt,
             n: HS_PROBLEMS[67].n,
             m: HS_PROBLEMS[67].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11149,6 +11513,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[68].known_fopt,
             n: HS_PROBLEMS[68].n,
             m: HS_PROBLEMS[68].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11172,6 +11542,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[69].known_fopt,
             n: HS_PROBLEMS[69].n,
             m: HS_PROBLEMS[69].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11195,6 +11571,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[70].known_fopt,
             n: HS_PROBLEMS[70].n,
             m: HS_PROBLEMS[70].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11218,6 +11600,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[71].known_fopt,
             n: HS_PROBLEMS[71].n,
             m: HS_PROBLEMS[71].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11241,6 +11629,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[72].known_fopt,
             n: HS_PROBLEMS[72].n,
             m: HS_PROBLEMS[72].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11264,6 +11658,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[73].known_fopt,
             n: HS_PROBLEMS[73].n,
             m: HS_PROBLEMS[73].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11287,6 +11687,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[74].known_fopt,
             n: HS_PROBLEMS[74].n,
             m: HS_PROBLEMS[74].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11310,6 +11716,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[75].known_fopt,
             n: HS_PROBLEMS[75].n,
             m: HS_PROBLEMS[75].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11333,6 +11745,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[76].known_fopt,
             n: HS_PROBLEMS[76].n,
             m: HS_PROBLEMS[76].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11356,6 +11774,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[77].known_fopt,
             n: HS_PROBLEMS[77].n,
             m: HS_PROBLEMS[77].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11379,6 +11803,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[78].known_fopt,
             n: HS_PROBLEMS[78].n,
             m: HS_PROBLEMS[78].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11402,6 +11832,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[79].known_fopt,
             n: HS_PROBLEMS[79].n,
             m: HS_PROBLEMS[79].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11425,6 +11861,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[80].known_fopt,
             n: HS_PROBLEMS[80].n,
             m: HS_PROBLEMS[80].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11448,6 +11890,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[81].known_fopt,
             n: HS_PROBLEMS[81].n,
             m: HS_PROBLEMS[81].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11471,6 +11919,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[82].known_fopt,
             n: HS_PROBLEMS[82].n,
             m: HS_PROBLEMS[82].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11494,6 +11948,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[83].known_fopt,
             n: HS_PROBLEMS[83].n,
             m: HS_PROBLEMS[83].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11517,6 +11977,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[84].known_fopt,
             n: HS_PROBLEMS[84].n,
             m: HS_PROBLEMS[84].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11540,6 +12006,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[85].known_fopt,
             n: HS_PROBLEMS[85].n,
             m: HS_PROBLEMS[85].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11563,6 +12035,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[86].known_fopt,
             n: HS_PROBLEMS[86].n,
             m: HS_PROBLEMS[86].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11586,6 +12064,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[87].known_fopt,
             n: HS_PROBLEMS[87].n,
             m: HS_PROBLEMS[87].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11609,6 +12093,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[88].known_fopt,
             n: HS_PROBLEMS[88].n,
             m: HS_PROBLEMS[88].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11632,6 +12122,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[89].known_fopt,
             n: HS_PROBLEMS[89].n,
             m: HS_PROBLEMS[89].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11655,6 +12151,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[90].known_fopt,
             n: HS_PROBLEMS[90].n,
             m: HS_PROBLEMS[90].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11678,6 +12180,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[91].known_fopt,
             n: HS_PROBLEMS[91].n,
             m: HS_PROBLEMS[91].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11701,6 +12209,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[92].known_fopt,
             n: HS_PROBLEMS[92].n,
             m: HS_PROBLEMS[92].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11724,6 +12238,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[93].known_fopt,
             n: HS_PROBLEMS[93].n,
             m: HS_PROBLEMS[93].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11747,6 +12267,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[94].known_fopt,
             n: HS_PROBLEMS[94].n,
             m: HS_PROBLEMS[94].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11770,6 +12296,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[95].known_fopt,
             n: HS_PROBLEMS[95].n,
             m: HS_PROBLEMS[95].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11793,6 +12325,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[96].known_fopt,
             n: HS_PROBLEMS[96].n,
             m: HS_PROBLEMS[96].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11816,6 +12354,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[97].known_fopt,
             n: HS_PROBLEMS[97].n,
             m: HS_PROBLEMS[97].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11839,6 +12383,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[98].known_fopt,
             n: HS_PROBLEMS[98].n,
             m: HS_PROBLEMS[98].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11862,6 +12412,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[99].known_fopt,
             n: HS_PROBLEMS[99].n,
             m: HS_PROBLEMS[99].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11885,6 +12441,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[100].known_fopt,
             n: HS_PROBLEMS[100].n,
             m: HS_PROBLEMS[100].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11908,6 +12470,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[101].known_fopt,
             n: HS_PROBLEMS[101].n,
             m: HS_PROBLEMS[101].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11931,6 +12499,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[102].known_fopt,
             n: HS_PROBLEMS[102].n,
             m: HS_PROBLEMS[102].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11954,6 +12528,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[103].known_fopt,
             n: HS_PROBLEMS[103].n,
             m: HS_PROBLEMS[103].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -11977,6 +12557,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[104].known_fopt,
             n: HS_PROBLEMS[104].n,
             m: HS_PROBLEMS[104].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -12000,6 +12586,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[105].known_fopt,
             n: HS_PROBLEMS[105].n,
             m: HS_PROBLEMS[105].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -12023,6 +12615,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[106].known_fopt,
             n: HS_PROBLEMS[106].n,
             m: HS_PROBLEMS[106].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -12046,6 +12644,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[107].known_fopt,
             n: HS_PROBLEMS[107].n,
             m: HS_PROBLEMS[107].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -12069,6 +12673,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[108].known_fopt,
             n: HS_PROBLEMS[108].n,
             m: HS_PROBLEMS[108].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -12092,6 +12702,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[109].known_fopt,
             n: HS_PROBLEMS[109].n,
             m: HS_PROBLEMS[109].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -12115,6 +12731,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[110].known_fopt,
             n: HS_PROBLEMS[110].n,
             m: HS_PROBLEMS[110].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -12138,6 +12760,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[111].known_fopt,
             n: HS_PROBLEMS[111].n,
             m: HS_PROBLEMS[111].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -12161,6 +12789,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[112].known_fopt,
             n: HS_PROBLEMS[112].n,
             m: HS_PROBLEMS[112].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -12184,6 +12818,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[113].known_fopt,
             n: HS_PROBLEMS[113].n,
             m: HS_PROBLEMS[113].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -12207,6 +12847,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[114].known_fopt,
             n: HS_PROBLEMS[114].n,
             m: HS_PROBLEMS[114].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -12230,6 +12876,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[115].known_fopt,
             n: HS_PROBLEMS[115].n,
             m: HS_PROBLEMS[115].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -12253,6 +12905,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[116].known_fopt,
             n: HS_PROBLEMS[116].n,
             m: HS_PROBLEMS[116].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -12276,6 +12934,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[117].known_fopt,
             n: HS_PROBLEMS[117].n,
             m: HS_PROBLEMS[117].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -12299,6 +12963,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[118].known_fopt,
             n: HS_PROBLEMS[118].n,
             m: HS_PROBLEMS[118].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
 
@@ -12322,6 +12992,12 @@ pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
             known_fopt: HS_PROBLEMS[119].known_fopt,
             n: HS_PROBLEMS[119].n,
             m: HS_PROBLEMS[119].m,
+            final_primal_inf: result.diagnostics.final_primal_inf,
+            final_dual_inf: result.diagnostics.final_dual_inf,
+            final_dual_inf_scaled: result.diagnostics.final_dual_inf_scaled,
+            final_compl: result.diagnostics.final_compl,
+            final_mu: result.diagnostics.final_mu,
+            final_s_d: result.diagnostics.final_s_d,
         });
     }
     results
@@ -12342,4 +13018,10 @@ pub struct HsSolveResult {
     pub known_fopt: f64,
     pub n: usize,
     pub m: usize,
+    pub final_primal_inf: f64,
+    pub final_dual_inf: f64,
+    pub final_dual_inf_scaled: f64,
+    pub final_compl: f64,
+    pub final_mu: f64,
+    pub final_s_d: f64,
 }
