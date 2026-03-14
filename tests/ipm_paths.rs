@@ -147,6 +147,91 @@ fn ipm_condensed_kkt() {
 }
 
 // ---------------------------------------------------------------------------
+// 2b. Dense condensed KKT with m >> n in "sparse" regime (n+m > sparse_threshold).
+//     min sum(x_i^2) s.t. x_i = 1 for i=1..n, repeated M/n times each
+//     n=5, m=200 => n+m=205 > sparse_threshold=110
+//     Should use dense condensed (5x5) instead of sparse augmented (205x205).
+// ---------------------------------------------------------------------------
+
+struct TallNarrowCondensed;
+
+impl NlpProblem for TallNarrowCondensed {
+    fn num_variables(&self) -> usize { 5 }
+    fn num_constraints(&self) -> usize { 200 }
+
+    fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+        for i in 0..5 {
+            x_l[i] = f64::NEG_INFINITY;
+            x_u[i] = f64::INFINITY;
+        }
+    }
+
+    fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+        for i in 0..200 {
+            g_l[i] = 1.0;
+            g_u[i] = 1.0;
+        }
+    }
+
+    fn initial_point(&self, x0: &mut [f64]) {
+        for i in 0..5 { x0[i] = 0.5; }
+    }
+
+    fn objective(&self, x: &[f64]) -> f64 {
+        x.iter().map(|xi| xi * xi).sum()
+    }
+
+    fn gradient(&self, x: &[f64], grad: &mut [f64]) {
+        for i in 0..5 { grad[i] = 2.0 * x[i]; }
+    }
+
+    fn constraints(&self, x: &[f64], g: &mut [f64]) {
+        // Each constraint pins one variable: g[j] = x[j % 5]
+        for j in 0..200 { g[j] = x[j % 5]; }
+    }
+
+    fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+        let mut rows = Vec::with_capacity(200);
+        let mut cols = Vec::with_capacity(200);
+        for j in 0..200 {
+            rows.push(j);
+            cols.push(j % 5);
+        }
+        (rows, cols)
+    }
+
+    fn jacobian_values(&self, _x: &[f64], vals: &mut [f64]) {
+        for v in vals.iter_mut() { *v = 1.0; }
+    }
+
+    fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+        (vec![0, 1, 2, 3, 4], vec![0, 1, 2, 3, 4])
+    }
+
+    fn hessian_values(&self, _x: &[f64], obj_factor: f64, _lambda: &[f64], vals: &mut [f64]) {
+        for v in vals.iter_mut() { *v = 2.0 * obj_factor; }
+    }
+}
+
+#[test]
+fn ipm_condensed_kkt_tall_narrow() {
+    let problem = TallNarrowCondensed;
+    let options = SolverOptions {
+        print_level: 0,
+        ..SolverOptions::default()
+    };
+    let result = ripopt::solve(&problem, &options);
+    assert!(
+        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        "Expected Optimal/Acceptable, got {:?}", result.status
+    );
+    for i in 0..5 {
+        assert!((result.x[i] - 1.0).abs() < 1e-4, "x[{}]={}, expected 1.0", i, result.x[i]);
+    }
+    assert!((result.objective - 5.0).abs() < 1e-4, "obj={}, expected 5.0", result.objective);
+}
+
+// ---------------------------------------------------------------------------
 // 3. Unbounded detection: min -x, no bounds, no constraints
 // ---------------------------------------------------------------------------
 

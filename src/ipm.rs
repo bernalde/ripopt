@@ -278,7 +278,7 @@ impl MuState {
             mode: MuMode::Free,
             ref_vals: Vec::with_capacity(8),
             num_refs_max: 4,
-            refs_red_fact: 0.9999,
+            refs_red_fact: 0.999,
             tiny_step: false,
             first_iter_in_mode: true,
             consecutive_restoration_failures: 0,
@@ -1990,6 +1990,11 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     // Initialize filter
     let mut filter = Filter::new(1e4);
 
+    // Mehrotra centering parameter from the last iteration's predictor step.
+    // Used in the Free-mode mu update: when sigma is available, mu = sigma * mu_current
+    // gives a more aggressive (and adaptive) decrease than the Loqo oracle.
+    let mut last_mehrotra_sigma: Option<f64> = None;
+
     // Free/fixed mu mode state (replaces ad-hoc stall recovery)
     let mut mu_state = MuState::new();
     // Monotone mu strategy: start in Fixed mode and never switch to Free
@@ -2774,9 +2779,11 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         // Compute sigma (barrier diagonal)
         let sigma = kkt::compute_sigma(&state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u);
 
-        // Use dense condensed KKT (Schur complement) when m >= 2n and n is small.
-        // Condensed cost is O(n^2*m + n^3) vs O((n+m)^3) — strictly better when m > n.
-        let use_condensed = m >= 2 * n && n > 0 && !use_sparse;
+        // Use dense condensed KKT (Schur complement) when m >> n and n is small.
+        // Condensed cost is O(n^2*m + n^3) vs O((n+m)^3) — strictly better when m >> n.
+        // Allow this even for "sparse" problems when n is tiny — an n×n dense solve
+        // is always faster than an (n+m)×(n+m) sparse solve for small n.
+        let use_condensed = m >= 2 * n && n > 0 && (!use_sparse || n <= 100);
 
         // Use sparse condensed KKT when problem is large and has constraints,
         // but only if the Schur complement is actually sparser than the augmented system.
@@ -3265,6 +3272,8 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             if nb > 0 {
                                 let mu_aff = mu_aff_sum / nb as f64;
                                 let sigma = (mu_aff / state.mu).powi(3).clamp(0.0, 1.0);
+                                // Store sigma for the cross-iteration mu update
+                                last_mehrotra_sigma = Some(sigma);
                                 let mu_pc = (sigma * state.mu).max(options.mu_min);
                                 // Apply PC only when the centering parameter suggests
                                 // a meaningful μ decrease (σ < 0.95) and the probe is
@@ -4142,9 +4151,21 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 MuMode::Free => {
                     if sufficient && !mu_state.tiny_step {
                         mu_state.remember_accepted(kkt_error);
-                        // Adaptive mu from complementarity (Loqo-style)
+                        // Adaptive mu: prefer Mehrotra sigma when available, fall back to Loqo
                         let avg_compl = compute_avg_complementarity(&state);
-                        if avg_compl > 0.0 {
+                        if let Some(sigma) = last_mehrotra_sigma.take() {
+                            // Mehrotra-guided: use sigma to blend between current mu and
+                            // the Loqo oracle. When sigma is small (affine step near full),
+                            // weight toward aggressive decrease. When sigma is large (far
+                            // from solution), stay close to the Loqo estimate.
+                            let mu_loqo = avg_compl / options.kappa;
+                            let mu_sigma = (sigma * state.mu).max(options.mu_min);
+                            // Blend: take the geometric mean weighted by sigma
+                            // sigma ≈ 0 → mu ≈ mu_sigma (aggressive)
+                            // sigma ≈ 1 → mu ≈ mu_loqo (conservative)
+                            state.mu = (mu_sigma.powf(1.0 - sigma) * mu_loqo.powf(sigma))
+                                .clamp(options.mu_min, 1e5);
+                        } else if avg_compl > 0.0 {
                             state.mu = (avg_compl / options.kappa).clamp(options.mu_min, 1e5);
                         } else {
                             // No complementarity products (all bounds inactive) → decrease mu
