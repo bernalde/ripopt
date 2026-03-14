@@ -295,7 +295,9 @@ pub fn amd_ordering(csc: &CscMatrix) -> (Vec<usize>, Vec<usize>) {
         //   Adjacent case:    adj(i) \ {j} == adj(j) \ {i}
         //   Non-adjacent case: adj(i) == adj(j)
         // We compare sorted COPIES (not in-place) to preserve adjacency structure.
-        if reachable.len() > 1 {
+        // Skip for large reachable sets: the pairwise O(R²) comparison is too expensive
+        // and supervariable detection has minimal impact on ordering quality.
+        if reachable.len() > 1 && reachable.len() <= 256 {
             // Group candidates by (degree, len)
             let mut candidates: Vec<(usize, usize, usize)> = Vec::new(); // (degree, len, node)
             for &ni in &reachable {

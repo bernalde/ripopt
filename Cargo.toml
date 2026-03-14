@@ -20,7 +20,7 @@ faer = { version = "0.20", optional = true }
 rmumps = { path = "rmumps", optional = true }
 
 [features]
-default = ["rmumps"]
+default = ["rmumps", "faer"]
 ipopt-native = []
 cutest = []
 hs = []

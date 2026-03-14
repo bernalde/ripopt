@@ -22,6 +22,22 @@ fn new_sparse_solver() -> Box<dyn LinearSolver> {
     new_sparse_solver_with_choice(LinearSolverChoice::Direct)
 }
 
+/// Create a sparse direct solver sized for a given KKT dimension.
+/// Prefers faer (fast AMD via SuiteSparse) when available.
+/// Falls back to rmumps MultifrontalLdl for small systems or when faer is absent.
+fn new_sparse_solver_for_dim(_dim: usize) -> Box<dyn LinearSolver> {
+    #[cfg(feature = "faer")]
+    {
+        return Box::new(SparseLdl::new());
+    }
+    #[cfg(all(feature = "rmumps", not(feature = "faer")))]
+    { return Box::new(MultifrontalLdl::new()); }
+    #[cfg(all(not(feature = "rmumps"), feature = "faer"))]
+    { return Box::new(SparseLdl::new()); }
+    #[cfg(not(any(feature = "rmumps", feature = "faer")))]
+    { return Box::new(DenseLdl::new()); }
+}
+
 /// Create a sparse linear solver with the specified choice.
 fn new_sparse_solver_with_choice(choice: LinearSolverChoice) -> Box<dyn LinearSolver> {
     match choice {
@@ -1934,7 +1950,10 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     // Initialize linear solver — use sparse for large KKT systems
     let use_sparse = (n + m) >= options.sparse_threshold;
     let mut lin_solver: Box<dyn LinearSolver> = if use_sparse {
-        new_sparse_solver_with_choice(options.linear_solver)
+        match options.linear_solver {
+            LinearSolverChoice::Direct => new_sparse_solver_for_dim(n + m),
+            _ => new_sparse_solver_with_choice(options.linear_solver),
+        }
     } else {
         Box::new(DenseLdl::new())
     };
@@ -1944,7 +1963,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     // Estimate Schur complement density from Jacobian structure.
     // If J^T·D·J would be denser than the full augmented KKT system,
     // disable sparse condensed and use the full (n+m)×(n+m) system instead.
-    let disable_sparse_condensed = if use_sparse && m > 0 {
+    let mut disable_sparse_condensed = if use_sparse && m > 0 {
         let (jac_rows_est, _) = problem.jacobian_structure();
         // Build row counts
         let mut row_nnz = vec![0usize; m];
@@ -2057,7 +2076,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let mut tried_active_set: bool = false;
 
     // Strategy 4: Complementarity polishing — force mu small when compl is bottleneck
-    let mut tried_compl_polish: bool = false;
+    let mut _tried_compl_polish: bool = false;
 
     // Initial evaluation
     state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
@@ -2476,7 +2495,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 // Strategy 4: Complementarity polishing via multiplier snap
                 // When complementarity is the bottleneck (primal/dual already good enough),
                 // snap bound multipliers to reduce complementarity, then recheck convergence.
-                if !tried_compl_polish {
+                if !_tried_compl_polish {
                     let compl_inf_now = conv_info.compl_inf;
                     let s_d_now = {
                         let s_max: f64 = 100.0;
@@ -2490,7 +2509,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         && conv_info.primal_inf <= options.acceptable_tol
                         && conv_info.dual_inf <= options.acceptable_tol * s_d_now
                     {
-                        tried_compl_polish = true;
+                        _tried_compl_polish = true;
                         // For variables near bounds, snap multipliers to reduce complementarity:
                         // If x_i ≈ x_l_i (gap < tol), keep z_l_i from stationarity (z_opt)
                         // If x_i is interior (gap > tol), set z_l_i = 0
@@ -2778,7 +2797,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             None
         };
 
-        let sparse_condensed_system = if use_sparse_condensed {
+        let mut sparse_condensed_system = if use_sparse_condensed {
             Some(kkt::assemble_sparse_condensed_kkt(
                 n, m,
                 &state.hess_rows, &state.hess_cols, &state.hess_vals,
@@ -2808,11 +2827,34 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         };
         timings.kkt_assembly += t_kkt.elapsed();
 
-        // On first iteration with sparse condensed, detect bandwidth for the condensed system
+        // On first iteration with sparse condensed, detect bandwidth for the condensed system.
+        // If the condensed Schur complement is essentially dense (bandwidth > n/2),
+        // abandon it and switch to the full augmented KKT system which MUMPS can
+        // reorder efficiently.
         if iteration == 0 && use_sparse_condensed {
             if let Some(ref sc) = sparse_condensed_system {
                 let bw = BandedLdl::compute_bandwidth(&sc.matrix.triplet_rows, &sc.matrix.triplet_cols);
-                if bw * bw <= n {
+                if bw > n / 2 {
+                    // Condensed system is too dense — fall back to augmented KKT
+                    if options.print_level >= 3 {
+                        eprintln!(
+                            "ripopt: Sparse condensed S has bandwidth {} for n={}, switching to augmented KKT",
+                            bw, n
+                        );
+                    }
+                    disable_sparse_condensed = true;
+                    // Build the full augmented KKT for this iteration
+                    sparse_condensed_system = None;
+                    kkt_system_opt = Some(kkt::assemble_kkt(
+                        n, m,
+                        &state.hess_rows, &state.hess_cols, &state.hess_vals,
+                        &state.jac_rows, &state.jac_cols, &state.jac_vals,
+                        &sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
+                        &state.y, &state.z_l, &state.z_u,
+                        &state.x, &state.x_l, &state.x_u, state.mu,
+                        use_sparse, &state.v_l, &state.v_u,
+                    ));
+                } else if bw * bw <= n {
                     if options.print_level >= 5 {
                         eprintln!("ripopt: Sparse condensed S has bandwidth {} for n={}, using banded solver", bw, n);
                     }

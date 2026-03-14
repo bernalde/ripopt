@@ -18,10 +18,16 @@
     ],
     "constraint_values": [],
     "iterations": 28,
-    "solve_time": 0.020084666,
+    "solve_time": 0.020832917,
     "known_fopt": 0.0,
     "n": 2,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 2,
@@ -42,10 +48,16 @@
     ],
     "constraint_values": [],
     "iterations": 10,
-    "solve_time": 0.004292209,
+    "solve_time": 0.002424959,
     "known_fopt": null,
     "n": 2,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 3,
@@ -66,10 +78,16 @@
     ],
     "constraint_values": [],
     "iterations": 4,
-    "solve_time": 0.001892125,
+    "solve_time": 0.00140525,
     "known_fopt": 0.0,
     "n": 2,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 4,
@@ -90,10 +108,16 @@
     ],
     "constraint_values": [],
     "iterations": 4,
-    "solve_time": 0.001783833,
+    "solve_time": 0.001230709,
     "known_fopt": 2.6666666666666665,
     "n": 2,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 5,
@@ -114,10 +138,16 @@
     ],
     "constraint_values": [],
     "iterations": 7,
-    "solve_time": 0.002612667,
+    "solve_time": 0.001813583,
     "known_fopt": null,
     "n": 2,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 6,
@@ -140,10 +170,16 @@
     ],
     "constraint_values": [],
     "iterations": 5,
-    "solve_time": 0.002068125,
+    "solve_time": 0.001561084,
     "known_fopt": 0.0,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 7,
@@ -166,10 +202,16 @@
     ],
     "constraint_values": [],
     "iterations": 27,
-    "solve_time": 0.007156708,
+    "solve_time": 0.005483875,
     "known_fopt": null,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 9,
@@ -192,10 +234,16 @@
     ],
     "constraint_values": [],
     "iterations": 3,
-    "solve_time": 0.001350208,
+    "solve_time": 0.000976333,
     "known_fopt": -0.5,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 10,
@@ -218,10 +266,16 @@
     ],
     "constraint_values": [],
     "iterations": 12,
-    "solve_time": 0.003629833,
+    "solve_time": 0.002707584,
     "known_fopt": -1.0,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 11,
@@ -244,10 +298,16 @@
     ],
     "constraint_values": [],
     "iterations": 6,
-    "solve_time": 0.002004917,
+    "solve_time": 0.001550959,
     "known_fopt": null,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 12,
@@ -270,10 +330,16 @@
     ],
     "constraint_values": [],
     "iterations": 6,
-    "solve_time": 0.00201375,
+    "solve_time": 0.001485875,
     "known_fopt": -30.0,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 13,
@@ -296,10 +362,16 @@
     ],
     "constraint_values": [],
     "iterations": 47,
-    "solve_time": 0.01118375,
+    "solve_time": 0.00873725,
     "known_fopt": 1.0,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 14,
@@ -323,10 +395,16 @@
     ],
     "constraint_values": [],
     "iterations": 5,
-    "solve_time": 0.00166,
+    "solve_time": 0.001223125,
     "known_fopt": null,
     "n": 2,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 15,
@@ -350,10 +428,16 @@
     ],
     "constraint_values": [],
     "iterations": 11,
-    "solve_time": 0.002755792,
+    "solve_time": 0.002169875,
     "known_fopt": 3.065,
     "n": 2,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 16,
@@ -377,10 +461,16 @@
     ],
     "constraint_values": [],
     "iterations": 10,
-    "solve_time": 0.00278775,
+    "solve_time": 0.002110458,
     "known_fopt": 0.25,
     "n": 2,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 17,
@@ -404,10 +494,16 @@
     ],
     "constraint_values": [],
     "iterations": 18,
-    "solve_time": 0.004285583,
+    "solve_time": 0.0033825,
     "known_fopt": 1.0,
     "n": 2,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 18,
@@ -431,10 +527,16 @@
     ],
     "constraint_values": [],
     "iterations": 10,
-    "solve_time": 0.002483042,
+    "solve_time": 0.001830584,
     "known_fopt": 5.0,
     "n": 2,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 19,
@@ -458,10 +560,16 @@
     ],
     "constraint_values": [],
     "iterations": 12,
-    "solve_time": 0.002947042,
+    "solve_time": 0.002251541,
     "known_fopt": null,
     "n": 2,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 20,
@@ -486,10 +594,16 @@
     ],
     "constraint_values": [],
     "iterations": 11,
-    "solve_time": 0.00290375,
+    "solve_time": 0.002281458,
     "known_fopt": null,
     "n": 2,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 21,
@@ -512,10 +626,16 @@
     ],
     "constraint_values": [],
     "iterations": 6,
-    "solve_time": 0.001687,
+    "solve_time": 0.001221459,
     "known_fopt": -99.96,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 22,
@@ -539,10 +659,16 @@
     ],
     "constraint_values": [],
     "iterations": 5,
-    "solve_time": 0.001416917,
+    "solve_time": 0.001052917,
     "known_fopt": 1.0,
     "n": 2,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 23,
@@ -569,10 +695,16 @@
     ],
     "constraint_values": [],
     "iterations": 9,
-    "solve_time": 0.00220375,
+    "solve_time": 0.001629875,
     "known_fopt": 2.0,
     "n": 2,
-    "m": 5
+    "m": 5,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 24,
@@ -597,10 +729,16 @@
     ],
     "constraint_values": [],
     "iterations": 14,
-    "solve_time": 0.003454333,
+    "solve_time": 0.002672041,
     "known_fopt": -1.0,
     "n": 2,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 26,
@@ -626,10 +764,16 @@
     ],
     "constraint_values": [],
     "iterations": 25,
-    "solve_time": 0.003910791,
+    "solve_time": 0.002834708,
     "known_fopt": 0.0,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 27,
@@ -655,10 +799,16 @@
     ],
     "constraint_values": [],
     "iterations": 21,
-    "solve_time": 0.004524917,
+    "solve_time": 0.002687625,
     "known_fopt": 4.0,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 28,
@@ -684,10 +834,16 @@
     ],
     "constraint_values": [],
     "iterations": 1,
-    "solve_time": 0.000881042,
+    "solve_time": 0.000396417,
     "known_fopt": 0.0,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 29,
@@ -713,10 +869,16 @@
     ],
     "constraint_values": [],
     "iterations": 7,
-    "solve_time": 0.002467542,
+    "solve_time": 0.001335,
     "known_fopt": null,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 30,
@@ -742,10 +904,16 @@
     ],
     "constraint_values": [],
     "iterations": 7,
-    "solve_time": 0.0021795,
+    "solve_time": 0.001299208,
     "known_fopt": 1.0,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 31,
@@ -771,10 +939,16 @@
     ],
     "constraint_values": [],
     "iterations": 6,
-    "solve_time": 0.00204075,
+    "solve_time": 0.001191042,
     "known_fopt": 6.0,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 32,
@@ -801,10 +975,16 @@
     ],
     "constraint_values": [],
     "iterations": 15,
-    "solve_time": 0.003420958,
+    "solve_time": 0.002438625,
     "known_fopt": 1.0,
     "n": 3,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 33,
@@ -831,10 +1011,16 @@
     ],
     "constraint_values": [],
     "iterations": 9,
-    "solve_time": 0.002405917,
+    "solve_time": 0.001591541,
     "known_fopt": null,
     "n": 3,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 34,
@@ -861,10 +1047,16 @@
     ],
     "constraint_values": [],
     "iterations": 7,
-    "solve_time": 0.001994041,
+    "solve_time": 0.001300708,
     "known_fopt": null,
     "n": 3,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 35,
@@ -890,10 +1082,16 @@
     ],
     "constraint_values": [],
     "iterations": 7,
-    "solve_time": 0.002035,
+    "solve_time": 0.001285,
     "known_fopt": 0.1111111111111111,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 36,
@@ -919,10 +1117,16 @@
     ],
     "constraint_values": [],
     "iterations": 11,
-    "solve_time": 0.003042042,
+    "solve_time": 0.002054,
     "known_fopt": -3300.0,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 37,
@@ -949,10 +1153,16 @@
     ],
     "constraint_values": [],
     "iterations": 11,
-    "solve_time": 0.00301875,
+    "solve_time": 0.002055166,
     "known_fopt": -3456.0,
     "n": 3,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 38,
@@ -979,10 +1189,16 @@
     ],
     "constraint_values": [],
     "iterations": 39,
-    "solve_time": 0.008711542,
+    "solve_time": 0.006238791,
     "known_fopt": 0.0,
     "n": 4,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 39,
@@ -1012,10 +1228,16 @@
     ],
     "constraint_values": [],
     "iterations": 13,
-    "solve_time": 0.002426958,
+    "solve_time": 0.001660542,
     "known_fopt": -1.0,
     "n": 4,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 40,
@@ -1046,10 +1268,16 @@
     ],
     "constraint_values": [],
     "iterations": 3,
-    "solve_time": 0.000982458,
+    "solve_time": 0.000600875,
     "known_fopt": -0.25,
     "n": 4,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 41,
@@ -1078,10 +1306,16 @@
     ],
     "constraint_values": [],
     "iterations": 7,
-    "solve_time": 0.001869042,
+    "solve_time": 0.001272292,
     "known_fopt": 1.9259259259259258,
     "n": 4,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 42,
@@ -1111,10 +1345,16 @@
     ],
     "constraint_values": [],
     "iterations": 4,
-    "solve_time": 0.001358541,
+    "solve_time": 0.000706,
     "known_fopt": null,
     "n": 4,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 43,
@@ -1145,10 +1385,16 @@
     ],
     "constraint_values": [],
     "iterations": 8,
-    "solve_time": 0.002321917,
+    "solve_time": 0.001461083,
     "known_fopt": -44.0,
     "n": 4,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 44,
@@ -1182,10 +1428,16 @@
     ],
     "constraint_values": [],
     "iterations": 24,
-    "solve_time": 0.005903667,
+    "solve_time": 0.004968875,
     "known_fopt": -15.0,
     "n": 4,
-    "m": 6
+    "m": 6,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 45,
@@ -1215,10 +1467,16 @@
     ],
     "constraint_values": [],
     "iterations": 11,
-    "solve_time": 0.002913,
+    "solve_time": 0.001972917,
     "known_fopt": 1.0,
     "n": 5,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 46,
@@ -1251,10 +1509,16 @@
     ],
     "constraint_values": [],
     "iterations": 19,
-    "solve_time": 0.003721375,
+    "solve_time": 0.002519375,
     "known_fopt": 0.0,
     "n": 5,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 47,
@@ -1288,10 +1552,16 @@
     ],
     "constraint_values": [],
     "iterations": 15,
-    "solve_time": 0.002903584,
+    "solve_time": 0.00200475,
     "known_fopt": 0.0,
     "n": 5,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 48,
@@ -1324,10 +1594,16 @@
     ],
     "constraint_values": [],
     "iterations": 1,
-    "solve_time": 0.000687375,
+    "solve_time": 0.000386833,
     "known_fopt": 0.0,
     "n": 5,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 49,
@@ -1360,10 +1636,16 @@
     ],
     "constraint_values": [],
     "iterations": 19,
-    "solve_time": 0.003137125,
+    "solve_time": 0.002161333,
     "known_fopt": 0.0,
     "n": 5,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 50,
@@ -1397,10 +1679,16 @@
     ],
     "constraint_values": [],
     "iterations": 8,
-    "solve_time": 0.001615583,
+    "solve_time": 0.001076916,
     "known_fopt": 0.0,
     "n": 5,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 51,
@@ -1434,10 +1722,16 @@
     ],
     "constraint_values": [],
     "iterations": 1,
-    "solve_time": 0.000655459,
+    "solve_time": 0.000397958,
     "known_fopt": 0.0,
     "n": 5,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 52,
@@ -1471,10 +1765,16 @@
     ],
     "constraint_values": [],
     "iterations": 1,
-    "solve_time": 0.000630125,
+    "solve_time": 0.000383833,
     "known_fopt": 5.326647564469914,
     "n": 5,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 53,
@@ -1508,10 +1808,16 @@
     ],
     "constraint_values": [],
     "iterations": 6,
-    "solve_time": 0.001578542,
+    "solve_time": 0.001059792,
     "known_fopt": 4.093023255813954,
     "n": 5,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 56,
@@ -1552,10 +1858,16 @@
     ],
     "constraint_values": [],
     "iterations": 3,
-    "solve_time": 0.001252083,
+    "solve_time": 0.000811375,
     "known_fopt": -3.456,
     "n": 7,
-    "m": 4
+    "m": 4,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 58,
@@ -1580,10 +1892,16 @@
     ],
     "constraint_values": [],
     "iterations": 11,
-    "solve_time": 0.00283975,
+    "solve_time": 0.001952125,
     "known_fopt": 3.19033354957,
     "n": 2,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 60,
@@ -1609,10 +1927,16 @@
     ],
     "constraint_values": [],
     "iterations": 6,
-    "solve_time": 0.00172275,
+    "solve_time": 0.00112125,
     "known_fopt": 0.0325682002513,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 61,
@@ -1639,10 +1963,16 @@
     ],
     "constraint_values": [],
     "iterations": 10,
-    "solve_time": 0.001889708,
+    "solve_time": 0.00124275,
     "known_fopt": -143.646142201,
     "n": 3,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 63,
@@ -1669,10 +1999,16 @@
     ],
     "constraint_values": [],
     "iterations": 5,
-    "solve_time": 0.001468375,
+    "solve_time": 0.000987666,
     "known_fopt": 961.715172127,
     "n": 3,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 64,
@@ -1698,10 +2034,16 @@
     ],
     "constraint_values": [],
     "iterations": 16,
-    "solve_time": 0.003784,
+    "solve_time": 0.002590167,
     "known_fopt": 6299.84242821,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 65,
@@ -1727,10 +2069,16 @@
     ],
     "constraint_values": [],
     "iterations": 16,
-    "solve_time": 0.004377916,
+    "solve_time": 0.002866083,
     "known_fopt": 0.953528856757,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 66,
@@ -1757,10 +2105,16 @@
     ],
     "constraint_values": [],
     "iterations": 10,
-    "solve_time": 0.002321708,
+    "solve_time": 0.001548917,
     "known_fopt": 0.518163274159,
     "n": 3,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 71,
@@ -1790,10 +2144,16 @@
     ],
     "constraint_values": [],
     "iterations": 12,
-    "solve_time": 0.002980042,
+    "solve_time": 0.001915167,
     "known_fopt": 17.0140172895,
     "n": 4,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 72,
@@ -1823,10 +2183,16 @@
     ],
     "constraint_values": [],
     "iterations": 16,
-    "solve_time": 0.003881541,
+    "solve_time": 0.002493792,
     "known_fopt": 727.67936,
     "n": 4,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 76,
@@ -1857,10 +2223,16 @@
     ],
     "constraint_values": [],
     "iterations": 7,
-    "solve_time": 0.001960458,
+    "solve_time": 0.0012895,
     "known_fopt": -4.68181818182,
     "n": 4,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 77,
@@ -1893,10 +2265,16 @@
     ],
     "constraint_values": [],
     "iterations": 11,
-    "solve_time": 0.002240042,
+    "solve_time": 0.001434167,
     "known_fopt": 0.241505128786,
     "n": 5,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 78,
@@ -1930,10 +2308,16 @@
     ],
     "constraint_values": [],
     "iterations": 4,
-    "solve_time": 0.001149666,
+    "solve_time": 0.00069775,
     "known_fopt": -2.91970040911,
     "n": 5,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 79,
@@ -1967,10 +2351,16 @@
     ],
     "constraint_values": [],
     "iterations": 4,
-    "solve_time": 0.001046333,
+    "solve_time": 0.000684875,
     "known_fopt": 0.0787768208538,
     "n": 5,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 80,
@@ -2004,10 +2394,16 @@
     ],
     "constraint_values": [],
     "iterations": 5,
-    "solve_time": 0.001449584,
+    "solve_time": 0.00100075,
     "known_fopt": 0.0539498477624,
     "n": 5,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 81,
@@ -2041,10 +2437,16 @@
     ],
     "constraint_values": [],
     "iterations": 68,
-    "solve_time": 0.014600084,
+    "solve_time": 0.010702917,
     "known_fopt": 0.0539498477749,
     "n": 5,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 106,
@@ -2090,10 +2492,16 @@
     ],
     "constraint_values": [],
     "iterations": 18,
-    "solve_time": 0.004311042,
+    "solve_time": 0.002823625,
     "known_fopt": 7049.248,
     "n": 8,
-    "m": 6
+    "m": 6,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 108,
@@ -2149,10 +2557,16 @@
     ],
     "constraint_values": [],
     "iterations": 23,
-    "solve_time": 0.006398083,
+    "solve_time": 0.004662792,
     "known_fopt": -0.866025403841,
     "n": 9,
-    "m": 13
+    "m": 13,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 113,
@@ -2206,10 +2620,16 @@
     ],
     "constraint_values": [],
     "iterations": 9,
-    "solve_time": 0.004204041,
+    "solve_time": 0.002286625,
     "known_fopt": 24.3062090641,
     "n": 10,
-    "m": 8
+    "m": 8,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 114,
@@ -2266,83 +2686,95 @@
     ],
     "constraint_values": [],
     "iterations": 13,
-    "solve_time": 0.003834333,
+    "solve_time": 0.002492625,
     "known_fopt": -1768.80696344,
     "n": 10,
-    "m": 11
+    "m": 11,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 116,
-    "status": "Optimal",
-    "objective": 97.58747320208461,
+    "status": "IpoptStatus(-11)",
+    "objective": 0.0,
     "x": [
-      0.8037732616141677,
-      0.8999857908418166,
-      0.9709823396262085,
-      0.10000000997324619,
-      0.19081307830678146,
-      0.4606548424407079,
-      574.0774284306286,
-      74.0774531199692,
-      500.01616015334645,
-      0.10000004161761168,
-      20.233048285263987,
-      77.34769597265851,
-      0.0067289441621027355
+      0.5,
+      0.8,
+      0.9,
+      0.1,
+      0.14,
+      0.5,
+      489.0,
+      80.0,
+      650.0,
+      450.0,
+      150.0,
+      150.0,
+      150.0
     ],
     "constraint_multipliers": [
-      -8.68417153166141e-8,
-      -6.408167608541785e-8,
-      -0.11365880179418049,
-      -1.2949905307275326e-10,
-      -4.0390838569890123e-11,
-      -0.999999069870835,
-      -2087.989447739863,
-      -0.10677065652053466,
-      -0.0025031375886660967,
-      -224.05045491846252,
-      -0.8002045152618723,
-      -32.79120733945678,
-      -1065.4165866021651,
-      -0.9999999996378374,
-      -0.9999999999160433
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
     ],
     "bound_multipliers_lower": [
-      8.760586624076924e-9,
-      7.706970177178202e-9,
-      7.078750517875696e-9,
-      6.171637114012083e-8,
-      6.789182945114608e-8,
-      1.7095199094461874e-8,
-      1.0741653592613881e-11,
-      8.334251095744654e-11,
-      3.814047415808064e-7,
-      0.1194450231887212,
-      3.2056627751984946e-10,
-      7.971116146610792e-11,
-      9.300811617498024e-7
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
     ],
     "bound_multipliers_upper": [
-      3.14201135187012e-8,
-      6.164590160320396e-8,
-      2.1247278765645148e-7,
-      229.2204872554275,
-      8.69371167879477e-9,
-      1.4033309876730389e-8,
-      1.4475557251621037e-11,
-      6.658728275708284e-12,
-      1.2331331725207246e-11,
-      1.2333399977145795e-11,
-      4.751183994671781e-11,
-      8.486264354665413e-11,
-      4.110495494024552e-11
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
     ],
     "constraint_values": [],
-    "iterations": 17,
-    "solve_time": 0.00435125,
+    "iterations": 0,
+    "solve_time": 0.000875042,
     "known_fopt": 97.5884089805,
     "n": 13,
-    "m": 15
+    "m": 15,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 201,
@@ -2363,10 +2795,16 @@
     ],
     "constraint_values": [],
     "iterations": 1,
-    "solve_time": 0.000611083,
+    "solve_time": 0.000707667,
     "known_fopt": 0.0,
     "n": 2,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 206,
@@ -2387,10 +2825,16 @@
     ],
     "constraint_values": [],
     "iterations": 4,
-    "solve_time": 0.000982042,
+    "solve_time": 0.000905708,
     "known_fopt": 0.0,
     "n": 2,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 211,
@@ -2411,10 +2855,16 @@
     ],
     "constraint_values": [],
     "iterations": 27,
-    "solve_time": 0.0049035,
+    "solve_time": 0.0040375,
     "known_fopt": 0.0,
     "n": 2,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 212,
@@ -2435,10 +2885,16 @@
     ],
     "constraint_values": [],
     "iterations": 11,
-    "solve_time": 0.002311083,
+    "solve_time": 0.001903875,
     "known_fopt": 0.0,
     "n": 2,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 213,
@@ -2459,10 +2915,16 @@
     ],
     "constraint_values": [],
     "iterations": 22,
-    "solve_time": 0.003315416,
+    "solve_time": 0.003118917,
     "known_fopt": 0.0,
     "n": 2,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 214,
@@ -2483,10 +2945,16 @@
     ],
     "constraint_values": [],
     "iterations": 32,
-    "solve_time": 0.009652791,
+    "solve_time": 0.006993625,
     "known_fopt": 0.0,
     "n": 2,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 215,
@@ -2509,10 +2977,16 @@
     ],
     "constraint_values": [],
     "iterations": 13,
-    "solve_time": 0.003153833,
+    "solve_time": 0.002344375,
     "known_fopt": 0.0,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 216,
@@ -2535,10 +3009,16 @@
     ],
     "constraint_values": [],
     "iterations": 7,
-    "solve_time": 0.001815583,
+    "solve_time": 0.001472458,
     "known_fopt": 1.0,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 217,
@@ -2562,10 +3042,16 @@
     ],
     "constraint_values": [],
     "iterations": 8,
-    "solve_time": 0.002098625,
+    "solve_time": 0.001481542,
     "known_fopt": -0.8,
     "n": 2,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 218,
@@ -2588,10 +3074,16 @@
     ],
     "constraint_values": [],
     "iterations": 6,
-    "solve_time": 0.00165375,
+    "solve_time": 0.001161167,
     "known_fopt": 0.0,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 219,
@@ -2621,10 +3113,16 @@
     ],
     "constraint_values": [],
     "iterations": 50,
-    "solve_time": 0.007601166,
+    "solve_time": 0.00587425,
     "known_fopt": -1.0,
     "n": 4,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 220,
@@ -2647,10 +3145,16 @@
     ],
     "constraint_values": [],
     "iterations": 3,
-    "solve_time": 0.001028458,
+    "solve_time": 0.000751291,
     "known_fopt": 1.0,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 221,
@@ -2673,10 +3177,16 @@
     ],
     "constraint_values": [],
     "iterations": 37,
-    "solve_time": 0.006686542,
+    "solve_time": 0.005013375,
     "known_fopt": -1.0,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 223,
@@ -2700,10 +3210,16 @@
     ],
     "constraint_values": [],
     "iterations": 1567,
-    "solve_time": 0.700701084,
+    "solve_time": 0.548152166,
     "known_fopt": -0.834032445247956,
     "n": 2,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 224,
@@ -2729,10 +3245,16 @@
     ],
     "constraint_values": [],
     "iterations": 9,
-    "solve_time": 0.002358917,
+    "solve_time": 0.001858375,
     "known_fopt": -304.0,
     "n": 2,
-    "m": 4
+    "m": 4,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 225,
@@ -2759,10 +3281,16 @@
     ],
     "constraint_values": [],
     "iterations": 10,
-    "solve_time": 0.002298916,
+    "solve_time": 0.001760708,
     "known_fopt": 2.0,
     "n": 2,
-    "m": 5
+    "m": 5,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 226,
@@ -2786,10 +3314,16 @@
     ],
     "constraint_values": [],
     "iterations": 11,
-    "solve_time": 0.002606,
+    "solve_time": 0.001947417,
     "known_fopt": null,
     "n": 2,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 227,
@@ -2813,10 +3347,16 @@
     ],
     "constraint_values": [],
     "iterations": 10,
-    "solve_time": 0.002355292,
+    "solve_time": 0.001790375,
     "known_fopt": 1.0,
     "n": 2,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 228,
@@ -2840,10 +3380,16 @@
     ],
     "constraint_values": [],
     "iterations": 7,
-    "solve_time": 0.00170225,
+    "solve_time": 0.00126925,
     "known_fopt": -3.0,
     "n": 2,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 229,
@@ -2864,10 +3410,16 @@
     ],
     "constraint_values": [],
     "iterations": 21,
-    "solve_time": 0.004800917,
+    "solve_time": 0.003696167,
     "known_fopt": 0.0,
     "n": 2,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 230,
@@ -2891,10 +3443,16 @@
     ],
     "constraint_values": [],
     "iterations": 7,
-    "solve_time": 0.001774292,
+    "solve_time": 0.001263625,
     "known_fopt": null,
     "n": 2,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 232,
@@ -2919,10 +3477,16 @@
     ],
     "constraint_values": [],
     "iterations": 8,
-    "solve_time": 0.002100875,
+    "solve_time": 0.001490667,
     "known_fopt": -1.0,
     "n": 2,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 234,
@@ -2945,10 +3509,16 @@
     ],
     "constraint_values": [],
     "iterations": 18,
-    "solve_time": 0.003667209,
+    "solve_time": 0.002814666,
     "known_fopt": -0.8,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 235,
@@ -2974,10 +3544,16 @@
     ],
     "constraint_values": [],
     "iterations": 13,
-    "solve_time": 0.0024165,
+    "solve_time": 0.001796375,
     "known_fopt": 0.04,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 240,
@@ -3001,10 +3577,16 @@
     ],
     "constraint_values": [],
     "iterations": 1,
-    "solve_time": 0.000537708,
+    "solve_time": 0.0003345,
     "known_fopt": 0.0,
     "n": 3,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 248,
@@ -3031,10 +3613,16 @@
     ],
     "constraint_values": [],
     "iterations": 14,
-    "solve_time": 0.003229958,
+    "solve_time": 0.002394875,
     "known_fopt": -0.8,
     "n": 3,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 249,
@@ -3060,10 +3648,16 @@
     ],
     "constraint_values": [],
     "iterations": 7,
-    "solve_time": 0.001750709,
+    "solve_time": 0.001263209,
     "known_fopt": 1.0,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 250,
@@ -3090,10 +3684,16 @@
     ],
     "constraint_values": [],
     "iterations": 14,
-    "solve_time": 0.003417209,
+    "solve_time": 0.002536625,
     "known_fopt": -3300.0,
     "n": 3,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 251,
@@ -3119,10 +3719,16 @@
     ],
     "constraint_values": [],
     "iterations": 10,
-    "solve_time": 0.002555209,
+    "solve_time": 0.001867167,
     "known_fopt": -3456.0,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 252,
@@ -3148,10 +3754,16 @@
     ],
     "constraint_values": [],
     "iterations": 15,
-    "solve_time": 0.003107708,
+    "solve_time": 0.002329,
     "known_fopt": 0.04,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 254,
@@ -3178,10 +3790,16 @@
     ],
     "constraint_values": [],
     "iterations": 29,
-    "solve_time": 0.005429875,
+    "solve_time": 0.004090791,
     "known_fopt": null,
     "n": 3,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 255,
@@ -3208,10 +3826,16 @@
     ],
     "constraint_values": [],
     "iterations": 13,
-    "solve_time": 0.00319975,
+    "solve_time": 0.002344833,
     "known_fopt": 0.0,
     "n": 4,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 256,
@@ -3238,10 +3862,16 @@
     ],
     "constraint_values": [],
     "iterations": 19,
-    "solve_time": 0.002878,
+    "solve_time": 0.002082041,
     "known_fopt": 0.0,
     "n": 4,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 257,
@@ -3268,10 +3898,16 @@
     ],
     "constraint_values": [],
     "iterations": 7,
-    "solve_time": 0.001850042,
+    "solve_time": 0.00132725,
     "known_fopt": 0.0,
     "n": 4,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 258,
@@ -3298,10 +3934,16 @@
     ],
     "constraint_values": [],
     "iterations": 40,
-    "solve_time": 0.006985709,
+    "solve_time": 0.005297417,
     "known_fopt": 0.0,
     "n": 4,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 259,
@@ -3328,10 +3970,16 @@
     ],
     "constraint_values": [],
     "iterations": 9,
-    "solve_time": 0.002459667,
+    "solve_time": 0.00182,
     "known_fopt": -8.544621,
     "n": 4,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 262,
@@ -3363,10 +4011,16 @@
     ],
     "constraint_values": [],
     "iterations": 7,
-    "solve_time": 0.001809584,
+    "solve_time": 0.001290166,
     "known_fopt": -10.0,
     "n": 4,
-    "m": 4
+    "m": 4,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 263,
@@ -3398,10 +4052,16 @@
     ],
     "constraint_values": [],
     "iterations": 58,
-    "solve_time": 0.01075925,
+    "solve_time": 0.008191042,
     "known_fopt": -1.0,
     "n": 4,
-    "m": 4
+    "m": 4,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 264,
@@ -3432,10 +4092,16 @@
     ],
     "constraint_values": [],
     "iterations": 13,
-    "solve_time": 0.002949083,
+    "solve_time": 0.002136,
     "known_fopt": -44.0,
     "n": 4,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 270,
@@ -3467,10 +4133,16 @@
     ],
     "constraint_values": [],
     "iterations": 11,
-    "solve_time": 0.002935791,
+    "solve_time": 0.002186458,
     "known_fopt": -1.0,
     "n": 5,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 325,
@@ -3495,10 +4167,16 @@
     ],
     "constraint_values": [],
     "iterations": 14,
-    "solve_time": 0.00383625,
+    "solve_time": 0.002845917,
     "known_fopt": 3.7913414,
     "n": 2,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 335,
@@ -3525,10 +4203,16 @@
     ],
     "constraint_values": [],
     "iterations": 25,
-    "solve_time": 0.003744792,
+    "solve_time": 0.002827,
     "known_fopt": null,
     "n": 3,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 338,
@@ -3555,10 +4239,16 @@
     ],
     "constraint_values": [],
     "iterations": 45,
-    "solve_time": 0.007552667,
+    "solve_time": 0.005698375,
     "known_fopt": -10.992806,
     "n": 3,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 339,
@@ -3584,10 +4274,16 @@
     ],
     "constraint_values": [],
     "iterations": 7,
-    "solve_time": 0.001733709,
+    "solve_time": 0.001316375,
     "known_fopt": 3.3616797,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 344,
@@ -3613,10 +4309,16 @@
     ],
     "constraint_values": [],
     "iterations": 7,
-    "solve_time": 0.001365375,
+    "solve_time": 0.000996625,
     "known_fopt": null,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 354,
@@ -3645,94 +4347,37 @@
     ],
     "constraint_values": [],
     "iterations": 10,
-    "solve_time": 0.002273167,
+    "solve_time": 0.001703708,
     "known_fopt": 0.11378385,
     "n": 4,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 374,
-    "status": "Optimal",
-    "objective": 0.23326345259184425,
-    "x": [
-      0.21821145418182,
-      0.2326398444166345,
-      0.2784576416686178,
-      0.2681253414733591,
-      0.21200962864619477,
-      0.12591794431227796,
-      0.03410177104058631,
-      -0.026135782886093355,
-      -0.14223314822104002,
-      0.23326345259184425
-    ],
-    "constraint_multipliers": [
-      -1.1699221268983889e-11,
-      -1.150634384953554e-11,
-      -1.1072780666122986e-11,
-      -1.0717334231370704e-11,
-      -1.0769449582131294e-11,
-      -1.1585464635066443e-11,
-      -1.381538583806701e-11,
-      -1.93761985556128e-11,
-      -3.7989119712615534e-11,
-      -0.17753939059308418,
-      -1.2771350868955472e-10,
-      -1.5631733364417359e-10,
-      -3.339645367597858e-10,
-      -0.015806997632490223,
-      -2.2198811938386935e-9,
-      -1.4304607519556972e-10,
-      -4.7795297195050324e-11,
-      -2.3983236787888226e-11,
-      -1.4929327903283038e-11,
-      -1.0717421232870336e-11,
-      -0.7577075327884772,
-      -1.9788964072429597e-10,
-      -2.6224079012525876e-9,
-      -0.38616855429120456,
-      -2.486343395448965e-10,
-      -1.9155615143222613e-10,
-      -4.90387917316228e-10,
-      -0.18957333422809897,
-      -4.234357146230095e-10,
-      -1.8916241155155217e-10,
-      -2.425709050411114e-10,
-      -1.7432323590898628e-9,
-      -0.1429064383212486,
-      -3.0669356288890476e-10,
-      -1.8378467213928912e-10
-    ],
-    "bound_multipliers_lower": [
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0
-    ],
-    "bound_multipliers_upper": [
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0
-    ],
+    "status": "IpoptStatus(-199)",
+    "objective": null,
+    "x": [],
+    "constraint_multipliers": [],
+    "bound_multipliers_lower": [],
+    "bound_multipliers_upper": [],
     "constraint_values": [],
-    "iterations": 92,
-    "solve_time": 0.032819416,
+    "iterations": 0,
+    "solve_time": 7.08e-7,
     "known_fopt": 0.233264,
     "n": 10,
-    "m": 35
+    "m": 35,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 376,
@@ -3793,9 +4438,15 @@
     ],
     "constraint_values": [],
     "iterations": 23,
-    "solve_time": 0.00597675,
+    "solve_time": 0.004363,
     "known_fopt": -4430.0879,
     "n": 10,
-    "m": 15
+    "m": 15,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   }
 ]

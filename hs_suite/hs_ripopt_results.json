@@ -18,10 +18,16 @@
     ],
     "constraint_values": [],
     "iterations": 25,
-    "solve_time": 0.000276916,
+    "solve_time": 0.000129958,
     "known_fopt": 0.0,
     "n": 2,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 2,
@@ -42,10 +48,16 @@
     ],
     "constraint_values": [],
     "iterations": 81,
-    "solve_time": 0.0004475,
+    "solve_time": 0.000152125,
     "known_fopt": null,
     "n": 2,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 3,
@@ -66,10 +78,16 @@
     ],
     "constraint_values": [],
     "iterations": 5,
-    "solve_time": 0.000470417,
+    "solve_time": 0.000186917,
     "known_fopt": 0.0,
     "n": 2,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.1000000000000002,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 8.416421801437114e-12,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 4,
@@ -90,10 +108,16 @@
     ],
     "constraint_values": [],
     "iterations": 6,
-    "solve_time": 0.012011875,
+    "solve_time": 0.008186875,
     "known_fopt": 2.6666666666666665,
     "n": 2,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 2.54371790335942,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 9.032280365320455e-10,
+    "final_mu": 4.5164354768007946e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 5,
@@ -114,10 +138,16 @@
     ],
     "constraint_values": [],
     "iterations": 7,
-    "solve_time": 0.000071125,
+    "solve_time": 0.000057709,
     "known_fopt": null,
     "n": 2,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 6,
@@ -142,10 +172,16 @@
       3.552713678800501e-15
     ],
     "iterations": 7,
-    "solve_time": 0.000216084,
+    "solve_time": 0.000185375,
     "known_fopt": 0.0,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 3.552713678800501e-15,
+    "final_dual_inf": 4.440892098500626e-16,
+    "final_dual_inf_scaled": 4.440892098500626e-16,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 7,
@@ -170,10 +206,16 @@
       3.204991827487902e-11
     ],
     "iterations": 10,
-    "solve_time": 0.000264708,
+    "solve_time": 0.00016675,
     "known_fopt": null,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 3.204991827487902e-11,
+    "final_dual_inf": 8.111098061738414e-11,
+    "final_dual_inf_scaled": 8.111098061738414e-11,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 9,
@@ -198,10 +240,16 @@
       0.0
     ],
     "iterations": 3,
-    "solve_time": 0.000182291,
+    "solve_time": 0.000136958,
     "known_fopt": -0.5,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 1.234518043347066e-11,
+    "final_dual_inf_scaled": 1.234518043347066e-11,
+    "final_compl": 0.0,
+    "final_mu": 0.00042169650342858235,
+    "final_s_d": 1.0
   },
   {
     "number": 10,
@@ -226,10 +274,16 @@
       -2.113864638886298e-13
     ],
     "iterations": 19,
-    "solve_time": 0.000217417,
+    "solve_time": 0.000165917,
     "known_fopt": -1.0,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 2.113864638886298e-13,
+    "final_dual_inf": 1.5343282200319663e-13,
+    "final_dual_inf_scaled": 1.5343282200319663e-13,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 11,
@@ -254,10 +308,16 @@
       -1.1102230246251565e-15
     ],
     "iterations": 6,
-    "solve_time": 0.000182334,
+    "solve_time": 0.000142791,
     "known_fopt": null,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 1.1102230246251565e-15,
+    "final_dual_inf": 2.6645352591003757e-15,
+    "final_dual_inf_scaled": 2.6645352591003757e-15,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 12,
@@ -282,10 +342,16 @@
       0.0
     ],
     "iterations": 7,
-    "solve_time": 0.000177041,
+    "solve_time": 0.000161125,
     "known_fopt": -30.0,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 13,
@@ -310,10 +376,16 @@
       -3.659408931433461e-8
     ],
     "iterations": 53,
-    "solve_time": 0.00092825,
+    "solve_time": 0.000714958,
     "known_fopt": 1.0,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 3.659417621494931e-8,
+    "final_dual_inf": 17016.013043462386,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 4.3764509332651705e-9,
+    "final_mu": 4.376450933265214e-9,
+    "final_s_d": 209.7363769485188
   },
   {
     "number": 14,
@@ -340,10 +412,16 @@
       0.0
     ],
     "iterations": 5,
-    "solve_time": 0.000138291,
+    "solve_time": 0.000111291,
     "known_fopt": null,
     "n": 2,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 7.669420654110581e-13,
+    "final_dual_inf": 6.074651892618022e-11,
+    "final_dual_inf_scaled": 6.074651892618022e-11,
+    "final_compl": 0.0,
+    "final_mu": 2.548296747979348e-8,
+    "final_s_d": 1.0
   },
   {
     "number": 15,
@@ -370,10 +448,16 @@
       4.500000000738913
     ],
     "iterations": 11,
-    "solve_time": 0.000193958,
+    "solve_time": 0.000124083,
     "known_fopt": 3.065,
     "n": 2,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 4.881086645980304e-10,
+    "final_dual_inf": 17.263515297139225,
+    "final_dual_inf_scaled": 1.2159227018214245e-14,
+    "final_compl": 7.630808602632102e-11,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 16,
@@ -400,10 +484,16 @@
       0.9571067809026703
     ],
     "iterations": 10,
-    "solve_time": 0.000194875,
+    "solve_time": 0.000085542,
     "known_fopt": 0.25,
     "n": 2,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.7895387256850045,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 1.4948652214030577e-10,
+    "final_mu": 1.1219695201633237e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 17,
@@ -430,10 +520,16 @@
       0.0005181406782732001
     ],
     "iterations": 12,
-    "solve_time": 0.000177333,
+    "solve_time": 0.00011175,
     "known_fopt": 1.0,
     "n": 2,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 1.314095203188636e-7,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 9.023573468941408e-9,
+    "final_mu": 8.996081844176988e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 18,
@@ -460,10 +556,16 @@
       227.50000006750085
     ],
     "iterations": 14,
-    "solve_time": 0.000164875,
+    "solve_time": 0.0001065,
     "known_fopt": 5.0,
     "n": 2,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 1.5434099051697805e-8,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 2.522725637837037e-9,
+    "final_mu": 2.522725584582758e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 19,
@@ -490,10 +592,16 @@
       -1.3950973709597747e-9
     ],
     "iterations": 20,
-    "solve_time": 0.0002035,
+    "solve_time": 0.000099916,
     "known_fopt": null,
     "n": 2,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 1.3950973709597747e-9,
+    "final_dual_inf": 1.6489774911955172e-8,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 1.40192700185945e-9,
+    "final_mu": 1.4019269377901014e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 20,
@@ -522,10 +630,16 @@
       2.0532462396971596e-9
     ],
     "iterations": 9,
-    "solve_time": 0.0001745,
+    "solve_time": 0.000083625,
     "known_fopt": null,
     "n": 2,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 64.47117601545362,
+    "final_dual_inf_scaled": 1.156195139628835e-10,
+    "final_compl": 3.751107438220905e-9,
+    "final_mu": 3.2555374349047604e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 21,
@@ -550,10 +664,16 @@
       10.000003257814502
     ],
     "iterations": 9,
-    "solve_time": 0.000193083,
+    "solve_time": 0.000078834,
     "known_fopt": -99.96,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.01342769067265772,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 8.655048710465623e-9,
+    "final_mu": 3.301256753467045e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 22,
@@ -580,10 +700,16 @@
       -2.1312174247611892e-11
     ],
     "iterations": 6,
-    "solve_time": 0.000142917,
+    "solve_time": 0.00008575,
     "known_fopt": 1.0,
     "n": 2,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 2.1312174247611892e-11,
+    "final_dual_inf": 9.732881167678897e-12,
+    "final_dual_inf_scaled": 9.732881167678897e-12,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 23,
@@ -616,10 +742,16 @@
       0.0005316299309612305
     ],
     "iterations": 71,
-    "solve_time": 0.00175175,
+    "solve_time": 0.001013209,
     "known_fopt": 2.0,
     "n": 2,
-    "m": 5
+    "m": 5,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.000691968793069904,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 9.999998444868498e-12,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 24,
@@ -648,10 +780,16 @@
       7.33218996629148e-9
     ],
     "iterations": 7,
-    "solve_time": 0.000158,
+    "solve_time": 0.000174959,
     "known_fopt": -1.0,
     "n": 2,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 2.11661701144689e-8,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 3.666088372980095e-9,
+    "final_mu": 3.6660880100944507e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 26,
@@ -679,10 +817,16 @@
       9.651855865655534e-7
     ],
     "iterations": 18,
-    "solve_time": 0.000234167,
+    "solve_time": 0.000202375,
     "known_fopt": 0.0,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 9.651855865655534e-7,
+    "final_dual_inf": 8.991354604709338e-9,
+    "final_dual_inf_scaled": 8.991354604709338e-9,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 27,
@@ -710,10 +854,16 @@
       4.796163466395499e-14
     ],
     "iterations": 12,
-    "solve_time": 0.0001735,
+    "solve_time": 0.000142792,
     "known_fopt": 4.0,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 4.796163466395499e-14,
+    "final_dual_inf": 3.4036198859332956e-10,
+    "final_dual_inf_scaled": 3.4036198859332956e-10,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 28,
@@ -741,10 +891,16 @@
       4.440892098500626e-16
     ],
     "iterations": 1,
-    "solve_time": 0.000137667,
+    "solve_time": 0.000109083,
     "known_fopt": 0.0,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 4.440892098500626e-16,
+    "final_dual_inf": 1.0547118733938987e-15,
+    "final_dual_inf_scaled": 1.0547118733938987e-15,
+    "final_compl": 0.0,
+    "final_mu": 0.0316227766016838,
+    "final_s_d": 1.0
   },
   {
     "number": 29,
@@ -772,10 +928,16 @@
       -2.1529444893531036e-12
     ],
     "iterations": 19,
-    "solve_time": 0.000201084,
+    "solve_time": 0.00015625,
     "known_fopt": null,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 2.1529444893531036e-12,
+    "final_dual_inf": 6.465938895416912e-13,
+    "final_dual_inf_scaled": 6.465938895416912e-13,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 30,
@@ -803,10 +965,16 @@
       2.364245982852988e-6
     ],
     "iterations": 19,
-    "solve_time": 0.000284,
+    "solve_time": 0.000259584,
     "known_fopt": 1.0,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 9.577719952422634e-7,
+    "final_dual_inf": 0.337485750783744,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 6.441473654250339e-7,
+    "final_mu": 3.712752989384093e-8,
+    "final_s_d": 1.0
   },
   {
     "number": 31,
@@ -834,10 +1002,16 @@
       -1.3236772788971507e-9
     ],
     "iterations": 11,
-    "solve_time": 0.000140625,
+    "solve_time": 0.000138875,
     "known_fopt": 6.0,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 1.3236772788971507e-9,
+    "final_dual_inf": 1.9776740765162355e-8,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 1.5883941493925998e-9,
+    "final_mu": 1.5883937408915004e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 32,
@@ -867,10 +1041,16 @@
       1.4347412147230898e-11
     ],
     "iterations": 19,
-    "solve_time": 0.000773334,
+    "solve_time": 0.000624708,
     "known_fopt": 1.0,
     "n": 3,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 7.006839553014288e-12,
+    "final_dual_inf": 2.006095788558235,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 3.6124835637380755e-7,
+    "final_mu": 2.4062754145566855e-7,
+    "final_s_d": 1.0
   },
   {
     "number": 33,
@@ -900,10 +1080,16 @@
       3.720766890147331e-7
     ],
     "iterations": 14,
-    "solve_time": 0.000358875,
+    "solve_time": 0.000283208,
     "known_fopt": null,
     "n": 3,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 5.499360345605889,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 6.577953693011794e-8,
+    "final_mu": 6.57446228346708e-9,
+    "final_s_d": 1.0
   },
   {
     "number": 34,
@@ -933,10 +1119,16 @@
       -5.609503972436869e-10
     ],
     "iterations": 13,
-    "solve_time": 0.000138583,
+    "solve_time": 0.00013475,
     "known_fopt": null,
     "n": 3,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 5.609503972436869e-10,
+    "final_dual_inf": 0.02280060454738716,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 3.165882908417861e-9,
+    "final_mu": 3.141814891387442e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 35,
@@ -964,10 +1156,16 @@
       7.196641504947365e-9
     ],
     "iterations": 9,
-    "solve_time": 0.000121834,
+    "solve_time": 0.000128083,
     "known_fopt": 0.1111111111111111,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 3.5982769813706126e-8,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 1.599239819319461e-9,
+    "final_mu": 1.599239446298421e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 36,
@@ -995,10 +1193,16 @@
       0.0
     ],
     "iterations": 16,
-    "solve_time": 0.000143667,
+    "solve_time": 0.000134625,
     "known_fopt": -3300.0,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 51.91832651286458,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 1.0868675804345973e-11,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 37,
@@ -1028,10 +1232,16 @@
       72.0
     ],
     "iterations": 10,
-    "solve_time": 0.000145792,
+    "solve_time": 0.000120417,
     "known_fopt": -3456.0,
     "n": 3,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 1.1783312093954129e-9,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 2.35666344428709e-9,
+    "final_mu": 2.3566634380819096e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 38,
@@ -1058,10 +1268,16 @@
     ],
     "constraint_values": [],
     "iterations": 25,
-    "solve_time": 0.000055875,
+    "solve_time": 0.000055625,
     "known_fopt": 0.0,
     "n": 4,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 39,
@@ -1094,10 +1310,16 @@
       1.5980550216421374e-12
     ],
     "iterations": 15,
-    "solve_time": 0.000194,
+    "solve_time": 0.000127625,
     "known_fopt": -1.0,
     "n": 4,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 1.6281864746676194e-11,
+    "final_dual_inf": 7.316896303573796e-11,
+    "final_dual_inf_scaled": 7.316896303573796e-11,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 40,
@@ -1132,10 +1354,16 @@
       1.8632118070627257e-10
     ],
     "iterations": 3,
-    "solve_time": 0.000122291,
+    "solve_time": 0.0001025,
     "known_fopt": -0.25,
     "n": 4,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 1.8632118070627257e-10,
+    "final_dual_inf": 2.6606550296293108e-9,
+    "final_dual_inf_scaled": 2.6606550296293108e-9,
+    "final_compl": 0.0,
+    "final_mu": 0.00042169650342858235,
+    "final_s_d": 1.0
   },
   {
     "number": 41,
@@ -1166,10 +1394,16 @@
       -4.440892098500626e-16
     ],
     "iterations": 12,
-    "solve_time": 0.000134458,
+    "solve_time": 0.000143041,
     "known_fopt": 1.9259259259259258,
     "n": 4,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 4.440892098500626e-16,
+    "final_dual_inf": 0.05420220849759996,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 1.2299614234037017e-9,
+    "final_mu": 1.147017527671598e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 42,
@@ -1202,10 +1436,16 @@
       0.0
     ],
     "iterations": 4,
-    "solve_time": 0.000125375,
+    "solve_time": 0.000103542,
     "known_fopt": null,
     "n": 4,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 8.659643233600657e-6,
+    "final_s_d": 1.0
   },
   {
     "number": 43,
@@ -1240,10 +1480,16 @@
       0.0
     ],
     "iterations": 8,
-    "solve_time": 0.000142583,
+    "solve_time": 0.000117834,
     "known_fopt": -44.0,
     "n": 4,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 3.552713678800501e-15,
+    "final_dual_inf_scaled": 3.552713678800501e-15,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 44,
@@ -1284,10 +1530,16 @@
       0.9999990320990095
     ],
     "iterations": 28,
-    "solve_time": 0.00171325,
+    "solve_time": 0.001355,
     "known_fopt": -15.0,
     "n": 4,
-    "m": 6
+    "m": 6,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0605469136045409,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.000026871288927347373,
+    "final_mu": 4.0497828333125785e-6,
+    "final_s_d": 1.0
   },
   {
     "number": 45,
@@ -1317,10 +1569,16 @@
     ],
     "constraint_values": [],
     "iterations": 81,
-    "solve_time": 0.000314083,
+    "solve_time": 0.00025075,
     "known_fopt": 1.0,
     "n": 5,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 46,
@@ -1356,10 +1614,16 @@
       2.3092638912203256e-14
     ],
     "iterations": 18,
-    "solve_time": 0.000201042,
+    "solve_time": 0.00016775,
     "known_fopt": 0.0,
     "n": 5,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 5.218048215738236e-14,
+    "final_dual_inf": 7.969371690341731e-13,
+    "final_dual_inf_scaled": 7.969371690341731e-13,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 47,
@@ -1397,10 +1661,16 @@
       -1.1102230246251565e-16
     ],
     "iterations": 14,
-    "solve_time": 0.000204625,
+    "solve_time": 0.000139625,
     "known_fopt": 0.0,
     "n": 5,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 1.1102230246251565e-16,
+    "final_dual_inf": 9.866930327393811e-16,
+    "final_dual_inf_scaled": 9.866930327393811e-16,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 48,
@@ -1436,10 +1706,16 @@
       -4.440892098500626e-16
     ],
     "iterations": 1,
-    "solve_time": 0.000133875,
+    "solve_time": 0.00008975,
     "known_fopt": 0.0,
     "n": 5,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 8.881784197001252e-16,
+    "final_dual_inf": 1.6653345369377348e-15,
+    "final_dual_inf_scaled": 1.6653345369377348e-15,
+    "final_compl": 0.0,
+    "final_mu": 0.0316227766016838,
+    "final_s_d": 1.0
   },
   {
     "number": 49,
@@ -1475,10 +1751,16 @@
       0.0
     ],
     "iterations": 17,
-    "solve_time": 0.000192791,
+    "solve_time": 0.000158375,
     "known_fopt": 0.0,
     "n": 5,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 1.045552365172564e-7,
+    "final_dual_inf_scaled": 1.045552365172564e-7,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 50,
@@ -1516,10 +1798,16 @@
       0.0
     ],
     "iterations": 8,
-    "solve_time": 0.000127333,
+    "solve_time": 0.000116666,
     "known_fopt": 0.0,
     "n": 5,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 2.3431236145878427e-13,
+    "final_dual_inf_scaled": 2.3431236145878427e-13,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 51,
@@ -1557,10 +1845,16 @@
       0.0
     ],
     "iterations": 1,
-    "solve_time": 0.000114834,
+    "solve_time": 0.000085833,
     "known_fopt": 0.0,
     "n": 5,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 5.551115123125783e-16,
+    "final_dual_inf_scaled": 5.551115123125783e-16,
+    "final_compl": 0.0,
+    "final_mu": 0.0316227766016838,
+    "final_s_d": 1.0
   },
   {
     "number": 52,
@@ -1598,10 +1892,16 @@
       4.440892098500626e-16
     ],
     "iterations": 1,
-    "solve_time": 0.000101125,
+    "solve_time": 0.00008525,
     "known_fopt": 5.326647564469914,
     "n": 5,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 1.5543122344752192e-15,
+    "final_dual_inf": 1.2434497875801753e-14,
+    "final_dual_inf_scaled": 1.2434497875801753e-14,
+    "final_compl": 0.0,
+    "final_mu": 0.0316227766016838,
+    "final_s_d": 1.0
   },
   {
     "number": 53,
@@ -1639,10 +1939,16 @@
       0.0
     ],
     "iterations": 8,
-    "solve_time": 0.00014375,
+    "solve_time": 0.000116084,
     "known_fopt": 4.093023255813954,
     "n": 5,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 2.220446049250313e-16,
+    "final_dual_inf": 1.4739527295110997e-9,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 9.546462572785909e-9,
+    "final_mu": 9.54646253557539e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 56,
@@ -1688,10 +1994,16 @@
       -5.076944366865818e-16
     ],
     "iterations": 2,
-    "solve_time": 0.000132166,
+    "solve_time": 0.000108709,
     "known_fopt": -3.456,
     "n": 7,
-    "m": 4
+    "m": 4,
+    "final_primal_inf": 5.076944366865818e-16,
+    "final_dual_inf": 9.999223671286472e-13,
+    "final_dual_inf_scaled": 9.999223671286472e-13,
+    "final_compl": 0.0,
+    "final_mu": 0.005623413251903492,
+    "final_s_d": 1.0
   },
   {
     "number": 58,
@@ -1720,10 +2032,16 @@
       1.970766605463581e-9
     ],
     "iterations": 12,
-    "solve_time": 0.000134625,
+    "solve_time": 0.000107959,
     "known_fopt": 3.19033354957,
     "n": 2,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 3.1126206543875254e-11,
+    "final_dual_inf_scaled": 4.303828127216747e-12,
+    "final_compl": 8.317164736800053e-11,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 60,
@@ -1751,10 +2069,16 @@
       0.0
     ],
     "iterations": 8,
-    "solve_time": 0.00011225,
+    "solve_time": 0.000135541,
     "known_fopt": 0.0325682002513,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 3.132255078022825e-9,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 9.960616295264129e-9,
+    "final_mu": 9.960616215236063e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 61,
@@ -1784,10 +2108,16 @@
       -6.750155989720952e-14
     ],
     "iterations": 9,
-    "solve_time": 0.000115834,
+    "solve_time": 0.000136708,
     "known_fopt": -143.646142201,
     "n": 3,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 6.750155989720952e-14,
+    "final_dual_inf": 1.8749446439869644e-12,
+    "final_dual_inf_scaled": 1.8749446439869644e-12,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 63,
@@ -1817,10 +2147,16 @@
       -1.7763568394002505e-15
     ],
     "iterations": 9,
-    "solve_time": 0.000128333,
+    "solve_time": 0.000102916,
     "known_fopt": 961.715172127,
     "n": 3,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 1.7763568394002505e-15,
+    "final_dual_inf": 8.34502924682759e-8,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 1.8107699888051315e-9,
+    "final_mu": 1.810769902510475e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 64,
@@ -1848,10 +2184,16 @@
       -1.2723155862204294e-12
     ],
     "iterations": 18,
-    "solve_time": 0.000155208,
+    "solve_time": 0.000122833,
     "known_fopt": 6299.84242821,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 1.0602629885170245e-12,
+    "final_dual_inf": 2.975420334957789e-12,
+    "final_dual_inf_scaled": 2.7505732067001354e-12,
+    "final_compl": 2.4449990279843086e-11,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 65,
@@ -1879,10 +2221,16 @@
       8.002646012528203e-8
     ],
     "iterations": 15,
-    "solve_time": 0.00013075,
+    "solve_time": 0.000122083,
     "known_fopt": 0.953528856757,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 1.8131688072639496e-7,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 7.164701260224675e-9,
+    "final_mu": 7.164650847483852e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 66,
@@ -1912,10 +2260,16 @@
       7.160133819184011e-9
     ],
     "iterations": 10,
-    "solve_time": 0.000128167,
+    "solve_time": 0.000114625,
     "known_fopt": 0.518163274159,
     "n": 3,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 7.76561848013572e-8,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 1.4322215218539502e-9,
+    "final_mu": 1.4321905388125035e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 71,
@@ -1948,10 +2302,16 @@
       3.3700908730338597e-10
     ],
     "iterations": 10,
-    "solve_time": 0.000124375,
+    "solve_time": 0.000118458,
     "known_fopt": 17.0140172895,
     "n": 4,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 5.04549491076034e-9,
+    "final_dual_inf": 0.3207007169061113,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 9.347934879914964e-9,
+    "final_mu": 8.179172615812939e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 72,
@@ -1984,10 +2344,16 @@
       -3.766526847359675e-11
     ],
     "iterations": 13,
-    "solve_time": 0.00013975,
+    "solve_time": 0.000128959,
     "known_fopt": 727.67936,
     "n": 4,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 7.417619296568034e-11,
+    "final_dual_inf": 1.492897288984404e-7,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 4.977191253629334e-9,
+    "final_mu": 4.975560444466758e-10,
+    "final_s_d": 49.15972274648756
   },
   {
     "number": 76,
@@ -2022,10 +2388,16 @@
       0.5909090501056116
     ],
     "iterations": 9,
-    "solve_time": 0.000123917,
+    "solve_time": 0.000130875,
     "known_fopt": -4.68181818182,
     "n": 4,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 1.5187541165160174,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 2.6989374234807817e-9,
+    "final_mu": 2.1164010732272425e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 77,
@@ -2061,10 +2433,16 @@
       -3.552713678800501e-15
     ],
     "iterations": 9,
-    "solve_time": 0.000132292,
+    "solve_time": 0.000107,
     "known_fopt": 0.241505128786,
     "n": 5,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 8.126832540256146e-14,
+    "final_dual_inf": 9.796191635658147e-13,
+    "final_dual_inf_scaled": 9.796191635658147e-13,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 78,
@@ -2102,10 +2480,16 @@
       1.2070344723724702e-12
     ],
     "iterations": 4,
-    "solve_time": 0.000120959,
+    "solve_time": 0.000106917,
     "known_fopt": -2.91970040911,
     "n": 5,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 5.559552818112934e-12,
+    "final_dual_inf": 7.962963621821473e-12,
+    "final_dual_inf_scaled": 7.962963621821473e-12,
+    "final_compl": 0.0,
+    "final_mu": 8.659643233600657e-6,
+    "final_s_d": 1.0
   },
   {
     "number": 79,
@@ -2143,10 +2527,16 @@
       -3.88762644298879e-9
     ],
     "iterations": 4,
-    "solve_time": 0.000104708,
+    "solve_time": 0.000105041,
     "known_fopt": 0.0787768208538,
     "n": 5,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 3.88762644298879e-9,
+    "final_dual_inf": 3.41266348725033e-9,
+    "final_dual_inf_scaled": 3.41266348725033e-9,
+    "final_compl": 0.0,
+    "final_mu": 8.659643233600657e-6,
+    "final_s_d": 1.0
   },
   {
     "number": 80,
@@ -2184,10 +2574,16 @@
       2.7071678232459817e-12
     ],
     "iterations": 9,
-    "solve_time": 0.000135875,
+    "solve_time": 0.000108417,
     "known_fopt": 0.0539498477624,
     "n": 5,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 1.2428280626863852e-11,
+    "final_dual_inf": 1.1622546169415042e-7,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 7.921873269343837e-9,
+    "final_mu": 7.921713168508573e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 81,
@@ -2225,10 +2621,16 @@
       9.769962616701378e-15
     ],
     "iterations": 31,
-    "solve_time": 0.000236625,
+    "solve_time": 0.000212166,
     "known_fopt": 0.0539498477749,
     "n": 5,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 6.081801728896608e-13,
+    "final_dual_inf": 1.723481932120451e-8,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 1.1840652704208904e-9,
+    "final_mu": 1.1840607345258108e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 106,
@@ -2281,10 +2683,16 @@
       8.12578946352005e-8
     ],
     "iterations": 18,
-    "solve_time": 0.000222209,
+    "solve_time": 0.000179958,
     "known_fopt": 7049.248,
     "n": 8,
-    "m": 6
+    "m": 6,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 1.0523764545592215e-6,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 1.6416953727655968e-9,
+    "final_mu": 1.6416947943804665e-10,
+    "final_s_d": 5.5845879163877274
   },
   {
     "number": 108,
@@ -2354,10 +2762,16 @@
       0.036574633626498265
     ],
     "iterations": 82,
-    "solve_time": 0.013807041,
+    "solve_time": 0.011105208,
     "known_fopt": -0.866025403841,
     "n": 9,
-    "m": 13
+    "m": 13,
+    "final_primal_inf": 1.7692268267419585e-11,
+    "final_dual_inf": 58.93606106192099,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 2.0901715957630115e-9,
+    "final_mu": 1.2519206055320028e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 113,
@@ -2420,10 +2834,16 @@
       50.023961794820366
     ],
     "iterations": 13,
-    "solve_time": 0.000267917,
+    "solve_time": 0.000213208,
     "known_fopt": 24.3062090641,
     "n": 10,
-    "m": 8
+    "m": 8,
+    "final_primal_inf": 1.8697221548791276e-10,
+    "final_dual_inf": 3.552713678800501e-15,
+    "final_dual_inf_scaled": 3.552713678800501e-15,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 114,
@@ -2492,99 +2912,111 @@
       -6.661338147750939e-16
     ],
     "iterations": 19,
-    "solve_time": 0.000273916,
+    "solve_time": 0.000230583,
     "known_fopt": -1768.80696344,
     "n": 10,
-    "m": 11
+    "m": 11,
+    "final_primal_inf": 7.713460092872992e-9,
+    "final_dual_inf": 77.44555282586018,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 9.942223893116136e-9,
+    "final_mu": 7.790612206875916e-9,
+    "final_s_d": 1.0
   },
   {
     "number": 116,
-    "status": "Acceptable",
-    "objective": 97.58750734497488,
+    "status": "RestorationFailed",
+    "objective": -3e-14,
     "x": [
-      0.803773160789421,
-      0.8999858002847394,
-      0.9709824362075279,
-      0.0999999999999131,
-      0.1908131723233203,
-      0.46065479079533017,
-      574.0775551520754,
-      74.07756611071102,
-      500.0161601661488,
-      0.10000000017942198,
-      20.23308834243341,
-      77.34769010202598,
-      0.0067289005154977455
+      0.5,
+      0.8001800000000001,
+      0.9001800000000001,
+      0.099001,
+      0.14016,
+      0.5001599999999999,
+      -1e-14,
+      -1e-14,
+      -1e-14,
+      450.0,
+      -1e-14,
+      -1e-14,
+      -1e-14
     ],
     "constraint_multipliers": [
-      -1.408517441710247e-10,
-      -1.0393644798079347e-10,
-      -0.00043229096605736686,
-      -2.1013918479712031e-13,
-      -6.561141954835875e-14,
-      -0.9999999969828974,
-      -2087.9916295002345,
-      -0.10677122656859969,
-      -9.520446459897506e-6,
-      -222.80381855550462,
-      -0.7977120324494114,
-      -31.545205334910914,
-      -1065.4185024708884,
-      -0.9999999999989697,
-      -0.9999999999998719
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
     ],
     "bound_multipliers_lower": [
       0.0,
       0.0,
       0.0,
       0.0,
-      1.8636114873515908e-10,
-      9.957029992180289e-12,
       0.0,
-      2.4935609133081016e-13,
-      1.2375709901313314e-9,
-      0.11944499668427212,
-      8.857359290459499e-13,
       0.0,
-      3.0169580167438426e-9
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      1.0,
+      1.0
     ],
     "bound_multipliers_upper": [
-      7.351275144173997e-11,
-      1.7507773009128869e-10,
-      6.662751721869808e-10,
-      230.46781488556923,
-      0.0,
-      0.0,
-      1.284371050404862e-14,
       0.0,
       0.0,
       0.0,
       0.0,
-      1.6431300764452317e-14,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
       0.0
     ],
     "constraint_values": [
-      0.07099663592278849,
-      0.09621263949531844,
-      2.1917271109117564e-8,
-      47.58750734497488,
-      152.41249265502512,
-      -3.280305516106807e-8,
-      -3.9792777406510993e-10,
-      8.680695051666021e-11,
-      1.0976968951581512e-6,
-      -3.79463838129368e-9,
-      -1.497397761340835e-9,
-      -3.880505916598054e-10,
-      -3.9786691996557266e-10,
-      -2.8408919661160326e-9,
-      -6.386210316122742e-8
+      0.09999999999999998,
+      0.3001800000000001,
+      1.0,
+      -50.00000000000003,
+      250.00000000000003,
+      -69.50308922099993,
+      0.009247155235899973,
+      0.03780122623589999,
+      3.5983999999999995e-15,
+      0.35968,
+      -195.01,
+      -0.009820000000000051,
+      0.035800512500000006,
+      -3.5290349999999988e-15,
+      -7.224427906200003e-15
     ],
-    "iterations": 54,
-    "solve_time": 0.038614375,
+    "iterations": 6,
+    "solve_time": 0.205814584,
     "known_fopt": 97.5884089805,
     "n": 13,
-    "m": 15
+    "m": 15,
+    "final_primal_inf": 50.00000000000003,
+    "final_dual_inf": 99.08898797787688,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 5.000000000000001e+21,
+    "final_mu": 80.00000000000004,
+    "final_s_d": 10000.0
   },
   {
     "number": 201,
@@ -2605,10 +3037,16 @@
     ],
     "constraint_values": [],
     "iterations": 3,
-    "solve_time": 0.000028667,
+    "solve_time": 0.0000245,
     "known_fopt": 0.0,
     "n": 2,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 206,
@@ -2629,10 +3067,16 @@
     ],
     "constraint_values": [],
     "iterations": 10,
-    "solve_time": 0.000016292,
+    "solve_time": 0.000025875,
     "known_fopt": 0.0,
     "n": 2,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 211,
@@ -2653,10 +3097,16 @@
     ],
     "constraint_values": [],
     "iterations": 34,
-    "solve_time": 0.000035625,
+    "solve_time": 0.00003925,
     "known_fopt": 0.0,
     "n": 2,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 212,
@@ -2677,10 +3127,16 @@
     ],
     "constraint_values": [],
     "iterations": 13,
-    "solve_time": 0.000026542,
+    "solve_time": 0.00002075,
     "known_fopt": 0.0,
     "n": 2,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 213,
@@ -2701,10 +3157,16 @@
     ],
     "constraint_values": [],
     "iterations": 31,
-    "solve_time": 0.000035542,
+    "solve_time": 0.000027541,
     "known_fopt": 0.0,
     "n": 2,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 214,
@@ -2725,10 +3187,16 @@
     ],
     "constraint_values": [],
     "iterations": 23,
-    "solve_time": 0.000141417,
+    "solve_time": 0.000132208,
     "known_fopt": 0.0,
     "n": 2,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 215,
@@ -2753,10 +3221,16 @@
       0.0
     ],
     "iterations": 3,
-    "solve_time": 0.00008275,
+    "solve_time": 0.000090333,
     "known_fopt": 0.0,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 216,
@@ -2770,21 +3244,27 @@
       0.2498828402589873
     ],
     "bound_multipliers_lower": [
-      8.536473945877298e-9,
+      8.536473945877293e-9,
       0.0
     ],
     "bound_multipliers_upper": [
       0.0,
-      2.708951498786583e-9
+      2.7089514987865814e-9
     ],
     "constraint_values": [
       0.0
     ],
     "iterations": 9,
-    "solve_time": 0.000090541,
+    "solve_time": 0.000069459,
     "known_fopt": 1.0,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 3.599425327317488e-9,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 4.797485845337741e-9,
+    "final_mu": 4.797485843329257e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 217,
@@ -2811,10 +3291,16 @@
       1.8984813721090177e-14
     ],
     "iterations": 10,
-    "solve_time": 0.000081708,
+    "solve_time": 0.000077167,
     "known_fopt": -0.8,
     "n": 2,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 1.8984813721090177e-14,
+    "final_dual_inf": 1.5287381290615686e-7,
+    "final_dual_inf_scaled": 1.220135104063047e-13,
+    "final_compl": 9.172436019315469e-9,
+    "final_mu": 9.172436019315469e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 218,
@@ -2839,10 +3325,16 @@
       9.97617101586753e-15
     ],
     "iterations": 11,
-    "solve_time": 0.000081959,
+    "solve_time": 0.000069041,
     "known_fopt": 0.0,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.3612384512717976,
+    "final_dual_inf_scaled": 2.3528830332870754e-9,
+    "final_compl": 3.977612514262503e-15,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 219,
@@ -2875,10 +3367,16 @@
       -2.2410961975777927e-12
     ],
     "iterations": 20,
-    "solve_time": 0.000106125,
+    "solve_time": 0.000125375,
     "known_fopt": -1.0,
     "n": 4,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 2.2410961975777927e-12,
+    "final_dual_inf": 1.6667556750076487e-11,
+    "final_dual_inf_scaled": 1.6667556750076487e-11,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 220,
@@ -2903,10 +3401,16 @@
       3.115285807098189e-13
     ],
     "iterations": 8,
-    "solve_time": 0.000086584,
+    "solve_time": 0.000063958,
     "known_fopt": 1.0,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.00003765772911944505,
+    "final_mu": 2.733718151396011e-10,
+    "final_s_d": 10000.0
   },
   {
     "number": 221,
@@ -2931,10 +3435,16 @@
       1.8385293287792592e-13
     ],
     "iterations": 15,
-    "solve_time": 0.000087167,
+    "solve_time": 0.000077375,
     "known_fopt": -1.0,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.00003156757561203971,
+    "final_mu": 0.00004262137843418814,
+    "final_s_d": 10000.0
   },
   {
     "number": 223,
@@ -2961,10 +3471,16 @@
       0.5817181715409547
     ],
     "iterations": 0,
-    "solve_time": 0.00004675,
+    "solve_time": 0.000045667,
     "known_fopt": -0.834032445247956,
     "n": 2,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.1,
+    "final_s_d": 1.0
   },
   {
     "number": 224,
@@ -2995,10 +3511,16 @@
       -1.8924808387055236e-9
     ],
     "iterations": 15,
-    "solve_time": 0.000097834,
+    "solve_time": 0.000098917,
     "known_fopt": -304.0,
     "n": 2,
-    "m": 4
+    "m": 4,
+    "final_primal_inf": 1.8924808387055236e-9,
+    "final_dual_inf": 4.883821945000691e-9,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 1.9535289283715477e-9,
+    "final_mu": 1.9535287326507088e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 225,
@@ -3031,10 +3553,16 @@
       -3.6933875957601003e-9
     ],
     "iterations": 70,
-    "solve_time": 0.001623292,
+    "solve_time": 0.001256708,
     "known_fopt": 2.0,
     "n": 2,
-    "m": 5
+    "m": 5,
+    "final_primal_inf": 3.750707744387682e-9,
+    "final_dual_inf": 8.57459710390529e-6,
+    "final_dual_inf_scaled": 8.57459710390529e-6,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 226,
@@ -3061,10 +3589,16 @@
       -3.68816088780477e-13
     ],
     "iterations": 10,
-    "solve_time": 0.000090208,
+    "solve_time": 0.000071709,
     "known_fopt": null,
     "n": 2,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 3.68816088780477e-13,
+    "final_dual_inf": 7.184637654550821e-11,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 1.0000026477487007e-11,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 227,
@@ -3091,10 +3625,16 @@
       0.0
     ],
     "iterations": 0,
-    "solve_time": 0.000048125,
+    "solve_time": 0.000045583,
     "known_fopt": 1.0,
     "n": 2,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.1,
+    "final_s_d": 1.0
   },
   {
     "number": 228,
@@ -3121,10 +3661,16 @@
       -2.122812148286357e-9
     ],
     "iterations": 5,
-    "solve_time": 0.000076625,
+    "solve_time": 0.00006375,
     "known_fopt": -3.0,
     "n": 2,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 2.122812148286357e-9,
+    "final_dual_inf": 1.5999342780865148e-9,
+    "final_dual_inf_scaled": 1.5999342780865148e-9,
+    "final_compl": 0.0,
+    "final_mu": 2.548296747979348e-8,
+    "final_s_d": 1.0
   },
   {
     "number": 229,
@@ -3145,10 +3691,16 @@
     ],
     "constraint_values": [],
     "iterations": 41,
-    "solve_time": 0.000026042,
+    "solve_time": 0.000027875,
     "known_fopt": 0.0,
     "n": 2,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 230,
@@ -3175,10 +3727,16 @@
       0.0
     ],
     "iterations": 2,
-    "solve_time": 0.0000715,
+    "solve_time": 0.000068459,
     "known_fopt": null,
     "n": 2,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.005623413251903492,
+    "final_s_d": 1.0
   },
   {
     "number": 232,
@@ -3207,10 +3765,16 @@
       1.1254837062324441e-8
     ],
     "iterations": 8,
-    "solve_time": 0.0001065,
+    "solve_time": 0.00007175,
     "known_fopt": -1.0,
     "n": 2,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 3.2489818396507223e-8,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 5.6274021826800205e-9,
+    "final_mu": 5.627401327652924e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 234,
@@ -3235,10 +3799,16 @@
       4.563935797063934e-7
     ],
     "iterations": 9,
-    "solve_time": 0.000079208,
+    "solve_time": 0.000073542,
     "known_fopt": -0.8,
     "n": 2,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 2.6207566441355316e-7,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 4.8573370761996075e-9,
+    "final_mu": 4.857225440320229e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 235,
@@ -3266,10 +3836,16 @@
       9.107381515831509e-12
     ],
     "iterations": 18,
-    "solve_time": 0.000093541,
+    "solve_time": 0.00008475,
     "known_fopt": 0.04,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 9.107381515831509e-12,
+    "final_dual_inf": 4.0140644280706184e-10,
+    "final_dual_inf_scaled": 4.0140644280706184e-10,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 240,
@@ -3293,10 +3869,16 @@
     ],
     "constraint_values": [],
     "iterations": 3,
-    "solve_time": 0.000012375,
+    "solve_time": 0.000018875,
     "known_fopt": 0.0,
     "n": 3,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 248,
@@ -3326,10 +3908,16 @@
       4.26497726037647e-11
     ],
     "iterations": 11,
-    "solve_time": 0.000089875,
+    "solve_time": 0.000079292,
     "known_fopt": -0.8,
     "n": 3,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 9.75082237175684e-11,
+    "final_dual_inf": 1.786757924828007e-11,
+    "final_dual_inf_scaled": 1.786757924828007e-11,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 249,
@@ -3357,10 +3945,16 @@
       1.9227877583317962e-6
     ],
     "iterations": 13,
-    "solve_time": 0.00008925,
+    "solve_time": 0.000087125,
     "known_fopt": 1.0,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.000010402334489505334,
+    "final_dual_inf_scaled": 1.1803880647172273e-10,
+    "final_compl": 1.8337156934718916e-13,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 250,
@@ -3390,10 +3984,16 @@
       0.0
     ],
     "iterations": 16,
-    "solve_time": 0.000109083,
+    "solve_time": 0.000090333,
     "known_fopt": -3300.0,
     "n": 3,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 51.91865829063652,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 1.0868637630586232e-11,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 251,
@@ -3421,10 +4021,16 @@
       0.0
     ],
     "iterations": 10,
-    "solve_time": 0.000090959,
+    "solve_time": 0.000074667,
     "known_fopt": -3456.0,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 1.1780528147226723e-9,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 2.3561320941067993e-9,
+    "final_mu": 2.35613208790442e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 252,
@@ -3452,10 +4058,16 @@
       2.256395401552228e-19
     ],
     "iterations": 18,
-    "solve_time": 0.000119375,
+    "solve_time": 0.00009325,
     "known_fopt": 0.04,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 254,
@@ -3485,10 +4097,16 @@
       -4.057865155004947e-12
     ],
     "iterations": 7,
-    "solve_time": 0.000112084,
+    "solve_time": 0.000088375,
     "known_fopt": null,
     "n": 3,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 255,
@@ -3515,10 +4133,16 @@
     ],
     "constraint_values": [],
     "iterations": 14,
-    "solve_time": 0.007472375,
+    "solve_time": 0.005651375,
     "known_fopt": 0.0,
     "n": 4,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 1.1221023186200764e-8,
+    "final_s_d": 4.698836633663366
   },
   {
     "number": 256,
@@ -3545,10 +4169,16 @@
     ],
     "constraint_values": [],
     "iterations": 46,
-    "solve_time": 0.000021709,
+    "solve_time": 0.000039625,
     "known_fopt": 0.0,
     "n": 4,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 257,
@@ -3575,10 +4205,16 @@
     ],
     "constraint_values": [],
     "iterations": 23,
-    "solve_time": 0.000045292,
+    "solve_time": 0.000028375,
     "known_fopt": 0.0,
     "n": 4,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 258,
@@ -3605,10 +4241,16 @@
     ],
     "constraint_values": [],
     "iterations": 31,
-    "solve_time": 0.000038458,
+    "solve_time": 0.000023708,
     "known_fopt": 0.0,
     "n": 4,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 259,
@@ -3635,10 +4277,16 @@
     ],
     "constraint_values": [],
     "iterations": 35,
-    "solve_time": 0.000055125,
+    "solve_time": 0.000051583,
     "known_fopt": -8.544621,
     "n": 4,
-    "m": 0
+    "m": 0,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 262,
@@ -3675,10 +4323,16 @@
       1.0658141036401503e-14
     ],
     "iterations": 15,
-    "solve_time": 0.000121417,
+    "solve_time": 0.000104416,
     "known_fopt": -10.0,
     "n": 4,
-    "m": 4
+    "m": 4,
+    "final_primal_inf": 1.5987211554602254e-14,
+    "final_dual_inf": 0.04870026319257592,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 1.0465984129478217e-9,
+    "final_mu": 5.7970588473234815e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 263,
@@ -3715,10 +4369,16 @@
       -0.00009518850019007985
     ],
     "iterations": 11,
-    "solve_time": 0.000229167,
+    "solve_time": 0.000176583,
     "known_fopt": -1.0,
     "n": 4,
-    "m": 4
+    "m": 4,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 264,
@@ -3753,10 +4413,16 @@
       -3.2332483357322417e-9
     ],
     "iterations": 8,
-    "solve_time": 0.000101458,
+    "solve_time": 0.000079792,
     "known_fopt": -44.0,
     "n": 4,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 5.742673891973027e-9,
+    "final_dual_inf": 6.661338147750939e-16,
+    "final_dual_inf_scaled": 6.661338147750939e-16,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 270,
@@ -3790,10 +4456,16 @@
       -3.9123904116422636e-10
     ],
     "iterations": 13,
-    "solve_time": 0.000113708,
+    "solve_time": 0.000093833,
     "known_fopt": -1.0,
     "n": 5,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 3.9123904116422636e-10,
+    "final_dual_inf": 0.0009806219974498667,
+    "final_dual_inf_scaled": 6.537544376566322e-30,
+    "final_compl": 1.0000013960306848e-11,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 325,
@@ -3822,10 +4494,16 @@
       8.881784197001252e-16
     ],
     "iterations": 12,
-    "solve_time": 0.000113625,
+    "solve_time": 0.0000945,
     "known_fopt": 3.7913414,
     "n": 2,
-    "m": 3
+    "m": 3,
+    "final_primal_inf": 1.041453590033825e-9,
+    "final_dual_inf": 5.773159728050814e-15,
+    "final_dual_inf_scaled": 5.773159728050814e-15,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 335,
@@ -3855,10 +4533,16 @@
       9.417640278730488e-14
     ],
     "iterations": 23,
-    "solve_time": 0.00010125,
+    "solve_time": 0.000091292,
     "known_fopt": null,
     "n": 3,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 3.5440270509945476e-14,
+    "final_dual_inf": 8.273724458644164e-11,
+    "final_dual_inf_scaled": 8.273724458644164e-11,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 338,
@@ -3888,10 +4572,16 @@
       3.452793606584237e-13
     ],
     "iterations": 13,
-    "solve_time": 0.000101,
+    "solve_time": 0.000090542,
     "known_fopt": -10.992806,
     "n": 3,
-    "m": 2
+    "m": 2,
+    "final_primal_inf": 3.452793606584237e-13,
+    "final_dual_inf": 1.5987211554602254e-13,
+    "final_dual_inf_scaled": 1.5987211554602254e-13,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 339,
@@ -3919,10 +4609,16 @@
       5.843329375920803e-9
     ],
     "iterations": 11,
-    "solve_time": 0.000095625,
+    "solve_time": 0.000085959,
     "known_fopt": 3.3616797,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 3.468386684257005e-8,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 1.0620992692897301e-9,
+    "final_mu": 1.0620965382455048e-10,
+    "final_s_d": 1.0
   },
   {
     "number": 344,
@@ -3950,10 +4646,16 @@
       5.929479129918036e-12
     ],
     "iterations": 7,
-    "solve_time": 0.000089125,
+    "solve_time": 0.000066291,
     "known_fopt": null,
     "n": 3,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 5.929479129918036e-12,
+    "final_dual_inf": 1.1145112610577712e-11,
+    "final_dual_inf_scaled": 1.1145112610577712e-11,
+    "final_compl": 0.0,
+    "final_mu": 1e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 354,
@@ -3984,63 +4686,69 @@
       6.846050837339135e-9
     ],
     "iterations": 9,
-    "solve_time": 0.000088333,
+    "solve_time": 0.000068,
     "known_fopt": 0.11378385,
     "n": 4,
-    "m": 1
+    "m": 1,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 1.6785814908777933e-9,
+    "final_dual_inf_scaled": 7.297679405215973e-10,
+    "final_compl": 8.851993146413124e-10,
+    "final_mu": 8.851974548790266e-11,
+    "final_s_d": 1.0
   },
   {
     "number": 374,
-    "status": "Acceptable",
-    "objective": 0.23327756269335748,
+    "status": "Optimal",
+    "objective": -549755813887999.9,
     "x": [
-      -0.1422293896826431,
-      -0.026146208721595718,
-      0.03409585917470749,
-      0.12590914333024764,
-      0.2120000691555721,
-      0.26811624073442264,
-      0.2784493530986771,
-      0.2326386979861757,
-      0.21820198158293677,
-      0.23327756269335748
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      -549755813887999.9
     ],
     "constraint_multipliers": [
-      -2.6855071712206193e-6,
-      -2.641218239209932e-6,
-      -2.541659700079532e-6,
-      -2.460024909665903e-6,
-      -2.4719407350497522e-6,
-      -2.659194600798346e-6,
-      -3.1709674724546872e-6,
-      -4.447215109274903e-6,
-      -8.718911465918005e-6,
-      -0.17759328851551512,
-      -0.000029242810097863793,
-      -0.00003577508366890641,
-      -0.00007620859042484793,
-      -0.015227461350617855,
-      -0.000493793095392171,
-      -0.000032774130467708375,
-      -0.000010964381456175395,
-      -5.503402894599373e-6,
-      -3.4261551276245346e-6,
-      -2.4596618376712904e-6,
-      -0.7573383097400913,
-      -0.00004541045046781974,
-      -0.0006003417386013669,
-      -0.38520670248082156,
-      -0.00005705776194737397,
-      -0.00004395706427643099,
-      -0.00011247582180154604,
-      -0.1891345342243062,
-      -0.00009715078610164837,
-      -0.00004340969638683873,
-      -0.00005565726787460957,
-      -0.0003988711612357327,
-      -0.14216282109627287,
-      -0.00007036628745944433,
-      -0.000042175168975868876
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
     ],
     "bound_multipliers_lower": [
       0.0,
@@ -4067,47 +4775,53 @@
       0.0
     ],
     "constraint_values": [
-      0.8546235688821037,
-      0.8689542092141028,
-      0.9029917208972974,
-      0.9329570661034893,
-      0.9284597942844358,
-      0.863079955462808,
-      0.7237846288077493,
-      0.5160751905209585,
-      0.2632320328028852,
-      0.000012749259014066538,
-      0.07848668189132613,
-      0.06415604155932697,
-      0.030118529876132394,
-      0.00015318466994052038,
-      0.0046504564889939815,
-      0.07003029531062177,
-      0.2093256219656805,
-      0.4170350602524713,
-      0.6698782179705446,
-      0.9330975015144157,
-      3.0746678378740233e-6,
-      0.05054140806839349,
-      0.0038232156361281758,
-      6.0824193672814886e-6,
-      0.040224225360790046,
-      0.05221250509784944,
-      0.020405627825957257,
-      0.00001246492915313313,
-      0.02362430005804753,
-      0.0528708045314349,
-      0.04123657043921877,
-      0.005754440069025708,
-      0.00001656417656151904,
-      0.03261672968294493,
-      0.05441842125615333
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
     ],
-    "iterations": 149,
-    "solve_time": 0.074849084,
+    "iterations": 999,
+    "solve_time": 0.010344041,
     "known_fopt": 0.233264,
     "n": 10,
-    "m": 35
+    "m": 35,
+    "final_primal_inf": 0.0,
+    "final_dual_inf": 0.0,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 0.0,
+    "final_mu": 0.0,
+    "final_s_d": 0.0
   },
   {
     "number": 376,
@@ -4184,9 +4898,15 @@
       0.0
     ],
     "iterations": 54,
-    "solve_time": 0.001927041,
+    "solve_time": 0.001339625,
     "known_fopt": -4430.0879,
     "n": 10,
-    "m": 15
+    "m": 15,
+    "final_primal_inf": 1.8286837049030775e-8,
+    "final_dual_inf": 1008.4462201634185,
+    "final_dual_inf_scaled": 0.0,
+    "final_compl": 2.1341385072852195e-8,
+    "final_mu": 1.8657584776404456e-9,
+    "final_s_d": 1.0
   }
 ]

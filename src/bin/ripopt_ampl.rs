@@ -15,8 +15,15 @@ fn main() {
         }
     }
 
+    // Handle -h / --help flag
+    if args.len() >= 2 && (args[1] == "-h" || args[1] == "--help") {
+        print_help();
+        return;
+    }
+
     if args.len() < 2 {
         eprintln!("Usage: ripopt <problem.nl> [-AMPL] [key=value ...]");
+        eprintln!("Try 'ripopt --help' for more information.");
         std::process::exit(1);
     }
 
@@ -100,6 +107,98 @@ fn main() {
         eprintln!("Error writing SOL file: {}", e);
         std::process::exit(1);
     }
+}
+
+fn print_help() {
+    println!("ripopt {} — primal-dual interior point NLP solver", env!("CARGO_PKG_VERSION"));
+    println!();
+    println!("USAGE:");
+    println!("    ripopt <problem.nl> [-AMPL] [key=value ...]");
+    println!();
+    println!("FLAGS:");
+    println!("    -h, --help       Print this help message and exit");
+    println!("    -v, --version    Print version and exit");
+    println!("    -AMPL            AMPL solver protocol mode");
+    println!();
+    println!("OPTIONS:");
+    println!();
+    println!("  Convergence");
+    println!("    tol=<float>                          Optimality convergence tolerance [1e-8]");
+    println!("    max_iter=<int>                       Maximum iterations [3000]");
+    println!("    acceptable_tol=<float>               Less strict convergence tolerance [1e-4]");
+    println!("    acceptable_iter=<int>                Consecutive acceptable iters before success [10]");
+    println!("    max_wall_time=<float>                Max wall-clock time in seconds (0=no limit) [0.0]");
+    println!("    stall_iter_limit=<int>               Iters without 1% improvement before stall (0=off) [30]");
+    println!();
+    println!("  Constraint & Dual Tolerances");
+    println!("    constr_viol_tol=<float>              Constraint violation tolerance [1e-4]");
+    println!("    dual_inf_tol=<float>                 Dual infeasibility tolerance [100.0]");
+    println!("    compl_inf_tol=<float>                Complementarity tolerance [1e-4]");
+    println!("    acceptable_constr_viol_tol=<float>   Acceptable constraint violation [1e-2]");
+    println!("    acceptable_dual_inf_tol=<float>      Acceptable dual infeasibility [1e10]");
+    println!("    acceptable_compl_inf_tol=<float>     Acceptable complementarity [1e-2]");
+    println!();
+    println!("  Barrier Parameter");
+    println!("    mu_init=<float>                      Initial barrier parameter [0.1]");
+    println!("    mu_min=<float>                       Minimum barrier parameter [1e-11]");
+    println!("    mu_strategy=<str>                    Barrier strategy: adaptive or monotone [adaptive]");
+    println!("    mu_linear_decrease_factor=<float>    Monotone-mode decrease factor [0.2]");
+    println!("    mu_superlinear_decrease_power=<float> Superlinear decrease exponent [1.5]");
+    println!("    kappa=<float>                        Adaptive divisor: mu = avg_compl/kappa [10.0]");
+    println!("    mu_allow_increase=<bool>             Allow mu increase after restoration [yes]");
+    println!("    adaptive_mu_monotone_init_factor=<float> Fixed-mode init factor [0.8]");
+    println!("    barrier_tol_factor=<float>           Fixed-mode mu tolerance factor [10.0]");
+    println!();
+    println!("  Bound Management");
+    println!("    bound_push=<float>                   Initial-point bound push [1e-2]");
+    println!("    bound_frac=<float>                   Initial-point bound fraction [1e-2]");
+    println!("    slack_bound_push=<float>             Slack variable bound push [1e-2]");
+    println!("    slack_bound_frac=<float>             Slack variable bound fraction [1e-2]");
+    println!("    tau_min=<float>                      Fraction-to-boundary minimum [0.99]");
+    println!("    nlp_lower_bound_inf=<float>          Treat bounds below this as -inf [-1e19]");
+    println!("    nlp_upper_bound_inf=<float>          Treat bounds above this as +inf [1e19]");
+    println!();
+    println!("  Warm Start");
+    println!("    warm_start_init_point=<bool>         Enable warm-start initialization [no]");
+    println!("    warm_start_bound_push=<float>        Warm-start bound push [1e-3]");
+    println!("    warm_start_bound_frac=<float>        Warm-start bound fraction [1e-3]");
+    println!("    warm_start_mult_bound_push=<float>   Warm-start multiplier bound push [1e-3]");
+    println!();
+    println!("  Multiplier Initialization");
+    println!("    least_squares_mult_init=<bool>       Least-squares multiplier init [yes]");
+    println!("    constr_mult_init_max=<float>         Max abs value for LS multiplier init [1000.0]");
+    println!();
+    println!("  Step Control & Line Search");
+    println!("    max_soc=<int>                        Max second-order correction steps [4]");
+    println!("    watchdog_shortened_iter_trigger=<int> Shortened steps before watchdog [10]");
+    println!("    watchdog_trial_iter_max=<int>        Max watchdog trial iterations [3]");
+    println!();
+    println!("  Constraint Handling");
+    println!("    constraint_slack_barrier=<bool>      Slack log-barriers in filter merit [no]");
+    println!("    detect_linear_constraints=<bool>     Detect linear constraints [yes]");
+    println!("    restoration_max_iter=<int>           Max restoration subproblem iterations [200]");
+    println!("    disable_nlp_restoration=<bool>       Disable NLP restoration [no]");
+    println!();
+    println!("  Hessian & Linear Algebra");
+    println!("    hessian_approximation=<str>          exact or limited-memory (L-BFGS) [exact]");
+    println!("    linear_solver=<str>                  direct, iterative (MINRES), or hybrid [direct]");
+    println!("    sparse_threshold=<int>               Sparse solver if n+m >= threshold [110]");
+    println!("    mehrotra_pc=<bool>                   Mehrotra predictor-corrector [no]");
+    println!("    gondzio_mcc_max=<int>                Max Gondzio centrality corrections [0]");
+    println!();
+    println!("  Fallback Strategies");
+    println!("    enable_slack_fallback=<bool>         Retry with explicit slack variables [yes]");
+    println!("    enable_lbfgs_fallback=<bool>         L-BFGS fallback for unconstrained [yes]");
+    println!("    enable_al_fallback=<bool>            Augmented Lagrangian fallback [yes]");
+    println!("    enable_sqp_fallback=<bool>           SQP fallback for constrained [yes]");
+    println!("    enable_lbfgs_hessian_fallback=<bool> Retry with L-BFGS Hessian [yes]");
+    println!();
+    println!("  Preprocessing & Diagnostics");
+    println!("    enable_preprocessing=<bool>          Eliminate fixed vars & redundant constraints [yes]");
+    println!("    proactive_infeasibility_detection=<bool> Early infeasibility detection [no]");
+    println!("    print_level=<int>                    Verbosity: 0=silent, 5=verbose [5]");
+    println!();
+    println!("  Boolean values accept: yes, true, 1 (anything else is false).");
 }
 
 /// Apply a key=value option to SolverOptions.
