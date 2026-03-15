@@ -1529,7 +1529,14 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         conservative_opts.gondzio_mcc_max = 0;
         conservative_opts.stall_iter_limit = 0; // was added in v0.4.0
         conservative_opts.proactive_infeasibility_detection = true; // was true pre-v0.4.0
-        conservative_opts.max_iter = options.max_iter.min(500).max(options.max_iter / 3);
+        // For small unconstrained problems, give full iteration budget — problems like
+        // MGH10LS need ~1800 iterations to traverse flat objective landscapes, and
+        // per-iteration cost is negligible at n<=200.
+        conservative_opts.max_iter = if problem.num_constraints() == 0 && n_conservative <= 200 {
+            options.max_iter
+        } else {
+            options.max_iter.min(500).max(options.max_iter / 3)
+        };
         if options.max_wall_time > 0.0 {
             let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
             if remaining <= 0.1 {
@@ -1644,6 +1651,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         let mut lbfgs_opts = options.clone();
         lbfgs_opts.hessian_approximation_lbfgs = true;
         lbfgs_opts.enable_lbfgs_hessian_fallback = false; // prevent recursion
+        lbfgs_opts.stall_iter_limit = 0; // disable stall detection for fallback
         // Cap fallback iterations
         lbfgs_opts.max_iter = options.max_iter.min(500).max(options.max_iter / 3);
         if options.max_wall_time > 0.0 {
