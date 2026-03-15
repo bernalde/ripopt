@@ -5448,15 +5448,45 @@ fn attempt_nlp_restoration<P: NlpProblem>(
         }
         inner_opts.max_wall_time = remaining;
     }
-    // Tighter early stall timeout for the sub-solver to avoid wasting time
+    // Scale early stall timeout by restoration NLP size — large restoration NLPs
+    // (e.g., FEEDLOC with n_resto=867) need more time than the default 3s cap.
+    let resto_dim = resto_nlp.num_variables() + resto_nlp.num_constraints();
     inner_opts.early_stall_timeout = if options.early_stall_timeout > 0.0 {
-        options.early_stall_timeout.min(3.0)
+        if resto_dim > 500 {
+            options.early_stall_timeout // Full timeout for large restoration NLPs
+        } else {
+            options.early_stall_timeout.min(3.0)
+        }
     } else {
         3.0
     };
 
-    // Solve the restoration NLP
+    // Solve the restoration NLP — try primary solver first, then alternative if available
     let result = solve_ipm(&resto_nlp, &inner_opts);
+
+    // If restoration failed and alternative sparse solver is available, retry with it.
+    // NLP restoration sub-problems can be sensitive to AMD ordering (FEEDLOC).
+    let result = if !matches!(result.status, SolveStatus::Optimal | SolveStatus::Acceptable)
+        && !inner_opts.use_alternative_sparse_solver
+        && new_alternative_sparse_solver().is_some()
+        && resto_dim >= inner_opts.sparse_threshold
+    {
+        let mut alt_inner = inner_opts.clone();
+        alt_inner.use_alternative_sparse_solver = true;
+        if options.max_wall_time > 0.0 {
+            let remaining = options.max_wall_time - start_time.elapsed().as_secs_f64();
+            if remaining > 0.5 {
+                alt_inner.max_wall_time = remaining;
+                solve_ipm(&resto_nlp, &alt_inner)
+            } else {
+                result
+            }
+        } else {
+            solve_ipm(&resto_nlp, &alt_inner)
+        }
+    } else {
+        result
+    };
 
     // Extract x_orig from the restoration solution
     let x_nlp: Vec<f64> = result.x[..n].to_vec();
