@@ -448,6 +448,11 @@ fn run_single_solver(name: &str, solver: &str) {
                 if run == 0 {
                     result = Some(r);
                 }
+                // Skip remaining timing runs if this run exhausted most of
+                // the wall time budget — no point re-running a failed solve.
+                if options.max_wall_time > 0.0 && elapsed > options.max_wall_time * 0.8 {
+                    break;
+                }
             }
             let result = result.unwrap();
             let cv = if problem.m > 0 {

@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use crate::convergence;
 use crate::linear_solver::dense::DenseLdl;
 use crate::linear_solver::{LinearSolver, SymmetricMatrix};
@@ -53,6 +55,7 @@ impl RestorationPhase {
         eval_constraints: &dyn Fn(&[f64], &mut [f64]),
         eval_jacobian: &dyn Fn(&[f64], &mut [f64]),
         eval_objective: Option<&dyn Fn(&[f64]) -> f64>,
+        deadline: Option<Instant>,
     ) -> (Vec<f64>, bool) {
         self.active = true;
 
@@ -77,6 +80,15 @@ impl RestorationPhase {
         let mut prev_theta = theta_initial;
 
         for _iter in 0..self.max_iter {
+            // Check deadline every 10 iterations to avoid spending too long
+            if _iter % 10 == 0 {
+                if let Some(dl) = deadline {
+                    if Instant::now() >= dl {
+                        break;
+                    }
+                }
+            }
+
             // Evaluate constraints at current point
             eval_constraints(&x_rest, &mut g);
 
@@ -493,6 +505,7 @@ mod tests {
             &|_x, _g| {},
             &|_x, _vals| {},
             None,
+            None,
         );
 
         assert!(success, "No constraints → immediate success");
@@ -519,6 +532,7 @@ mod tests {
             &|x, g| { g[0] = x[0] + x[1]; },
             &|_x, vals| { vals[0] = 1.0; vals[1] = 1.0; },
             None,
+            None,
         );
 
         assert!(success, "Already feasible → success");
@@ -543,6 +557,7 @@ mod tests {
             &|_theta, _phi| true,
             &|x, g| { g[0] = x[0] + x[1]; },
             &|_x, vals| { vals[0] = 1.0; vals[1] = 1.0; },
+            None,
             None,
         );
 
@@ -572,6 +587,7 @@ mod tests {
             &|x, g| { g[0] = x[0]; },
             &|_x, vals| { vals[0] = 1.0; },
             None,
+            None,
         );
 
         assert!(success, "Linear inequality should be restored");
@@ -599,6 +615,7 @@ mod tests {
             &|x, g| { g[0] = x[0] + x[1]; },
             &|_x, vals| { vals[0] = 1.0; vals[1] = 1.0; },
             None,
+            None,
         );
 
         // Verify bounds are respected
@@ -624,6 +641,7 @@ mod tests {
             &|_theta, _phi| true,
             &|_x, _g| {},
             &|_x, _vals| {},
+            None,
             None,
         );
 

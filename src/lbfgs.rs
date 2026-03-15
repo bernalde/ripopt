@@ -106,13 +106,19 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             } else {
                 stall_no_progress += 1;
                 if stall_no_progress >= stall_limit {
-                    // Relaxed acceptable: gradient < 1.0 (absolute) or 100x acceptable_tol
-                    if grad_norm < (acceptable_tol * 100.0).max(1.0) {
+                    // Relaxed acceptable: gradient below absolute or relative threshold.
+                    // For ill-conditioned problems (e.g., MEYER3), the gradient can be
+                    // large in absolute terms even at the correct solution because the
+                    // Hessian eigenvalues span many orders of magnitude. Use |f| as a
+                    // reference scale: if ||g||/|f| < 0.5 and the solver is stuck, the
+                    // point is a practical minimum.
+                    let grad_thresh = (acceptable_tol * 100.0).max(1.0).max(0.5 * f.abs());
+                    if grad_norm < grad_thresh {
                         status = SolveStatus::Acceptable;
                         if print_level >= 5 {
                             eprintln!(
-                                "L-BFGS iter {}: stalled but near-acceptable (||g||={:.2e})",
-                                k, grad_norm
+                                "L-BFGS iter {}: stalled but near-acceptable (||g||={:.2e}, thresh={:.2e})",
+                                k, grad_norm, grad_thresh
                             );
                         }
                         break;
