@@ -1,459 +1,140 @@
    Compiling ripopt v0.3.0 (/Users/jkitchin/Dropbox/projects/ripopt-v3)
-warning: unused variable: `y_pred`
-   --> examples/sipopt_analytical.rs:331:9
-    |
-331 |     let y_pred = ctx2.result.x[1] + sens_pred.dx_dp[0][1];
-    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_y_pred`
-    |
-    = note: `#[warn(unused_variables)]` on by default
+warning: unused import: `SolveStatus`
+  --> tests/large_scale_benchmark.rs:13:26
+   |
+13 | use ripopt::{NlpProblem, SolveStatus, SolverOptions};
+   |                          ^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
 
-warning: variable does not need to be mutable
-   --> examples/benchmark_solvers.rs:616:17
-    |
-616 |             let mut line = format!("{:<20} {:>6} {:>6} | {:>10.4e} {:>5} {:>8.3}",
-    |                 ----^^^^
-    |                 |
-    |                 help: remove this `mut`
-...
-637 |     bench!("Rosenbrock 500", ChainedRosenbrock { n: 500 });
-    |     ------------------------------------------------------ in this macro invocation
-    |
-    = note: `#[warn(unused_mut)]` on by default
-    = note: this warning originates in the macro `bench` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-warning: variable does not need to be mutable
-   --> examples/benchmark_solvers.rs:616:17
-    |
-616 |             let mut line = format!("{:<20} {:>6} {:>6} | {:>10.4e} {:>5} {:>8.3}",
-    |                 ----^^^^
-    |                 |
-    |                 help: remove this `mut`
-...
-638 |     bench!("Bratu 1K", BratuProblem::new(1000));
-    |     ------------------------------------------- in this macro invocation
-    |
-    = note: this warning originates in the macro `bench` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-warning: variable does not need to be mutable
-   --> examples/benchmark_solvers.rs:616:17
-    |
-616 |             let mut line = format!("{:<20} {:>6} {:>6} | {:>10.4e} {:>5} {:>8.3}",
-    |                 ----^^^^
-    |                 |
-    |                 help: remove this `mut`
-...
-639 |     bench!("OptControl 2.5K", OptimalControl::new(1249));
-    |     ---------------------------------------------------- in this macro invocation
-    |
-    = note: this warning originates in the macro `bench` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-warning: variable does not need to be mutable
-   --> examples/benchmark_solvers.rs:616:17
-    |
-616 |             let mut line = format!("{:<20} {:>6} {:>6} | {:>10.4e} {:>5} {:>8.3}",
-    |                 ----^^^^
-    |                 |
-    |                 help: remove this `mut`
-...
-640 |     bench!("Poisson 2.5K", PoissonControl::new(35));
-    |     ----------------------------------------------- in this macro invocation
-    |
-    = note: this warning originates in the macro `bench` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-warning: variable does not need to be mutable
-   --> examples/benchmark_solvers.rs:616:17
-    |
-616 |             let mut line = format!("{:<20} {:>6} {:>6} | {:>10.4e} {:>5} {:>8.3}",
-    |                 ----^^^^
-    |                 |
-    |                 help: remove this `mut`
-...
-641 |     bench!("SparseQP 1K", SparseQP { n: 500 });
-    |     ------------------------------------------ in this macro invocation
-    |
-    = note: this warning originates in the macro `bench` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-warning: variable does not need to be mutable
-   --> examples/benchmark_solvers.rs:616:17
-    |
-616 |             let mut line = format!("{:<20} {:>6} {:>6} | {:>10.4e} {:>5} {:>8.3}",
-    |                 ----^^^^
-    |                 |
-    |                 help: remove this `mut`
-...
-646 |     bench!("Rosenbrock 5K", ChainedRosenbrock { n: 5000 });
-    |     ------------------------------------------------------ in this macro invocation
-    |
-    = note: this warning originates in the macro `bench` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-warning: variable does not need to be mutable
-   --> examples/benchmark_solvers.rs:616:17
-    |
-616 |             let mut line = format!("{:<20} {:>6} {:>6} | {:>10.4e} {:>5} {:>8.3}",
-    |                 ----^^^^
-    |                 |
-    |                 help: remove this `mut`
-...
-647 |     bench!("Bratu 10K", BratuProblem::new(10000));
-    |     --------------------------------------------- in this macro invocation
-    |
-    = note: this warning originates in the macro `bench` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-warning: variable does not need to be mutable
-   --> examples/benchmark_solvers.rs:616:17
-    |
-616 |             let mut line = format!("{:<20} {:>6} {:>6} | {:>10.4e} {:>5} {:>8.3}",
-    |                 ----^^^^
-    |                 |
-    |                 help: remove this `mut`
-...
-648 |     bench!("OptControl 20K", OptimalControl::new(9999));
-    |     --------------------------------------------------- in this macro invocation
-    |
-    = note: this warning originates in the macro `bench` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-warning: variable does not need to be mutable
-   --> examples/benchmark_solvers.rs:616:17
-    |
-616 |             let mut line = format!("{:<20} {:>6} {:>6} | {:>10.4e} {:>5} {:>8.3}",
-    |                 ----^^^^
-    |                 |
-    |                 help: remove this `mut`
-...
-649 |     bench!("Poisson 50K", PoissonControl::new(158));
-    |     ----------------------------------------------- in this macro invocation
-    |
-    = note: this warning originates in the macro `bench` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-warning: variable does not need to be mutable
-   --> examples/benchmark_solvers.rs:616:17
-    |
-616 |             let mut line = format!("{:<20} {:>6} {:>6} | {:>10.4e} {:>5} {:>8.3}",
-    |                 ----^^^^
-    |                 |
-    |                 help: remove this `mut`
-...
-650 |     bench!("SparseQP 100K", SparseQP { n: 50000 });
-    |     ---------------------------------------------- in this macro invocation
-    |
-    = note: this warning originates in the macro `bench` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-warning: static `HS_PROBLEMS` is never used
-    --> examples/../hs_suite/generated/hs_problems.rs:9397:12
-     |
-9397 | pub static HS_PROBLEMS: &[HsProblemEntry] = &[
-     |            ^^^^^^^^^^^
-     |
-     = note: `#[warn(dead_code)]` on by default
+warning: unused import: `HS_PROBLEMS`
+ --> hs_suite/run_ipopt_native.rs:7:19
+  |
+7 | use hs_problems::{HS_PROBLEMS, HsSolveResult};
+  |                   ^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
 
 warning: function `solve_all` is never used
-    --> examples/../hs_suite/generated/hs_problems.rs:9522:8
+    --> hs_suite/generated/hs_problems.rs:9522:8
      |
 9522 | pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
      |        ^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` on by default
 
-warning: `ripopt` (example "sipopt_analytical") generated 1 warning
-warning: `ripopt` (example "regression_test") generated 2 warnings
-warning: `ripopt` (example "benchmark_solvers") generated 10 warnings (run `cargo fix --example "benchmark_solvers"` to apply 10 suggestions)
-    Finished `release` profile [optimized + debuginfo] target(s) in 3m 21s
-     Running unittests src/lib.rs (target/release/deps/ripopt-9ca2e4de89a2086d)
+warning: `ripopt` (bin "ipopt_native" test) generated 2 warnings (2 duplicates)
+warning: `ripopt` (bin "ipopt_native") generated 2 warnings (run `cargo fix --bin "ipopt_native"` to apply 1 suggestion)
+warning: `ripopt` (test "large_scale_benchmark") generated 1 warning (run `cargo fix --test "large_scale_benchmark"` to apply 1 suggestion)
+    Finished `release` profile [optimized + debuginfo] target(s) in 3m 20s
+     Running unittests src/lib.rs (target/release/deps/ripopt-68d59cc4bef89617)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 146 filtered out; finished in 0.00s
 
-     Running unittests src/bin/ripopt_ampl.rs (target/release/deps/ripopt-011744e3fda39fa0)
+     Running unittests hs_suite/run_ipopt_native.rs (target/release/deps/ipopt_native-da9feb0c070b52ae)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-     Running tests/augmented_lagrangian.rs (target/release/deps/augmented_lagrangian-5a05749781fcdbe7)
+     Running unittests src/bin/ripopt_ampl.rs (target/release/deps/ripopt-5a8fe12604e6cbbe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/augmented_lagrangian.rs (target/release/deps/augmented_lagrangian-5baf98d2f707ba11)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
 
-     Running tests/c_api.rs (target/release/deps/c_api-72135de293e8a55a)
+     Running tests/c_api.rs (target/release/deps/c_api-5a2987aded7c3d74)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s
 
-     Running tests/correctness.rs (target/release/deps/correctness-78aa955071373d44)
+     Running tests/correctness.rs (target/release/deps/correctness-5a8b8ebc3a1504bd)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 22 filtered out; finished in 0.00s
 
-     Running tests/hs_problems_subset.rs (target/release/deps/hs_problems_subset-3f535a1c59c506d0)
+     Running tests/hs_problems_subset.rs (target/release/deps/hs_problems_subset-c3ab69a5296c0f97)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-     Running tests/hs_regression.rs (target/release/deps/hs_regression-40ffcdbab4fd343c)
+     Running tests/hs_regression.rs (target/release/deps/hs_regression-c7adcceb49c45b74)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.00s
 
-     Running tests/ipm_paths.rs (target/release/deps/ipm_paths-6e386939714c9226)
+     Running tests/ipm_paths.rs (target/release/deps/ipm_paths-398c2936bb80e6d2)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
 
-     Running tests/iterative_solvers.rs (target/release/deps/iterative_solvers-d6c31bd01e526351)
+     Running tests/iterative_solvers.rs (target/release/deps/iterative_solvers-fe814efaa7e07673)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
 
-     Running tests/large_scale.rs (target/release/deps/large_scale-aa78d08520ffe731)
+     Running tests/large_scale.rs (target/release/deps/large_scale-8d06f0e17cf84d0a)
 
-running 10 tests
+running 0 tests
 
-=== Bratu BVP 1K (n=1000, m=998, KKT=1998) ===
-Solving...
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
 
-=== Chained Rosenbrock 5K (n=5000, m=0, KKT=5000) ===
-Solving...
+     Running tests/large_scale_benchmark.rs (target/release/deps/large_scale_benchmark-6858a7f205f3df60)
 
-=== Bratu BVP 10K (n=10000, m=9998, KKT=19998) ===
-Solving...
+running 1 test
 
-=== Optimal Control 2.5K (n=2499, m=1250, KKT=3749) ===
-Solving...
+                  Problem      n      m |     ripopt iters     time |      ipopt iters     time |  speedup
+---------------------------------------------------------------------------------------------------------
 
-=== Optimal Control 20K (n=19999, m=10000, KKT=29999) ===
-Solving...
+******************************************************************************
+This program contains Ipopt, a library for large-scale nonlinear optimization.
+ Ipopt is released as open source code under the Eclipse Public License (EPL).
+         For more information visit https://github.com/coin-or/Ipopt
+******************************************************************************
 
-=== Poisson Control 2.5K (n=2450, m=1225, KKT=3675) ===
-Solving...
+BENCH: name=Rosenbrock 500, n=500, m=0, ripopt_status=Acceptable, ripopt_obj=6.026897e-14, ripopt_iters=70, ripopt_time=0.0014, ipopt_status=Optimal, ipopt_obj=3.520843e-18, ipopt_iters=749, ipopt_time=0.1882, speedup=131.15x
+BENCH: name=Bratu 1K, n=1000, m=998, ripopt_status=Optimal, ripopt_obj=0.000000e0, ripopt_iters=3, ripopt_time=0.0020, ipopt_status=Optimal, ipopt_obj=0.000000e0, ipopt_iters=2, ipopt_time=0.0019, speedup=0.95x
+BENCH: name=SparseQP 1K, n=500, m=500, ripopt_status=Optimal, ripopt_obj=-1.248170e2, ripopt_iters=8, ripopt_time=0.0051, ipopt_status=Optimal, ipopt_obj=-1.248170e2, ipopt_iters=6, ipopt_time=0.0037, speedup=0.72x
+BENCH: name=OptControl 2.5K, n=2499, m=1250, ripopt_status=Acceptable, ripopt_obj=1.180702e-1, ripopt_iters=9, ripopt_time=0.0700, ipopt_status=Optimal, ipopt_obj=1.176959e-1, ipopt_iters=1, ipopt_time=0.0026, speedup=0.04x
+BENCH: name=Poisson 2.5K, n=5000, m=2500, ripopt_status=Optimal, ripopt_obj=9.945800e-2, ripopt_iters=1, ripopt_time=0.0231, ipopt_status=Optimal, ipopt_obj=9.945800e-2, ipopt_iters=1, ipopt_time=0.0103, speedup=0.44x
+BENCH: name=Rosenbrock 5K, n=5000, m=0, ripopt_status=Acceptable, ripopt_obj=2.271958e-14, ripopt_iters=74, ripopt_time=0.0097, ipopt_status=Failed, ipopt_obj=2.926793e3, ipopt_iters=3000, ipopt_time=3.7292, speedup=383.76x
+BENCH: name=Bratu 10K, n=10000, m=9998, ripopt_status=Optimal, ripopt_obj=0.000000e0, ripopt_iters=11, ripopt_time=0.1278, ipopt_status=Optimal, ipopt_obj=0.000000e0, ipopt_iters=2, ipopt_time=0.0124, speedup=0.10x
+BENCH: name=OptControl 20K, n=19999, m=10000, ripopt_status=Acceptable, ripopt_obj=1.770769e-1, ripopt_iters=6, ripopt_time=2.7333, ipopt_status=Optimal, ipopt_obj=1.173789e-1, ipopt_iters=1, ipopt_time=0.0194, speedup=0.01x
+BENCH: name=Poisson 50K, n=49928, m=24964, ripopt_status=Optimal, ripopt_obj=9.946953e-2, ripopt_iters=1, ripopt_time=1.6810, ipopt_status=Optimal, ipopt_obj=9.946953e-2, ipopt_iters=1, ipopt_time=0.1232, speedup=0.07x
+BENCH: name=SparseQP 100K, n=50000, m=50000, ripopt_status=Optimal, ripopt_obj=-1.249982e4, ripopt_iters=8, ripopt_time=25.4245, ipopt_status=Optimal, ipopt_obj=-1.249982e4, ipopt_iters=6, ipopt_time=0.3165, speedup=0.01x
+test large_scale_vs_ipopt ... ok
 
-=== Poisson Control 50K (n=49928, m=24964, KKT=74892) ===
-Solving...
-ripopt: Preprocessing reduced problem: 2 fixed vars, 0 redundant constraints (1000x998 -> 998x998)
-ripopt: NLP scaling: obj_scaling=1.0000e0, 998/998 constraints scaled
-iter      objective     inf_pr     inf_du      compl         mu  alpha_p  alpha_d
-ripopt: Starting main loop (n=998, m=998)
-   0    0.0000000e0    1.00e-2     0.00e0     0.00e0    1.00e-1   0.00e0   0.00e0
-L-BFGS: start, n=5000, f=3.508298e6, ||g||=1.799600e3
-L-BFGS iter 0: f=1.390768e4, ||g||=1.799600e3, alpha=1.11e-3
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 34.49s
 
-=== Sparse QP 1K (n=500, m=500, KKT=1000) ===
-Solving...
-
-=== Sparse QP 100K (n=50000, m=50000, KKT=100000) ===
-Solving...
-
-=== Chained Rosenbrock 500 (n=500, m=0, KKT=500) ===
-Solving...
-L-BFGS: start, n=500, f=3.501982e5, ||g||=1.799600e3
-L-BFGS iter 0: f=1.580527e3, ||g||=1.799600e3, alpha=1.11e-3
-ripopt: Sparse condensed S has bandwidth 2 for n=998, using banded solver
-ripopt: Detected 1250/1250 linear constraints (Hessian contribution skipped)
-   1    0.0000000e0    1.01e-4    2.96e-4     0.00e0    3.16e-2   1.00e0   1.00e0
-iter      objective     inf_pr     inf_du      compl         mu  alpha_p  alpha_d
-ripopt: Starting main loop (n=2499, m=1250)
-ripopt: Detected 500/500 linear constraints (Hessian contribution skipped)
-   0    1.0008006e0     0.00e0    1.60e-3     0.00e0    1.00e-1   0.00e0   0.00e0
-iter      objective     inf_pr     inf_du      compl         mu  alpha_p  alpha_d
-ripopt: Starting main loop (n=500, m=500)
-   0   -1.2475000e2     0.00e0     0.00e0    1.00e-1    1.00e-1   0.00e0   0.00e0
-ripopt: Sparse condensed S has bandwidth 499 for n=500, switching to augmented KKT
-ripopt: Sparse condensed S has bandwidth 1250 for n=2499, switching to augmented KKT
-   2    0.0000000e0    6.81e-9    2.32e-6     0.00e0    5.62e-3   1.00e0   1.00e0
-   3    0.0000000e0   6.86e-11   1.53e-10     0.00e0    4.22e-4   1.00e0   1.00e0
-
-Phase breakdown (4 iterations):
-  Problem eval            0.000s (  0.9%)
-  KKT assembly            0.008s ( 78.7%)
-  Factorization           0.000s (  0.0%)
-  Direction solve         0.000s (  5.0%)
-  Line search             0.000s (  1.4%)
-  Other                   0.001s ( 14.0%)
-  Total                   0.010s
-L-BFGS iter 70: converged (acceptable), f=6.026897e-14, ||g||=3.144418e-6
-ripopt: NLP scaling: obj_scaling=1.0000e0, 1225/1225 constraints scaled
-ripopt: L-BFGS solved unconstrained problem (Acceptable, obj=6.026897e-14)
-RESULT: status=Acceptable, obj=6.026897e-14, iters=70, time=0.002s
-ripopt: Detected 1225/1225 linear constraints (Hessian contribution skipped)
-RESULT: status=Optimal, obj=0.000000e0, cv=6.859329e-9, iters=3, time=0.018s
-test large_scale_rosenbrock_500 ... ok
-test large_scale_bratu_1000 ... ok
-ripopt: Disabling sparse condensed KKT: Schur complement nnz estimate (24889) > 2× augmented KKT nnz (12110)
-iter      objective     inf_pr     inf_du      compl         mu  alpha_p  alpha_d
-ripopt: Starting main loop (n=2450, m=1225)
-   0   1.2500000e-1     0.00e0    7.72e-4     0.00e0    1.00e-1   0.00e0   0.00e0
-   1   -1.2452080e2     0.00e0     0.00e0    1.00e-1    9.99e-3   1.00e0   1.00e0
-   2   -1.2309363e2     0.00e0     0.00e0    1.03e-2    6.98e-4   1.00e0   1.00e0
-   3   -1.2478068e2     0.00e0     0.00e0    1.33e-3    7.90e-5   1.00e0   1.00e0
-   4   -1.2481662e2     0.00e0     0.00e0    1.00e-4    8.51e-6   1.00e0   1.00e0
-   5   -1.2481698e2     0.00e0     0.00e0    8.78e-6    8.57e-7   1.00e0   1.00e0
-   1   9.9445054e-2   4.51e-15   2.59e-14     0.00e0    3.16e-2   1.00e0   1.00e0
-
-Phase breakdown (2 iterations):
-  Problem eval            0.000s (  0.5%)
-  KKT assembly            0.000s (  3.4%)
-  Factorization           0.003s ( 77.1%)
-  Direction solve         0.000s (  8.2%)
-  Line search             0.000s (  0.9%)
-  Other                   0.000s (  9.9%)
-  Total                   0.004s
-RESULT: status=Optimal, obj=9.944505e-2, cv=2.340350e-13, iters=1, time=0.023s
-test large_scale_poisson_control_2500 ... ok
-   6   -1.2481699e2     0.00e0     0.00e0    8.59e-7    8.58e-8   1.00e0   1.00e0
-
-Phase breakdown (7 iterations):
-  Problem eval            0.000s (  0.5%)
-  KKT assembly            0.000s (  3.6%)
-  Factorization           0.004s ( 65.4%)
-  Direction solve         0.001s ( 14.8%)
-  Line search             0.000s (  1.6%)
-  Other                   0.001s ( 14.1%)
-  Total                   0.006s
-RESULT: status=Optimal, obj=-1.248170e2, cv=0.000000e0, iters=6, time=0.008s, f0=-1.247500e2
-test large_scale_sparse_qp_1000 ... ok
-L-BFGS iter 73: converged (optimal), f=2.642177e-14, ||g||=5.993254e-7
-ripopt: L-BFGS solved unconstrained problem (Optimal, obj=2.642177e-14)
-RESULT: status=Optimal, obj=2.642177e-14, iters=73, time=0.029s
-test large_scale_chained_rosenbrock_5k ... ok
-   1   2.0892976e-1    5.02e-9    3.45e-4     0.00e0    3.16e-2   1.00e0   1.00e0
-   2   1.3791622e-1    1.87e-9    1.73e-4     0.00e0    5.62e-3   1.00e0   1.00e0
-   3   1.2625402e-1   6.22e-10    1.07e-4     0.00e0    4.22e-4   1.00e0   1.00e0
-   4   1.2222491e-1   2.49e-10    7.51e-5     0.00e0    8.66e-6   1.00e0   1.00e0
-   5   1.2027954e-1   1.23e-10    5.63e-5     0.00e0    2.55e-8   1.00e0   1.00e0
-   6   1.1923125e-1   7.08e-11    4.36e-5     0.00e0   1.00e-11   1.00e0   1.00e0
-   7   1.1863514e-1   4.54e-11    3.45e-5     0.00e0   1.00e-11   1.00e0   1.00e0
-   8   1.1828350e-1   3.08e-11    2.76e-5     0.00e0   1.00e-11   1.00e0   1.00e0
-   9   1.1807019e-1   2.17e-11    2.23e-5     0.00e0   1.00e-11   1.00e0   1.00e0
-
-Phase breakdown (10 iterations):
-  Problem eval            0.000s (  0.1%)
-  KKT assembly            0.001s (  0.8%)
-  Factorization           0.082s ( 94.2%)
-  Direction solve         0.002s (  1.9%)
-  Line search             0.000s (  0.2%)
-  Other                   0.002s (  2.8%)
-  Total                   0.087s
-RESULT: status=Acceptable, obj=1.180702e-1, cv=2.171156e-11, iters=9, time=0.103s
-test large_scale_optimal_control_2500 ... ok
-ripopt: Preprocessing reduced problem: 2 fixed vars, 0 redundant constraints (10000x9998 -> 9998x9998)
-ripopt: NLP scaling: obj_scaling=1.0000e0, 9998/9998 constraints scaled
-iter      objective     inf_pr     inf_du      compl         mu  alpha_p  alpha_d
-ripopt: Starting main loop (n=9998, m=9998)
-   0    0.0000000e0    1.00e-2     0.00e0     0.00e0    1.00e-1   0.00e0   0.00e0
-ripopt: Sparse condensed S has bandwidth 2 for n=9998, using banded solver
-   1    0.0000000e0    5.53e-4     3.73e0     0.00e0    3.16e-2   1.00e0   1.00e0
-   2    0.0000000e0    4.61e-4    2.94e-1     0.00e0    5.62e-3   1.00e0   1.00e0
-   3    0.0000000e0    5.02e-6    1.46e-1     0.00e0    4.22e-4   1.00e0   1.00e0
-   4    0.0000000e0    1.34e-6    2.26e-3     0.00e0    8.66e-6   1.00e0   1.00e0
-   5    0.0000000e0    8.44e-8    4.53e-3     0.00e0    2.55e-8   1.00e0   1.00e0
-   6    0.0000000e0    2.76e-9    1.19e-1     0.00e0   1.00e-11   1.00e0   1.00e0
-   7    0.0000000e0    1.30e-9    1.27e-2     0.00e0   1.00e-11   1.00e0   1.00e0
-   8    0.0000000e0   1.66e-10    4.53e-3     0.00e0   1.00e-11   1.00e0   1.00e0
-   9    0.0000000e0   8.25e-11    4.88e-4     0.00e0   1.00e-11   1.00e0   1.00e0
-  10    0.0000000e0   5.46e-11    1.09e-4     0.00e0   1.00e-11   1.00e0   1.00e0
-  11    0.0000000e0   5.46e-11     0.00e0     0.00e0   1.00e-11   0.00e0   1.00e0
-
-Phase breakdown (12 iterations):
-  Problem eval            0.002s (  6.3%)
-  KKT assembly            0.005s ( 18.5%)
-  Factorization           0.000s (  0.0%)
-  Direction solve         0.004s ( 15.3%)
-  Line search             0.001s (  3.5%)
-  Other                   0.015s ( 56.4%)
-  Total                   0.027s
-RESULT: status=Optimal, obj=0.000000e0, cv=5.460833e-9, iters=11, time=0.164s
-test large_scale_bratu_10k ... ok
-ripopt: Detected 10000/10000 linear constraints (Hessian contribution skipped)
-iter      objective     inf_pr     inf_du      compl         mu  alpha_p  alpha_d
-ripopt: Starting main loop (n=19999, m=10000)
-   0    1.0001000e0     0.00e0    2.00e-4     0.00e0    1.00e-1   0.00e0   0.00e0
-ripopt: Sparse condensed S has bandwidth 10000 for n=19999, switching to augmented KKT
-   1   6.3133301e-1    9.03e-9    8.85e-5     0.00e0    3.16e-2   1.00e0   1.00e0
-   2   4.2416545e-1    1.63e-9    7.19e-5     0.00e0    5.62e-3   1.00e0   1.00e0
-   3   3.0683473e-1    1.23e-9    5.93e-5     0.00e0    4.22e-4   1.00e0   1.00e0
-ripopt: NLP scaling: obj_scaling=1.0000e0, 24964/24964 constraints scaled
-ripopt: Detected 24964/24964 linear constraints (Hessian contribution skipped)
-ripopt: Disabling sparse condensed KKT: Schur complement nnz estimate (520456) > 2× augmented KKT nnz (249008)
-iter      objective     inf_pr     inf_du      compl         mu  alpha_p  alpha_d
-ripopt: Starting main loop (n=49928, m=24964)
-   0   1.2500000e-1     0.00e0    3.96e-5     0.00e0    1.00e-1   0.00e0   0.00e0
-   1   9.9469529e-2   4.91e-14   7.65e-13     0.00e0    3.16e-2   1.00e0   1.00e0
-
-Phase breakdown (2 iterations):
-  Problem eval            0.000s (  0.4%)
-  KKT assembly            0.001s (  1.7%)
-  Factorization           0.068s ( 86.6%)
-  Direction solve         0.005s (  6.6%)
-  Line search             0.000s (  0.4%)
-  Other                   0.003s (  4.3%)
-  Total                   0.078s
-RESULT: status=Optimal, obj=9.946953e-2, cv=4.912071e-12, iters=1, time=1.751s
-test large_scale_poisson_control_50k ... ok
-   4   2.3962037e-1   9.24e-10    4.96e-5     0.00e0    8.66e-6   1.00e0   1.00e0
-   5   2.0045547e-1   6.99e-10    4.21e-5     0.00e0    2.55e-8   1.00e0   1.00e0
-   6   1.7707690e-1   5.32e-10    3.63e-5     0.00e0   1.00e-11   1.00e0   1.00e0
-
-Phase breakdown (7 iterations):
-  Problem eval            0.000s (  0.0%)
-  KKT assembly            0.002s (  0.1%)
-  Factorization           2.564s ( 99.4%)
-  Direction solve         0.007s (  0.3%)
-  Line search             0.001s (  0.0%)
-  Other                   0.005s (  0.2%)
-  Total                   2.580s
-RESULT: status=Acceptable, obj=1.770769e-1, cv=5.320967e-10, iters=6, time=2.796s
-test large_scale_optimal_control_20k ... ok
-ripopt: Detected 50000/50000 linear constraints (Hessian contribution skipped)
-iter      objective     inf_pr     inf_du      compl         mu  alpha_p  alpha_d
-ripopt: Starting main loop (n=50000, m=50000)
-   0   -1.2499750e4     0.00e0     0.00e0    1.00e-1    1.00e-1   0.00e0   0.00e0
-ripopt: Sparse condensed S has bandwidth 49999 for n=50000, switching to augmented KKT
-   1   -1.2471209e4     0.00e0     0.00e0    1.00e-1    9.99e-3   1.00e0   1.00e0
-   2   -1.2328584e4     0.00e0     0.00e0    1.03e-2    6.97e-4   1.00e0   1.00e0
-   3   -1.2496190e4     0.00e0     0.00e0    1.33e-3    7.88e-5   1.00e0   1.00e0
-   4   -1.2499781e4     0.00e0     0.00e0    9.98e-5    8.49e-6   1.00e0   1.00e0
-   5   -1.2499817e4     0.00e0     0.00e0    8.75e-6    8.55e-7   1.00e0   1.00e0
-   6   -1.2499817e4     0.00e0     0.00e0    8.56e-7    8.55e-8   1.00e0   1.00e0
-
-Phase breakdown (7 iterations):
-  Problem eval            0.002s (  0.0%)
-  KKT assembly            0.015s (  0.1%)
-  Factorization          15.664s ( 99.3%)
-  Direction solve         0.057s (  0.4%)
-  Line search             0.005s (  0.0%)
-  Other                   0.026s (  0.2%)
-  Total                  15.769s
-RESULT: status=Optimal, obj=-1.249982e4, cv=0.000000e0, iters=6, time=20.218s, f0=-1.249975e4
-test large_scale_sparse_qp_100k ... ok
-
-test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.23s
-
-     Running tests/lbfgs_ipm.rs (target/release/deps/lbfgs_ipm-433382d2b98b48f3)
+     Running tests/lbfgs_ipm.rs (target/release/deps/lbfgs_ipm-515cdb4a23e8d9d3)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
 
-     Running tests/nl_integration.rs (target/release/deps/nl_integration-158680402cf6696b)
+     Running tests/nl_integration.rs (target/release/deps/nl_integration-b0eb68b60d2bdf35)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
 
-     Running tests/sensitivity.rs (target/release/deps/sensitivity-c796105f3e7af8a2)
+     Running tests/sensitivity.rs (target/release/deps/sensitivity-2aec3f3c69258409)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
-
-   Doc-tests ripopt
-
-running 0 tests
-
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 

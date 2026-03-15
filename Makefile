@@ -187,9 +187,9 @@ hs-run:
 
 # Run synthetic large-scale tests (5K to 100K variables)
 large-scale:
-	cargo test --release -- --ignored large_scale --nocapture \
+	cargo test --release --features ipopt-native -- --ignored large_scale_vs_ipopt --nocapture \
 		2>&1 | tee large_scale_results.txt
-	@echo "Large-scale tests complete. Output: large_scale_results.txt"
+	@echo "Large-scale benchmark complete. Output: large_scale_results.txt"
 
 # Full benchmark: HS + CUTEst + large-scale + unified report
 benchmark: hs-run cutest-run large-scale benchmark-report

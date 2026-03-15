@@ -4178,7 +4178,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         mu_state.remember_accepted(kkt_error);
                         let avg_compl = compute_avg_complementarity(&state);
                         // Consume Mehrotra sigma (used as lower bound hint for quality function)
-                        let sigma = last_mehrotra_sigma.take();
+                        let _sigma = last_mehrotra_sigma.take();
                         if options.mu_oracle_quality_function && avg_compl > 0.0 {
                             // Quality function: evaluate Q(mu) for explicit candidates and
                             // pick the one with lowest barrier KKT error. This is safer than
@@ -5270,6 +5270,7 @@ fn attempt_nlp_restoration<P: NlpProblem>(
 ///
 /// This replaces the Loqo oracle (mu = avg_compl / kappa) with a global search
 /// that can make aggressive mu decreases when the iterate is well-centered.
+#[allow(dead_code)]
 fn quality_function_mu(state: &SolverState, mu_lower: f64, mu_upper: f64, n_candidates: usize) -> f64 {
     if mu_upper <= mu_lower || n_candidates < 2 {
         return mu_upper;

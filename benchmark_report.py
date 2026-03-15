@@ -178,55 +178,40 @@ def load_cutest_results(path=None):
 
 
 def load_large_scale_results():
-    """Parse large_scale_results.txt for the structured output from large-scale tests.
-
-    Tests run in parallel so headers (=== ...) and results (RESULT: ...) may be
-    interleaved. We collect them separately and match by order of appearance,
-    sorted by KKT dimension.
-    """
+    """Parse large_scale_results.txt for BENCH: lines with ripopt vs Ipopt comparison."""
     path = os.path.join(SCRIPT_DIR, 'large_scale_results.txt')
     if not os.path.exists(path):
         return None
 
     import re
-    headers = []
-    result_lines = []
+    results = []
 
     with open(path) as f:
         for line in f:
-            hdr = re.match(r'=== (.+?) \(n=(\d+), m=(\d+), KKT=(\d+)\)', line.strip())
-            if hdr:
-                headers.append({
-                    'name': hdr.group(1),
-                    'n': int(hdr.group(2)),
-                    'm': int(hdr.group(3)),
-                    'kkt': int(hdr.group(4)),
+            m = re.match(
+                r'BENCH: name=(.+?), n=(\d+), m=(\d+), '
+                r'ripopt_status=(\w+), ripopt_obj=([-\d.eE+]+), ripopt_iters=(\d+), ripopt_time=([\d.]+), '
+                r'ipopt_status=(\w+), ipopt_obj=([-\d.eE+]+), ipopt_iters=(\d+), ipopt_time=([\d.]+), '
+                r'speedup=([\d.]+)x',
+                line.strip()
+            )
+            if m:
+                results.append({
+                    'name': m.group(1),
+                    'n': int(m.group(2)),
+                    'm': int(m.group(3)),
+                    'kkt': int(m.group(2)) + int(m.group(3)),
+                    'ripopt_status': m.group(4),
+                    'ripopt_obj': float(m.group(5)),
+                    'ripopt_iters': int(m.group(6)),
+                    'ripopt_time': float(m.group(7)),
+                    'ipopt_status': m.group(8),
+                    'ipopt_obj': float(m.group(9)),
+                    'ipopt_iters': int(m.group(10)),
+                    'ipopt_time': float(m.group(11)),
+                    'speedup': float(m.group(12)),
                 })
-                continue
 
-            res = re.match(r'RESULT: status=(\w+),?\s*obj=([-\d.eE+]+),?\s*(?:cv=[-\d.eE+]+,?\s*)?iters=(\d+),?\s*time=([\d.]+)s', line.strip())
-            if res:
-                result_lines.append({
-                    'status': res.group(1),
-                    'obj': float(res.group(2)),
-                    'iters': int(res.group(3)),
-                    'time': float(res.group(4)),
-                })
-
-    if not headers or not result_lines:
-        return None
-
-    # Sort headers by KKT dim to get a canonical order
-    headers.sort(key=lambda h: h['kkt'])
-    # Sort results by time as a proxy for problem size
-    result_lines.sort(key=lambda r: r['time'])
-
-    # Match: both lists should have the same length
-    results = []
-    for h, r in zip(headers, result_lines):
-        results.append({**h, **r})
-
-    # Sort by KKT dim for display
     results.sort(key=lambda r: r['kkt'])
     return results if results else None
 
@@ -483,22 +468,45 @@ def generate_report(suites, output_path, baseline=None):
     # Large-scale section (parsed from large_scale_results.txt)
     ls_results = load_large_scale_results()
     if ls_results:
-        lines.append("## Large-Scale Problems (ripopt only)")
+        has_ipopt = any(r.get('ipopt_status', 'N/A') != 'N/A' for r in ls_results)
+        title = "Large-Scale Synthetic Problems" + (" — ripopt vs Ipopt" if has_ipopt else " (ripopt only)")
+        lines.append(f"## {title}")
         lines.append("")
         lines.append("Synthetic problems with known structure, up to 100K variables.")
-        lines.append("No Ipopt comparison (problems defined in Rust, not available as NL files).")
+        lines.append("Both solvers receive the exact same NlpProblem struct via the Rust trait interface.")
         lines.append("")
-        lines.append("| Problem | n | m | KKT dim | Status | Objective | Iters | Time |")
-        lines.append("|---------|---|---|---------|--------|-----------|-------|------|")
-        for r in ls_results:
-            lines.append(
-                f"| {r['name']} | {r['n']:,} | {r['m']:,} | {r['kkt']:,} "
-                f"| {r['status']} | {r['obj']:.4e} | {r['iters']} | {r['time']:.3f}s |"
-            )
-        total_time = sum(r['time'] for r in ls_results)
-        solved = sum(1 for r in ls_results if r['status'] in ('Optimal', 'Acceptable'))
+        if has_ipopt:
+            lines.append("| Problem | n | m | ripopt | iters | time | Ipopt | iters | time | speedup |")
+            lines.append("|---------|---|---|--------|-------|------|-------|-------|------|---------|")
+            for r in ls_results:
+                rs = r['ripopt_status']
+                ist = r.get('ipopt_status', 'N/A')
+                su = f"{r['speedup']:.1f}x" if r.get('speedup', 0) > 0 else "N/A"
+                lines.append(
+                    f"| {r['name']} | {r['n']:,} | {r['m']:,} "
+                    f"| {rs} | {r['ripopt_iters']} | {r['ripopt_time']:.3f}s "
+                    f"| {ist} | {r.get('ipopt_iters', 0)} | {r.get('ipopt_time', 0):.3f}s "
+                    f"| {su} |"
+                )
+        else:
+            lines.append("| Problem | n | m | Status | Objective | Iters | Time |")
+            lines.append("|---------|---|---|--------|-----------|-------|------|")
+            for r in ls_results:
+                lines.append(
+                    f"| {r['name']} | {r['n']:,} | {r['m']:,} "
+                    f"| {r.get('ripopt_status', r.get('status', 'N/A'))} "
+                    f"| {r.get('ripopt_obj', r.get('obj', 0)):.4e} "
+                    f"| {r.get('ripopt_iters', r.get('iters', 0))} "
+                    f"| {r.get('ripopt_time', r.get('time', 0)):.3f}s |"
+                )
+        r_total = sum(r.get('ripopt_time', r.get('time', 0)) for r in ls_results)
+        r_solved = sum(1 for r in ls_results if r.get('ripopt_status', r.get('status', '')) in ('Optimal', 'Acceptable'))
         lines.append("")
-        lines.append(f"**{solved}/{len(ls_results)} solved** in {total_time:.1f}s total")
+        lines.append(f"ripopt: **{r_solved}/{len(ls_results)} solved** in {r_total:.1f}s total")
+        if has_ipopt:
+            i_total = sum(r.get('ipopt_time', 0) for r in ls_results)
+            i_solved = sum(1 for r in ls_results if r.get('ipopt_status', '') in ('Optimal', 'Acceptable'))
+            lines.append(f"Ipopt: **{i_solved}/{len(ls_results)} solved** in {i_total:.1f}s total")
         lines.append("")
 
     lines.append("---")
