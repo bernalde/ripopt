@@ -187,6 +187,11 @@ pub struct SolverOptions {
     /// oracle when the iterate is well-centered.
     /// Default: true.
     pub mu_oracle_quality_function: bool,
+    /// Use alternative sparse solver backend (faer instead of rmumps).
+    /// When both backends are compiled in, this selects faer SparseLdl
+    /// which uses a different AMD ordering and factorization method.
+    /// Default: false.
+    pub use_alternative_sparse_solver: bool,
 }
 
 impl Default for SolverOptions {
@@ -248,6 +253,7 @@ impl Default for SolverOptions {
             stall_iter_limit: 30,
             early_stall_timeout: 10.0,
             mu_oracle_quality_function: false,
+            use_alternative_sparse_solver: false,
         }
     }
 }

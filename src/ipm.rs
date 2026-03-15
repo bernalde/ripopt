@@ -34,6 +34,18 @@ fn new_sparse_solver_for_dim(_dim: usize) -> Box<dyn LinearSolver> {
     { return Box::new(DenseLdl::new()); }
 }
 
+/// Create an alternative sparse solver (faer SparseLdl when rmumps is the default).
+/// Returns `None` if no alternative is available (only one backend compiled in).
+/// Used by the fallback cascade: different AMD orderings and factorization numerics
+/// can change the Newton direction enough to recover problems that fail with the
+/// primary solver (e.g., CORE1, CRESC50 after the rmumps AMD swap).
+#[allow(unreachable_code)]
+fn new_alternative_sparse_solver() -> Option<Box<dyn LinearSolver>> {
+    #[cfg(all(feature = "rmumps", feature = "faer"))]
+    { return Some(Box::new(SparseLdl::new())); }
+    None
+}
+
 /// Create a sparse linear solver with the specified choice.
 fn new_sparse_solver_with_choice(choice: LinearSolverChoice) -> Box<dyn LinearSolver> {
     match choice {
@@ -1480,7 +1492,16 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             }
         }
     } else {
-        solve_ipm(problem, options)
+        // For constrained problems with wall time limits, reserve budget for fallbacks.
+        // Without this, the first solve_ipm consumes the full max_wall_time, leaving
+        // nothing for SQP/slack/AL fallbacks that might succeed (e.g., ACOPR30).
+        if options.max_wall_time > 0.0 && problem.num_constraints() > 0 {
+            let mut main_opts = options.clone();
+            main_opts.max_wall_time = options.max_wall_time * 0.5;
+            solve_ipm(problem, &main_opts)
+        } else {
+            solve_ipm(problem, options)
+        }
     };
 
     // Conservative IPM retry: when the main IPM failed on a small problem and
@@ -1514,7 +1535,8 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             if remaining <= 0.1 {
                 return result;
             }
-            conservative_opts.max_wall_time = remaining;
+            // Use at most 40% of remaining time to leave budget for later fallbacks
+            conservative_opts.max_wall_time = (remaining * 0.4).min(remaining);
         }
         let conservative_result = solve_ipm(problem, &conservative_opts);
         let conservative_better = matches!(
@@ -1542,16 +1564,75 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
     }
 
+    // Alternative sparse solver retry: when the main IPM failed and an alternative
+    // sparse backend is available (faer vs rmumps), retry with different AMD ordering
+    // and factorization numerics. Different pivot sequences can change the Newton
+    // direction enough to recover problems that fail with one solver but not another
+    // (e.g., CORE1, CRESC50, DISCS, FEEDLOC after the rmumps AMD ordering change).
+    if !options.use_alternative_sparse_solver
+        && new_alternative_sparse_solver().is_some()
+        && (n_conservative + problem.num_constraints()) >= options.sparse_threshold
+        && matches!(
+            result.status,
+            SolveStatus::MaxIterations | SolveStatus::NumericalError | SolveStatus::RestorationFailed
+        )
+    {
+        if options.print_level >= 5 {
+            eprintln!(
+                "ripopt: IPM failed ({:?}), retrying with alternative sparse solver",
+                result.status
+            );
+        }
+        let mut alt_opts = options.clone();
+        alt_opts.use_alternative_sparse_solver = true;
+        alt_opts.max_iter = options.max_iter.min(500).max(options.max_iter / 3);
+        if options.max_wall_time > 0.0 {
+            let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
+            if remaining <= 0.1 {
+                return result;
+            }
+            // Use at most 40% of remaining time to leave budget for SQP/slack fallbacks
+            alt_opts.max_wall_time = (remaining * 0.4).min(remaining);
+        }
+        let alt_result = solve_ipm(problem, &alt_opts);
+        let alt_better = matches!(
+            alt_result.status,
+            SolveStatus::Optimal | SolveStatus::Acceptable
+        );
+        let current_solved = matches!(
+            result.status,
+            SolveStatus::Optimal | SolveStatus::Acceptable
+        );
+        if alt_better && !current_solved {
+            if options.print_level >= 5 {
+                eprintln!(
+                    "ripopt: Alternative sparse solver succeeded ({:?}, obj={:.6e})",
+                    alt_result.status, alt_result.objective
+                );
+            }
+            result = alt_result;
+            result.diagnostics.fallback_used = Some("alt_sparse_solver".into());
+        } else if options.print_level >= 5 {
+            eprintln!(
+                "ripopt: Alternative sparse solver did not improve ({:?})",
+                alt_result.status
+            );
+        }
+    }
+
     // L-BFGS Hessian fallback: retry with L-BFGS Hessian approximation when
     // the exact-Hessian IPM failed. Skip if already in limited-memory mode.
     // Skip for large problems: L-BFGS forms an explicit dense n×n matrix (O(n²) memory).
+    // Exclude RestorationFailed: if exact Hessian couldn't find feasible restoration,
+    // L-BFGS approximation won't either, and consuming wall time here prevents
+    // subsequent fallbacks (SQP, slack) from running (e.g., ACOPR30).
     let n_lbfgs = problem.num_variables();
     if options.enable_lbfgs_hessian_fallback
         && !options.hessian_approximation_lbfgs
         && n_lbfgs <= 5000
         && matches!(
             result.status,
-            SolveStatus::MaxIterations | SolveStatus::NumericalError | SolveStatus::RestorationFailed
+            SolveStatus::MaxIterations | SolveStatus::NumericalError
         )
     {
         if options.print_level >= 5 {
@@ -2005,9 +2086,14 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     // Initialize linear solver — use sparse for large KKT systems
     let use_sparse = (n + m) >= options.sparse_threshold;
     let mut lin_solver: Box<dyn LinearSolver> = if use_sparse {
-        match options.linear_solver {
-            LinearSolverChoice::Direct => new_sparse_solver_for_dim(n + m),
-            _ => new_sparse_solver_with_choice(options.linear_solver),
+        if options.use_alternative_sparse_solver {
+            // Use faer SparseLdl if available (different AMD ordering, different numerics)
+            new_alternative_sparse_solver().unwrap_or_else(|| new_sparse_solver_for_dim(n + m))
+        } else {
+            match options.linear_solver {
+                LinearSolverChoice::Direct => new_sparse_solver_for_dim(n + m),
+                _ => new_sparse_solver_with_choice(options.linear_solver),
+            }
         }
     } else {
         Box::new(DenseLdl::new())
