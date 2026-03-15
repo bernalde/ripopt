@@ -9,33 +9,33 @@ This Supporting Information provides algorithmic details and source code referen
 
 The ripopt source code is organized as follows:
 
-| File                               | Purpose                                          |
-|------------------------------------+--------------------------------------------------|
-| =src/lib.rs=                       | Public API (=solve=, =solve_with_sensitivity=)   |
-| =src/problem.rs=                   | =NlpProblem= trait definition                    |
-| =src/options.rs=                   | =SolverOptions= struct                           |
-| =src/result.rs=                    | =SolveResult= and =SolveStatus= types            |
-| =src/ipm.rs=                       | Core IPM engine, NE-to-LS, fallback logic        |
-| =src/kkt.rs=                       | KKT assembly, condensed KKT, inertia correction  |
-| =src/convergence.rs=               | Convergence checks                               |
-| =src/filter.rs=                    | Filter line search and fraction-to-boundary      |
-| =src/restoration.rs=               | Gauss-Newton feasibility solver (Phase 1)        |
-| =src/restoration_nlp.rs=           | NLP restoration subproblem (Phase 2)             |
-| =src/slack_formulation.rs=         | Explicit slack reformulation fallback             |
-| =src/lbfgs.rs=                     | L-BFGS solver                                    |
-| =src/augmented_lagrangian.rs=      | Augmented Lagrangian solver                      |
-| =src/warmstart.rs=                 | Warm-starting utilities                          |
-| =src/sensitivity.rs=              | Parametric sensitivity analysis (sIPOPT-style)   |
-| =src/linear_solver/mod.rs=        | =SymmetricMatrix=, =LinearSolver= trait, matvec  |
-| =src/linear_solver/dense.rs=      | Dense Bunch-Kaufman LDL^T factorization          |
-| =src/linear_solver/multifrontal.rs= | rmumps multifrontal sparse LDL^T (default)     |
-| =src/linear_solver/sparse.rs=     | faer sparse LDL^T (optional, =feature="faer"=)   |
-| =src/linear_solver/banded.rs=     | Banded LDL^T factorization                       |
-| =src/c_api.rs=                     | C API bindings for external language integration |
-| =src/nl/parser.rs=                | AMPL NL file parser                              |
-| =src/nl/problem_impl.rs=          | =NlProblem= (NlpProblem for NL files)            |
-| =src/nl/autodiff.rs=              | Automatic differentiation for NL expressions     |
-| =src/bin/ripopt_ampl.rs=          | AMPL binary interface                            |
+| File                                | Purpose                                          |
+|-------------------------------------+--------------------------------------------------|
+| =src/lib.rs=                        | Public API (=solve=, =solve_with_sensitivity=)   |
+| =src/problem.rs=                    | =NlpProblem= trait definition                    |
+| =src/options.rs=                    | =SolverOptions= struct                           |
+| =src/result.rs=                     | =SolveResult= and =SolveStatus= types            |
+| =src/ipm.rs=                        | Core IPM engine, NE-to-LS, fallback logic        |
+| =src/kkt.rs=                        | KKT assembly, condensed KKT, inertia correction  |
+| =src/convergence.rs=                | Convergence checks                               |
+| =src/filter.rs=                     | Filter line search and fraction-to-boundary      |
+| =src/restoration.rs=                | Gauss-Newton feasibility solver (Phase 1)        |
+| =src/restoration_nlp.rs=            | NLP restoration subproblem (Phase 2)             |
+| =src/slack_formulation.rs=          | Explicit slack reformulation fallback            |
+| =src/lbfgs.rs=                      | L-BFGS solver                                    |
+| =src/augmented_lagrangian.rs=       | Augmented Lagrangian solver                      |
+| =src/warmstart.rs=                  | Warm-starting utilities                          |
+| =src/sensitivity.rs=                | Parametric sensitivity analysis (sIPOPT-style)   |
+| =src/linear_solver/mod.rs=          | =SymmetricMatrix=, =LinearSolver= trait, matvec  |
+| =src/linear_solver/dense.rs=        | Dense Bunch-Kaufman LDL^T factorization          |
+| =src/linear_solver/multifrontal.rs= | rmumps multifrontal sparse LDL^T (default)       |
+| =src/linear_solver/sparse.rs=       | faer sparse LDL^T (optional, =feature="faer"=)   |
+| =src/linear_solver/banded.rs=       | Banded LDL^T factorization                       |
+| =src/c_api.rs=                      | C API bindings for external language integration |
+| =src/nl/parser.rs=                  | AMPL NL file parser                              |
+| =src/nl/problem_impl.rs=            | =NlProblem= (NlpProblem for NL files)            |
+| =src/nl/autodiff.rs=                | Automatic differentiation for NL expressions     |
+| =src/bin/ripopt_ampl.rs=            | AMPL binary interface                            |
 
 * Implicit Slack Formulation
 

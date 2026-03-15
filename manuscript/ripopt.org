@@ -729,8 +729,8 @@ The Hock-Schittkowski (HS) test suite citep:hock1981test contains 120 nonlinear 
 
 *** Solve Rates
 
-| Solver         | Optimal | Acceptable | Failed | Total Solved     |
-|----------------+---------+------------+--------+------------------|
+| Solver         | Optimal | Acceptable | Failed | Total Solved    |
+|----------------+---------+------------+--------+-----------------|
 | ripopt         | 98      | 22         | 0      | 120/120 (100%)  |
 | Ipopt (native) | 118     | 0          | 2      | 118/120 (98.3%) |
 
@@ -892,12 +892,12 @@ Users implement the =ParametricNlpProblem= trait, which extends =NlpProblem= wit
 
 Consider the HS071 problem where the equality constraint bound $p = 40$ is treated as a parameter. After solving at $p = 40$, sensitivity analysis predicts the solution at $p = 40.1$ by computing $x(p + \Delta p) \approx x^* + (dx/dp) \cdot \Delta p$:
 
-| Variable | $x^*(p{=}40)$ | Predicted $x(p{=}40.1)$ | Actual $x(p{=}40.1)$ | Error       |
-|----------+----------------+--------------------------+-----------------------+-------------|
-| $x_1$    |       1.000000 |                 1.000000 |              1.000000 | $< 10^{-8}$ |
-| $x_2$    |       4.743000 |                 4.751642 |              4.751634 | $8.4 \times 10^{-6}$ |
-| $x_3$    |       3.821150 |                 3.824904 |              3.824896 | $8.0 \times 10^{-6}$ |
-| $x_4$    |       1.379408 |                 1.375540 |              1.375553 | $1.4 \times 10^{-5}$ |
+| Variable | $x^*(p{=}40)$ | Predicted $x(p{=}40.1)$ | Actual $x(p{=}40.1)$ | Error                |
+|----------+---------------+-------------------------+----------------------+----------------------|
+| $x_1$    | 1.000000      | 1.000000                | 1.000000             | $< 10^{-8}$          |
+| $x_2$    | 4.743000      | 4.751642                | 4.751634             | $8.4 \times 10^{-6}$ |
+| $x_3$    | 3.821150      | 3.824904                | 3.824896             | $8.0 \times 10^{-6}$ |
+| $x_4$    | 1.379408      | 1.375540                | 1.375553             | $1.4 \times 10^{-5}$ |
 
 The prediction errors are $O(\Delta p^2)$ as expected from first-order Taylor expansion, confirming correctness of the sensitivity computation.
 
