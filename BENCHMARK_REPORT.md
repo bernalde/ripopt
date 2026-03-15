@@ -1,6 +1,6 @@
 # ripopt Benchmark Report
 
-Generated: 2026-03-15 09:02:45
+Generated: 2026-03-15 09:27:58
 
 ## Executive Summary
 
@@ -405,18 +405,18 @@ Both solvers receive the exact same NlpProblem struct via the Rust trait interfa
 
 | Problem | n | m | ripopt | iters | time | Ipopt | iters | time | speedup |
 |---------|---|---|--------|-------|------|-------|-------|------|---------|
-| Rosenbrock 500 | 500 | 0 | Acceptable | 70 | 0.001s | Optimal | 749 | 0.188s | 131.2x |
-| SparseQP 1K | 500 | 500 | Optimal | 8 | 0.005s | Optimal | 6 | 0.004s | 0.7x |
-| Bratu 1K | 1,000 | 998 | Optimal | 3 | 0.002s | Optimal | 2 | 0.002s | 0.9x |
-| OptControl 2.5K | 2,499 | 1,250 | Acceptable | 9 | 0.070s | Optimal | 1 | 0.003s | 0.0x |
-| Rosenbrock 5K | 5,000 | 0 | Acceptable | 74 | 0.010s | Failed | 3000 | 3.729s | 383.8x |
-| Poisson 2.5K | 5,000 | 2,500 | Optimal | 1 | 0.023s | Optimal | 1 | 0.010s | 0.4x |
-| Bratu 10K | 10,000 | 9,998 | Optimal | 11 | 0.128s | Optimal | 2 | 0.012s | 0.1x |
-| OptControl 20K | 19,999 | 10,000 | Acceptable | 6 | 2.733s | Optimal | 1 | 0.019s | 0.0x |
-| Poisson 50K | 49,928 | 24,964 | Optimal | 1 | 1.681s | Optimal | 1 | 0.123s | 0.1x |
-| SparseQP 100K | 50,000 | 50,000 | Optimal | 8 | 25.424s | Optimal | 6 | 0.317s | 0.0x |
+| Rosenbrock 500 | 500 | 0 | Acceptable | 70 | 0.001s | Optimal | 749 | 0.190s | 196.2x |
+| SparseQP 1K | 500 | 500 | Optimal | 8 | 0.009s | Optimal | 6 | 0.004s | 0.4x |
+| Bratu 1K | 1,000 | 998 | Optimal | 3 | 0.002s | Optimal | 2 | 0.003s | 1.7x |
+| OptControl 2.5K | 2,499 | 1,250 | Optimal | 1 | 0.006s | Optimal | 1 | 0.003s | 0.4x |
+| Rosenbrock 5K | 5,000 | 0 | Acceptable | 74 | 0.010s | Failed | 3000 | 3.725s | 375.3x |
+| Poisson 2.5K | 5,000 | 2,500 | Optimal | 1 | 0.026s | Optimal | 1 | 0.010s | 0.4x |
+| Bratu 10K | 10,000 | 9,998 | Optimal | 11 | 0.130s | Optimal | 2 | 0.012s | 0.1x |
+| OptControl 20K | 19,999 | 10,000 | Optimal | 1 | 0.196s | Optimal | 1 | 0.021s | 0.1x |
+| Poisson 50K | 49,928 | 24,964 | Optimal | 1 | 1.710s | Optimal | 1 | 0.138s | 0.1x |
+| SparseQP 100K | 50,000 | 50,000 | Optimal | 8 | 4.901s | Optimal | 6 | 0.320s | 0.1x |
 
-ripopt: **10/10 solved** in 30.1s total
+ripopt: **10/10 solved** in 7.0s total
 Ipopt: **9/10 solved** in 4.4s total
 
 ---

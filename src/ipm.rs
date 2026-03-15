@@ -23,14 +23,10 @@ fn new_sparse_solver() -> Box<dyn LinearSolver> {
 }
 
 /// Create a sparse direct solver sized for a given KKT dimension.
-/// Prefers faer (fast AMD via SuiteSparse) when available.
-/// Falls back to rmumps MultifrontalLdl for small systems or when faer is absent.
+/// Prefers rmumps MultifrontalLdl (faster factorization via multifrontal method)
+/// when available. Falls back to faer SparseLdl.
 fn new_sparse_solver_for_dim(_dim: usize) -> Box<dyn LinearSolver> {
-    #[cfg(feature = "faer")]
-    {
-        return Box::new(SparseLdl::new());
-    }
-    #[cfg(all(feature = "rmumps", not(feature = "faer")))]
+    #[cfg(feature = "rmumps")]
     { return Box::new(MultifrontalLdl::new()); }
     #[cfg(all(not(feature = "rmumps"), feature = "faer"))]
     { return Box::new(SparseLdl::new()); }

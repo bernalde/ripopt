@@ -1,4 +1,13 @@
    Compiling ripopt v0.3.0 (/Users/jkitchin/Dropbox/projects/ripopt-v3)
+warning: unused import: `crate::linear_solver::sparse::SparseLdl`
+ --> src/ipm.rs:9:5
+  |
+9 | use crate::linear_solver::sparse::SparseLdl;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: `ripopt` (lib) generated 1 warning (run `cargo fix --lib -p ripopt` to apply 1 suggestion)
 warning: unused import: `SolveStatus`
   --> tests/large_scale_benchmark.rs:13:26
    |
@@ -23,77 +32,78 @@ warning: function `solve_all` is never used
      |
      = note: `#[warn(dead_code)]` on by default
 
-warning: `ripopt` (bin "ipopt_native" test) generated 2 warnings (2 duplicates)
-warning: `ripopt` (bin "ipopt_native") generated 2 warnings (run `cargo fix --bin "ipopt_native"` to apply 1 suggestion)
+warning: `ripopt` (bin "ipopt_native" test) generated 2 warnings (1 duplicate)
+warning: `ripopt` (bin "ipopt_native") generated 2 warnings (1 duplicate) (run `cargo fix --bin "ipopt_native"` to apply 1 suggestion)
+warning: `ripopt` (lib test) generated 1 warning (1 duplicate)
 warning: `ripopt` (test "large_scale_benchmark") generated 1 warning (run `cargo fix --test "large_scale_benchmark"` to apply 1 suggestion)
-    Finished `release` profile [optimized + debuginfo] target(s) in 3m 20s
-     Running unittests src/lib.rs (target/release/deps/ripopt-68d59cc4bef89617)
+    Finished `release` profile [optimized + debuginfo] target(s) in 3m 11s
+     Running unittests src/lib.rs (target/release/deps/ripopt-b9768d5d9b721248)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 146 filtered out; finished in 0.00s
 
-     Running unittests hs_suite/run_ipopt_native.rs (target/release/deps/ipopt_native-da9feb0c070b52ae)
+     Running unittests hs_suite/run_ipopt_native.rs (target/release/deps/ipopt_native-fdf011c87ad27a96)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-     Running unittests src/bin/ripopt_ampl.rs (target/release/deps/ripopt-5a8fe12604e6cbbe)
+     Running unittests src/bin/ripopt_ampl.rs (target/release/deps/ripopt-466681e0c3bea97a)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-     Running tests/augmented_lagrangian.rs (target/release/deps/augmented_lagrangian-5baf98d2f707ba11)
+     Running tests/augmented_lagrangian.rs (target/release/deps/augmented_lagrangian-5dec87793c8102fe)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
 
-     Running tests/c_api.rs (target/release/deps/c_api-5a2987aded7c3d74)
+     Running tests/c_api.rs (target/release/deps/c_api-10cd75b710ee8237)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s
 
-     Running tests/correctness.rs (target/release/deps/correctness-5a8b8ebc3a1504bd)
+     Running tests/correctness.rs (target/release/deps/correctness-ac5ab0f732b261c2)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 22 filtered out; finished in 0.00s
 
-     Running tests/hs_problems_subset.rs (target/release/deps/hs_problems_subset-c3ab69a5296c0f97)
+     Running tests/hs_problems_subset.rs (target/release/deps/hs_problems_subset-888f2df35babe3a5)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 
-     Running tests/hs_regression.rs (target/release/deps/hs_regression-c7adcceb49c45b74)
+     Running tests/hs_regression.rs (target/release/deps/hs_regression-6c688fda836808d1)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.00s
 
-     Running tests/ipm_paths.rs (target/release/deps/ipm_paths-398c2936bb80e6d2)
+     Running tests/ipm_paths.rs (target/release/deps/ipm_paths-8da2372fa491708a)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
 
-     Running tests/iterative_solvers.rs (target/release/deps/iterative_solvers-fe814efaa7e07673)
+     Running tests/iterative_solvers.rs (target/release/deps/iterative_solvers-c7118644771b24b2)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
 
-     Running tests/large_scale.rs (target/release/deps/large_scale-8d06f0e17cf84d0a)
+     Running tests/large_scale.rs (target/release/deps/large_scale-fc721a805a5b4288)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
 
-     Running tests/large_scale_benchmark.rs (target/release/deps/large_scale_benchmark-6858a7f205f3df60)
+     Running tests/large_scale_benchmark.rs (target/release/deps/large_scale_benchmark-b9aa318fef3d9ec8)
 
 running 1 test
 
@@ -106,33 +116,33 @@ This program contains Ipopt, a library for large-scale nonlinear optimization.
          For more information visit https://github.com/coin-or/Ipopt
 ******************************************************************************
 
-BENCH: name=Rosenbrock 500, n=500, m=0, ripopt_status=Acceptable, ripopt_obj=6.026897e-14, ripopt_iters=70, ripopt_time=0.0014, ipopt_status=Optimal, ipopt_obj=3.520843e-18, ipopt_iters=749, ipopt_time=0.1882, speedup=131.15x
-BENCH: name=Bratu 1K, n=1000, m=998, ripopt_status=Optimal, ripopt_obj=0.000000e0, ripopt_iters=3, ripopt_time=0.0020, ipopt_status=Optimal, ipopt_obj=0.000000e0, ipopt_iters=2, ipopt_time=0.0019, speedup=0.95x
-BENCH: name=SparseQP 1K, n=500, m=500, ripopt_status=Optimal, ripopt_obj=-1.248170e2, ripopt_iters=8, ripopt_time=0.0051, ipopt_status=Optimal, ipopt_obj=-1.248170e2, ipopt_iters=6, ipopt_time=0.0037, speedup=0.72x
-BENCH: name=OptControl 2.5K, n=2499, m=1250, ripopt_status=Acceptable, ripopt_obj=1.180702e-1, ripopt_iters=9, ripopt_time=0.0700, ipopt_status=Optimal, ipopt_obj=1.176959e-1, ipopt_iters=1, ipopt_time=0.0026, speedup=0.04x
-BENCH: name=Poisson 2.5K, n=5000, m=2500, ripopt_status=Optimal, ripopt_obj=9.945800e-2, ripopt_iters=1, ripopt_time=0.0231, ipopt_status=Optimal, ipopt_obj=9.945800e-2, ipopt_iters=1, ipopt_time=0.0103, speedup=0.44x
-BENCH: name=Rosenbrock 5K, n=5000, m=0, ripopt_status=Acceptable, ripopt_obj=2.271958e-14, ripopt_iters=74, ripopt_time=0.0097, ipopt_status=Failed, ipopt_obj=2.926793e3, ipopt_iters=3000, ipopt_time=3.7292, speedup=383.76x
-BENCH: name=Bratu 10K, n=10000, m=9998, ripopt_status=Optimal, ripopt_obj=0.000000e0, ripopt_iters=11, ripopt_time=0.1278, ipopt_status=Optimal, ipopt_obj=0.000000e0, ipopt_iters=2, ipopt_time=0.0124, speedup=0.10x
-BENCH: name=OptControl 20K, n=19999, m=10000, ripopt_status=Acceptable, ripopt_obj=1.770769e-1, ripopt_iters=6, ripopt_time=2.7333, ipopt_status=Optimal, ipopt_obj=1.173789e-1, ipopt_iters=1, ipopt_time=0.0194, speedup=0.01x
-BENCH: name=Poisson 50K, n=49928, m=24964, ripopt_status=Optimal, ripopt_obj=9.946953e-2, ripopt_iters=1, ripopt_time=1.6810, ipopt_status=Optimal, ipopt_obj=9.946953e-2, ipopt_iters=1, ipopt_time=0.1232, speedup=0.07x
-BENCH: name=SparseQP 100K, n=50000, m=50000, ripopt_status=Optimal, ripopt_obj=-1.249982e4, ripopt_iters=8, ripopt_time=25.4245, ipopt_status=Optimal, ipopt_obj=-1.249982e4, ipopt_iters=6, ipopt_time=0.3165, speedup=0.01x
+BENCH: name=Rosenbrock 500, n=500, m=0, ripopt_status=Acceptable, ripopt_obj=6.026897e-14, ripopt_iters=70, ripopt_time=0.0010, ipopt_status=Optimal, ipopt_obj=3.520843e-18, ipopt_iters=749, ipopt_time=0.1895, speedup=196.19x
+BENCH: name=Bratu 1K, n=1000, m=998, ripopt_status=Optimal, ripopt_obj=0.000000e0, ripopt_iters=3, ripopt_time=0.0019, ipopt_status=Optimal, ipopt_obj=0.000000e0, ipopt_iters=2, ipopt_time=0.0032, speedup=1.71x
+BENCH: name=SparseQP 1K, n=500, m=500, ripopt_status=Optimal, ripopt_obj=-1.248170e2, ripopt_iters=8, ripopt_time=0.0085, ipopt_status=Optimal, ipopt_obj=-1.248170e2, ipopt_iters=6, ipopt_time=0.0038, speedup=0.44x
+BENCH: name=OptControl 2.5K, n=2499, m=1250, ripopt_status=Optimal, ripopt_obj=1.176959e-1, ripopt_iters=1, ripopt_time=0.0058, ipopt_status=Optimal, ipopt_obj=1.176959e-1, ipopt_iters=1, ipopt_time=0.0026, speedup=0.44x
+BENCH: name=Poisson 2.5K, n=5000, m=2500, ripopt_status=Optimal, ripopt_obj=9.945800e-2, ripopt_iters=1, ripopt_time=0.0264, ipopt_status=Optimal, ipopt_obj=9.945800e-2, ipopt_iters=1, ipopt_time=0.0096, speedup=0.36x
+BENCH: name=Rosenbrock 5K, n=5000, m=0, ripopt_status=Acceptable, ripopt_obj=2.271958e-14, ripopt_iters=74, ripopt_time=0.0099, ipopt_status=Failed, ipopt_obj=2.926793e3, ipopt_iters=3000, ipopt_time=3.7253, speedup=375.30x
+BENCH: name=Bratu 10K, n=10000, m=9998, ripopt_status=Optimal, ripopt_obj=0.000000e0, ripopt_iters=11, ripopt_time=0.1296, ipopt_status=Optimal, ipopt_obj=0.000000e0, ipopt_iters=2, ipopt_time=0.0121, speedup=0.09x
+BENCH: name=OptControl 20K, n=19999, m=10000, ripopt_status=Optimal, ripopt_obj=1.173789e-1, ripopt_iters=1, ripopt_time=0.1955, ipopt_status=Optimal, ipopt_obj=1.173789e-1, ipopt_iters=1, ipopt_time=0.0210, speedup=0.11x
+BENCH: name=Poisson 50K, n=49928, m=24964, ripopt_status=Optimal, ripopt_obj=9.946953e-2, ripopt_iters=1, ripopt_time=1.7104, ipopt_status=Optimal, ipopt_obj=9.946953e-2, ipopt_iters=1, ipopt_time=0.1380, speedup=0.08x
+BENCH: name=SparseQP 100K, n=50000, m=50000, ripopt_status=Optimal, ripopt_obj=-1.249982e4, ripopt_iters=8, ripopt_time=4.9005, ipopt_status=Optimal, ipopt_obj=-1.249982e4, ipopt_iters=6, ipopt_time=0.3196, speedup=0.07x
 test large_scale_vs_ipopt ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 34.49s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.41s
 
-     Running tests/lbfgs_ipm.rs (target/release/deps/lbfgs_ipm-515cdb4a23e8d9d3)
+     Running tests/lbfgs_ipm.rs (target/release/deps/lbfgs_ipm-a631e765e80cb3cd)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
 
-     Running tests/nl_integration.rs (target/release/deps/nl_integration-b0eb68b60d2bdf35)
+     Running tests/nl_integration.rs (target/release/deps/nl_integration-ecf5c6333e0321ce)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
 
-     Running tests/sensitivity.rs (target/release/deps/sensitivity-2aec3f3c69258409)
+     Running tests/sensitivity.rs (target/release/deps/sensitivity-9922195ad43b6da4)
 
 running 0 tests
 

@@ -7,5 +7,6 @@ description = "Pure Rust multifrontal sparse symmetric indefinite solver"
 
 [dependencies]
 rayon = "1"
+amd = "0.2"
 
 [dev-dependencies]
