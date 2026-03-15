@@ -690,14 +690,22 @@ src/
     mod.rs            LinearSolver trait, SymmetricMatrix, KktMatrix
     dense.rs          Dense LDL^T (Bunch-Kaufman) factorization
     banded.rs         Banded LDL^T for problems with small bandwidth
-    multifrontal.rs   Multifrontal sparse LDL^T via rmumps (default)
+    multifrontal.rs   Multifrontal sparse LDL^T via rmumps (default, SuiteSparse AMD ordering)
     sparse.rs         Sparse LDL^T via faer (optional)
+    iterative.rs      MINRES iterative solver with incomplete LDL^T preconditioner
+    hybrid.rs         Hybrid direct/iterative solver with automatic switching
 
 tests/
-  correctness.rs      Integration tests (21 NLP problems)
+  correctness.rs      Integration tests (22 NLP problems)
+  ipm_paths.rs        IPM code path tests (condensed KKT, unbounded, NE-to-LS, preprocessing)
   sensitivity.rs      Parametric sensitivity integration tests
   hs_regression.rs    HS suite regression tests (15 problems)
-  c_api.rs            C API integration tests (11 tests via FFI)
+  c_api.rs            C API integration tests (12 tests via FFI)
+  lbfgs_ipm.rs        L-BFGS Hessian approximation tests
+  iterative_solvers.rs  Iterative/hybrid solver tests
+  large_scale.rs      Large-scale correctness tests (up to 100K variables)
+  large_scale_benchmark.rs  Large-scale ripopt vs Ipopt comparison
+  nl_integration.rs   NL file parsing and solving tests
 
 examples/
   rosenbrock.rs       Unconstrained optimization
@@ -730,12 +738,13 @@ The Jacobian is evaluated at two points to identify linear constraints (where al
 
 The solver follows the primal-dual barrier method from the Ipopt papers (Wachter & Biegler, 2006). At each iteration it:
 
-1. Assembles and factors the KKT system using dense LDL^T (Bunch-Kaufman) or sparse multifrontal LDL^T (rmumps)
+1. Assembles and factors the KKT system using dense LDL^T (Bunch-Kaufman), sparse multifrontal LDL^T (rmumps), or dense condensed Schur complement for tall-narrow problems
 2. Computes inertia of the factorization and applies regularization if needed
-3. Computes search directions with iterative refinement (up to 3 rounds)
-4. Applies second-order corrections (SOC) when the initial step is rejected
-5. Uses a filter line search with backtracking to ensure sufficient progress
-6. Updates the barrier parameter adaptively based on complementarity
+3. Applies Mehrotra predictor-corrector with Gondzio centrality corrections (default on)
+4. Computes search directions with iterative refinement (up to 3 rounds)
+5. Applies second-order corrections (SOC) when the initial step is rejected
+6. Uses a filter line search with backtracking to ensure sufficient progress
+7. Updates the barrier parameter adaptively using Mehrotra sigma-guided updates
 
 ### Multi-Solver Fallback Architecture
 
