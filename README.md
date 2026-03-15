@@ -22,12 +22,14 @@ It implements a primal-dual interior point method with a barrier formulation, si
 
 - Primal-dual interior point method with logarithmic barrier
 - Dense LDL^T factorization via Bunch-Kaufman pivoting with inertia detection
-- Sparse multifrontal LDL^T factorization (via `rmumps`) for larger problems (n+m >= 100)
+- Sparse multifrontal LDL^T factorization (via `rmumps` with SuiteSparse AMD ordering) for larger problems (n+m >= 110)
 - Banded LDL^T solver for problems with detected-banded structure (e.g., PDE discretizations)
-- Sparse condensed KKT (Schur complement) for reducing system size when m > 0
+- Dense condensed KKT (Schur complement) for tall-narrow problems (m >> n, n <= 100)
+- Sparse condensed KKT for reducing system size when m > 0
 - Filter line search with switching condition and Armijo criterion
 - Second-order corrections (SOC) for improved step acceptance
-- Adaptive and monotone barrier parameter strategies
+- **Mehrotra predictor-corrector** with Gondzio centrality corrections (enabled by default)
+- Adaptive and monotone barrier parameter strategies with Mehrotra sigma-guided mu updates
 - Fraction-to-boundary rule for primal and dual step sizes
 - Support for equality constraints, inequality constraints, and variable bounds
 - Warm-start initialization
@@ -35,16 +37,17 @@ It implements a primal-dual interior point method with a barrier formulation, si
 - Multi-attempt recovery with systematic barrier landscape perturbation
 - Watchdog strategy for escaping narrow feasible corridors
 - Automatic NE-to-LS reformulation for overdetermined nonlinear equation systems
+- **Convergence polishing**: Newton polish for NE-to-LS, complementarity snap for IPM
 - NLP scaling (gradient-based objective and constraint scaling)
-- Condensed KKT system for problems with many more constraints than variables
 - Local infeasibility detection for inconsistent constraint systems
+- **Early stall detection**: bail out fast when stuck in early iterations to trigger fallbacks
 - **Preprocessing**: Automatic elimination of fixed variables, redundant constraints, and bound tightening from single-variable linear constraints
 - **Near-linear constraint detection**: Automatically identifies linear constraints and skips their Hessian contribution
 - **Limited-memory Hessian approximation**: L-BFGS-in-IPM mode (`hessian_approximation_lbfgs`) replaces exact Hessian with L-BFGS curvature pairs, eliminating the need for second-derivative callbacks
 - **Multi-solver fallback architecture**: L-BFGS, Augmented Lagrangian, SQP, and explicit slack reformulation
 - **Parametric sensitivity analysis**: sIPOPT-style post-optimal sensitivity (`ds/dp = -M⁻¹ · Nₚ`) for computing how the optimal solution changes under parameter perturbations, plus reduced Hessian extraction for covariance estimation
 - **C API** mirroring the Ipopt C interface for direct linking from C/C++/Python/Julia
-- **AMPL NL interface** with Pyomo integration via `SolverFactory('ripopt')`
+- **AMPL NL interface** with Pyomo integration via `SolverFactory('ripopt')`, with `--help` listing all options
 
 ## Benchmarks
 
@@ -52,107 +55,67 @@ It implements a primal-dual interior point method with a barrier formulation, si
 
 | Metric          | ripopt             | Ipopt (native, MUMPS) |
 |-----------------|--------------------|-----------------------|
-| Problems solved | **120/120 (100%)** | 118/120 (98.3%)       |
-| Optimal         | 97                 | 118                   |
-| Acceptable      | 23                 | 0                     |
+| Problems solved | **119/120 (99.2%)**| 116/120 (96.7%)       |
+| Optimal         | 101                | 116                   |
+| Acceptable      | 18                 | 0                     |
+| ripopt only     | 3                  | 0                     |
 
-ripopt solves all 120 problems. Ipopt fails on TP214 (`InvalidNumberDetected`) and TP223 (declared infeasible despite being feasible -- ripopt solves it in 4 iterations).
+On 116 commonly-solved problems: **16.5x geometric mean speedup**, ripopt faster on 113/116 (97%).
 
 ### CUTEst Benchmark Suite (727 problems)
 
 | Metric        | ripopt              | Ipopt (C++ with MUMPS) |
 |---------------|---------------------|------------------------|
-| Total solved  | **598/727 (82.3%)** | 555/727 (76.3%)        |
-| Constrained   | **376/493**         | 339/493                |
-| Unconstrained | **222/234**         | 216/234                |
-| Both solve    | 555                 | 555                    |
-| ripopt only   | **43**              | --                     |
-| Ipopt only    | --                  | **0**                  |
-| Both fail     | 129                 | 129                    |
+| Total solved  | **596/727 (82.0%)** | 561/727 (77.2%)        |
+| Both solve    | 551                 | 551                    |
+| ripopt only   | **45**              | --                     |
+| Ipopt only    | --                  | **10**                 |
 
-ripopt solves **43 more problems** than Ipopt, and solves everything Ipopt solves. (Counts vary ±2 between runs due to timing sensitivity on borderline problems.)
-
-#### Speed comparison
-
-**Methodology.** Both solvers are timed on the same CUTEst problems using the same evaluation callbacks. For Ipopt, only the `IpoptSolve` call is timed (excluding `CreateIpoptProblem`, option setting, and `FreeIpoptProblem`). For ripopt, the full `solve()` API is timed (including internal scaling, NE-to-LS detection, and all fallbacks). Each problem runs 3 times with the best time reported. Both use adaptive mu, tol=1e-8, max_iter=3000.
-
-**On 272 problems where both solvers take >= 0.1ms** (excluding trivially fast sub-0.1ms solves where measurement noise dominates):
+On 551 commonly-solved problems:
 
 | Metric                          | Value            |
 |---------------------------------|------------------|
-| Median speedup (ripopt faster)  | **3.3x**         |
-| Geometric mean speedup          | **2.2x**         |
-| Problems where ripopt is faster | 186/272 (68%)    |
-| Problems where Ipopt is faster  | 86/272 (32%)     |
-| ripopt 10x+ faster              | 76/272 (28%)     |
+| Geometric mean speedup          | **9.1x**         |
+| Median speedup                  | **26.2x**        |
+| Problems where ripopt is faster | 446/551 (81%)    |
+| ripopt 10x+ faster              | 350/551 (64%)    |
+| Problems where Ipopt is faster  | 105/551 (19%)    |
 
-Speed by problem size (problems >= 0.1ms):
+**Interpreting the speed numbers.** Most CUTEst problems are small (n < 10) and solve in microseconds for ripopt, while Ipopt has a ~1-3ms floor from internal initialization. The per-iteration speedup on small problems comes from stack allocation, the absence of C/Fortran interop, and cache-efficient dense linear algebra. On larger problems, ripopt switches to sparse multifrontal LDL^T with SuiteSparse AMD ordering, and Ipopt's Fortran MUMPS has a per-factorization advantage.
 
-| Problem size          | Count | Median speedup |
-|-----------------------|-------|----------------|
-| Small (n <= 10)       | 176   | **4.3x**       |
-| Medium (10 < n <= 50) | 64    | **3.7x**       |
-| Large (n > 50)        | 32    | **1.6x**       |
-
-**Interpreting the speed numbers.** The raw median across all 555 mutually-solved problems is 30x, but this is misleading. Most CUTEst problems are small (n < 10) and solve in microseconds for ripopt, while Ipopt has a ~1-3ms floor from internal initialization (MA27 symbolic analysis, TNLP setup) that dominates for trivial problems. The 3.3x median on non-trivial problems is a more meaningful comparison.
-
-The speed advantage comes from three sources:
+The speed advantage comes from:
 
 1. **Lower per-iteration overhead.** ripopt's dense Bunch-Kaufman factorization avoids sparse symbolic analysis and has minimal allocation. For small-to-medium problems (n < 50), this gives 2-5x per-iteration speedup.
-2. **Condensed KKT for over-constrained problems.** When m >> n, ripopt reduces an (n+m)x(n+m) factorization to nxn, giving dramatic speedups on problems like PT (67x, n=2, m=501) and SIPOW (5-8x, n=2-4, m=2000).
-3. **Fewer iterations on some problems.** NE-to-LS reformulation, better restoration recovery, and adaptive strategies sometimes converge in fewer iterations.
+2. **Dense condensed KKT for tall-narrow problems.** When m >> n with n <= 100, ripopt reduces an (n+m)x(n+m) sparse factorization to an nxn dense solve, giving 100-800x speedup on problems like EXPFITC (n=5, m=502) and OET3 (n=4, m=1002).
+3. **Mehrotra predictor-corrector with Gondzio corrections.** Enabled by default, reducing iteration counts on many problems.
+4. **Fewer iterations on some problems.** NE-to-LS reformulation, two-phase restoration, and multi-solver fallback recover problems that Ipopt cannot solve.
 
 Where Ipopt is faster:
 
-1. **Large sparse problems.** Ipopt's MUMPS/MA27 scales better than ripopt's rmumps multifrontal solver for some sparsity patterns, though the gap has narrowed significantly.
-2. **Problems requiring many iterations.** When both take 100+ iterations, Ipopt's mature sparse linear algebra can win on per-iteration cost for larger systems.
-3. **Some difficult nonlinear problems.** Ipopt's extensive tuning of barrier parameter updates and restoration gives it an edge on specific hard problems.
-
-#### Large problems (n+m >= 100)
-
-On 48 problems with n+m >= 100 (exercising the sparse LDL solver):
-
-| Metric         | Value        |
-|----------------|--------------|
-| Both solve     | 48/48 (100%) |
-| ripopt faster  | 29/48 (60%)  |
-| Median speedup | 1.6x         |
-
-#### Attribution of ripopt-only solves (43 problems)
-
-- **NE-to-LS reformulation** (~10): Nonlinear equation systems where Ipopt returns status -10
-- **Two-phase restoration** (~10): GN phase or multi-attempt recovery succeeds where Ipopt's restoration fails
-- **Pragmatic inertia correction** (~5): ripopt proceeds with approximate factorization instead of failing
-- **Explicit slack fallback** (~3): Stabilizes multiplier oscillation at degenerate points
-- **L-BFGS / AL fallback** (~5): L-BFGS for unconstrained, augmented Lagrangian for constrained
-- **Best-du tracking** (~5): Recovers acceptable solutions from cycling/stalling at max iterations
-- **Other algorithmic differences** (~5): Barrier parameter, filter, convergence criteria
+1. **Large sparse problems.** Ipopt's Fortran MUMPS is ~10-15x faster per factorization than rmumps on 50K-100K systems.
+2. **Some medium constrained problems.** A handful of problems (CORE1, HAIFAM, NET1) have high per-iteration cost in ripopt's line search or fallback cascade.
+3. **Some difficult nonlinear problems.** Ipopt's mature barrier parameter tuning gives it an edge on specific hard problems.
 
 ### Large-Scale Benchmarks
 
-Comparison on large-scale problems using the same Rust problem structs, starting points, and tolerances (tol=1e-6). Ipopt uses MUMPS (Fortran); ripopt uses rmumps (pure Rust multifrontal LDL^T) with automatic banded solver detection.
+Both solvers receive the exact same NlpProblem struct via the Rust trait interface, ensuring a fair comparison. ripopt uses rmumps (pure Rust multifrontal LDL^T with SuiteSparse AMD ordering); Ipopt uses MUMPS (Fortran).
 
-| Problem | n | m | ripopt obj | iters | time |
-|---------|---|---|------------|-------|------|
-| Rosenbrock 500 | 500 | 0 | 6.03e-14 | 70 | 0.001s |
-| Bratu 1K | 1000 | 998 | 0.0 | 4 | 0.002s |
-| OptControl 2.5K | 2499 | 1250 | 1.18e-1 | 2 | 0.006s |
-| Poisson 2.5K | 2450 | 1225 | 9.94e-2 | 1 | 0.025s |
-| SparseQP 1K | 500 | 500 | -124.82 | 6 | 0.003s |
-| Rosenbrock 5K | 5000 | 0 | 2.64e-14 | 73 | 0.010s |
-| Bratu 10K | 10000 | 9998 | 0.0 | 11 | 0.136s |
-| OptControl 20K | 19999 | 10000 | 1.17e-1 | 2 | 0.200s |
-| Poisson 50K | 49928 | 24964 | 9.95e-2 | 5 | 3.904s |
-| SparseQP 100K | 50000 | 50000 | -1.25e4 | 6 | 4.771s |
+| Problem | n | m | ripopt | time | Ipopt | time | speedup |
+|---------|---|---|--------|------|-------|------|---------|
+| Rosenbrock 500 | 500 | 0 | Acceptable | 0.001s | Optimal | 0.189s | **196x** |
+| Bratu 1K | 1,000 | 998 | Optimal | 0.002s | Optimal | 0.003s | 1.7x |
+| SparseQP 1K | 500 | 500 | Optimal | 0.009s | Optimal | 0.004s | 0.4x |
+| OptControl 2.5K | 2,499 | 1,250 | Optimal | 0.006s | Optimal | 0.003s | 0.4x |
+| Rosenbrock 5K | 5,000 | 0 | Acceptable | 0.010s | **Failed** | 3.725s | **375x** |
+| Poisson 2.5K | 5,000 | 2,500 | Optimal | 0.026s | Optimal | 0.010s | 0.4x |
+| Bratu 10K | 10,000 | 9,998 | Optimal | 0.130s | Optimal | 0.012s | 0.1x |
+| OptControl 20K | 19,999 | 10,000 | Optimal | 0.196s | Optimal | 0.021s | 0.1x |
+| Poisson 50K | 49,928 | 24,964 | Optimal | 1.710s | Optimal | 0.138s | 0.1x |
+| SparseQP 100K | 50,000 | 50,000 | Optimal | 4.900s | Optimal | 0.317s | 0.07x |
 
-Key observations:
+ripopt solves **10/10** (Ipopt: 9/10 — fails on Rosenbrock 5K). On large constrained problems, Ipopt's Fortran MUMPS is ~10-15x faster per factorization. ripopt dominates on unconstrained problems via L-BFGS fallback.
 
-- **Unconstrained** (Rosenbrock): L-BFGS fallback converges in 70-73 iterations with near-zero objective
-- **Banded PDE problems** (Bratu): ripopt auto-detects bandwidth 2 and uses O(n) banded factorization (0.14s at 10K variables)
-- **Large constrained problems**: rmumps multifrontal solver handles 50K-100K variable problems in seconds
-- **Small/medium problems**: all solve in under 25ms
-
-Run the benchmarks yourself: `cargo run --release --example benchmark_solvers`
+Run the benchmarks yourself: `make benchmark`
 
 ## Installation
 
@@ -364,6 +327,10 @@ Key options (all have Ipopt-matching defaults):
 | `enable_sqp_fallback` | true | SQP fallback for constrained problems |
 | `hessian_approximation_lbfgs` | false | Use L-BFGS Hessian approximation (no exact Hessian needed) |
 | `enable_lbfgs_hessian_fallback` | true | Auto-retry with L-BFGS Hessian when exact Hessian fails |
+| `mehrotra_pc` | true | Mehrotra predictor-corrector for better centering |
+| `gondzio_mcc_max` | 3 | Maximum Gondzio centrality corrections per iteration |
+| `early_stall_timeout` | 10.0 | Max seconds for first 3 iterations (0=off) |
+| `linear_solver` | direct | KKT solver: direct, iterative (MINRES), or hybrid |
 
 ### Result
 

@@ -1222,9 +1222,9 @@
   {
     "name": "ACOPP30",
     "suite": "CUTEst",
-    "ripopt_status": "Acceptable",
+    "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 576.8923065057716,
+    "ripopt_obj": 576.8923065059241,
     "ipopt_obj": 576.892421898335,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -1234,7 +1234,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 8859.568615159555,
+    "ripopt_obj": 8081.525688889367,
     "ipopt_obj": 8081.526236731194,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -1454,7 +1454,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 259182.4580167784,
+    "ripopt_obj": 259186.5586855899,
     "ipopt_obj": 259180.3371654187,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -2132,11 +2132,11 @@
   {
     "name": "CORE1",
     "suite": "CUTEst",
-    "ripopt_status": "Acceptable",
+    "ripopt_status": "Timeout",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 91.05624155834836,
+    "ripopt_obj": null,
     "ipopt_obj": 91.05623953090804,
-    "ripopt_solved": true,
+    "ripopt_solved": false,
     "ipopt_solved": true
   },
   {
@@ -2572,9 +2572,9 @@
   {
     "name": "DIAMON3DLS",
     "suite": "CUTEst",
-    "ripopt_status": "MaxIterations",
+    "ripopt_status": "Timeout",
     "ipopt_status": "Timeout",
-    "ripopt_obj": 502.48646101372645,
+    "ripopt_obj": null,
     "ipopt_obj": null,
     "ripopt_solved": false,
     "ipopt_solved": false
@@ -2824,7 +2824,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 21253.520512806183,
+    "ripopt_obj": 21253.52058604539,
     "ipopt_obj": 18309.36005801744,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -3364,7 +3364,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "IpoptStatus(-10)",
-    "ripopt_obj": 13.850399971649292,
+    "ripopt_obj": 13.850399971649288,
     "ipopt_obj": 0.0,
     "ripopt_solved": true,
     "ipopt_solved": false
@@ -3834,7 +3834,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -828.6468866265964,
+    "ripopt_obj": -813.8433457889091,
     "ipopt_obj": -1735.5695799158036,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -5414,7 +5414,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 350525.11685847933,
+    "ripopt_obj": 350525.11685844813,
     "ipopt_obj": 350525.1168584257,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -5644,7 +5644,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -77.00000068131041,
+    "ripopt_obj": -77.00000000001408,
     "ipopt_obj": -77.00004548557075,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -6214,7 +6214,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 18.21790000102092,
+    "ripopt_obj": 18.217900005093448,
     "ipopt_obj": 18.217899817831,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -6224,7 +6224,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -15.99999999873942,
+    "ripopt_obj": -16.000000004113744,
     "ipopt_obj": -14.000000000012086,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -6344,7 +6344,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 0.37298951883513143,
+    "ripopt_obj": 0.3729895189288045,
     "ipopt_obj": 0.004505042931227994,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -6362,11 +6362,11 @@
   {
     "name": "OET5",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": null,
+    "ripopt_obj": 0.005972873117542855,
     "ipopt_obj": 0.0026500766742341727,
-    "ripopt_solved": false,
+    "ripopt_solved": true,
     "ipopt_solved": true
   },
   {
@@ -7772,9 +7772,9 @@
   {
     "name": "SIPOW3",
     "suite": "CUTEst",
-    "ripopt_status": "Acceptable",
+    "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 0.534637998858396,
+    "ripopt_obj": 0.6979543696617977,
     "ipopt_obj": 0.5346586270004736,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -7924,7 +7924,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 0.06785988344637017,
+    "ripopt_obj": 0.06785988344636884,
     "ipopt_obj": 0.06786018306248787,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -7982,9 +7982,9 @@
   {
     "name": "TAXR13322",
     "suite": "CUTEst",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Acceptable",
-    "ripopt_obj": -9850.073584026562,
+    "ripopt_obj": -361.1651803591328,
     "ipopt_obj": -342.9088661121257,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -8134,7 +8134,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "IpoptStatus(4)",
-    "ripopt_obj": 9.005218904686233,
+    "ripopt_obj": 9.284886833263458,
     "ipopt_obj": -1.957476279591892e+20,
     "ripopt_solved": true,
     "ipopt_solved": false

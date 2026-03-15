@@ -1,24 +1,24 @@
 # ripopt Benchmark Report
 
-Generated: 2026-03-15 09:27:58
+Generated: 2026-03-15 10:43:06
 
 ## Executive Summary
 
 | Metric | ripopt | Ipopt |
 |--------|--------|-------|
 | Total solved | **715/847** (84.4%) | 677/847 (79.9%) |
-| Optimal | 474 | 672 |
-| Acceptable | 241 | 5 |
+| Optimal | 475 | 672 |
+| Acceptable | 240 | 5 |
 | Solved exclusively | 48 | 10 |
 | Both solved | 667 | |
-| Matching objectives | 530/667 | |
+| Matching objectives | 529/667 | |
 
 ## Per-Suite Summary
 
 | Suite | Problems | ripopt solved | Ipopt solved | ripopt only | Ipopt only | Both solved | Match |
 |-------|----------|--------------|-------------|-------------|------------|------------|-------|
 | HS | 120 | 119 (99.2%) | 116 (96.7%) | 3 | 0 | 116 | 108/116 |
-| CUTEst | 727 | 596 (82.0%) | 561 (77.2%) | 45 | 10 | 551 | 422/551 |
+| CUTEst | 727 | 596 (82.0%) | 561 (77.2%) | 45 | 10 | 551 | 421/551 |
 
 ## HS Suite — Performance
 
@@ -26,15 +26,15 @@ On 116 commonly-solved problems:
 
 | Metric | ripopt | Ipopt |
 |--------|--------|-------|
-| Median time | 154us | 1.8ms |
-| Total time | 60.5ms | 275.2ms |
+| Median time | 100us | 1.9ms |
+| Total time | 46.0ms | 281.9ms |
 | Mean iterations | 16.4 | 13.3 |
 | Median iterations | 11 | 10 |
 
-- **Geometric mean speedup**: 12.2x
-- **Median speedup**: 11.7x
+- **Geometric mean speedup**: 16.5x
+- **Median speedup**: 17.8x
 - ripopt faster: 113/116 (97%)
-- ripopt 10x+ faster: 68/116
+- ripopt 10x+ faster: 92/116
 - Ipopt faster: 3/116
 
 ## CUTEst Suite — Performance
@@ -43,16 +43,16 @@ On 551 commonly-solved problems:
 
 | Metric | ripopt | Ipopt |
 |--------|--------|-------|
-| Median time | 96us | 2.2ms |
-| Total time | 79.93s | 19.12s |
-| Mean iterations | 126.5 | 41.0 |
+| Median time | 97us | 2.3ms |
+| Total time | 106.32s | 19.06s |
+| Mean iterations | 130.8 | 41.1 |
 | Median iterations | 18 | 12 |
 
-- **Geometric mean speedup**: 9.4x
-- **Median speedup**: 26.8x
-- ripopt faster: 445/551 (81%)
+- **Geometric mean speedup**: 9.1x
+- **Median speedup**: 26.2x
+- ripopt faster: 446/551 (81%)
 - ripopt 10x+ faster: 350/551
-- Ipopt faster: 106/551
+- Ipopt faster: 105/551
 
 ## Failure Analysis
 
@@ -77,23 +77,23 @@ On 551 commonly-solved problems:
 | IpoptStatus(3) | 0 | 1 |
 | IpoptStatus(4) | 0 | 2 |
 | LocalInfeasibility | 89 | 0 |
-| MaxIterations | 5 | 12 |
+| MaxIterations | 4 | 12 |
 | NumericalError | 17 | 0 |
 | RestorationFailed | 3 | 4 |
-| Timeout | 17 | 10 |
+| Timeout | 18 | 10 |
 
 ## Regressions (Ipopt solves, ripopt fails)
 
 | Problem | Suite | n | m | ripopt status | Ipopt obj |
 |---------|-------|---|---|--------------|-----------|
 | ACOPR30 | CUTEst | 72 | 172 | Timeout | 5.768924e+02 |
+| CORE1 | CUTEst | 65 | 59 | Timeout | 9.105624e+01 |
 | CRESC50 | CUTEst | 6 | 100 | Timeout | 7.862467e-01 |
 | DISCS | CUTEst | 36 | 66 | Timeout | 1.200007e+01 |
 | FEEDLOC | CUTEst | 90 | 259 | Timeout | -9.539854e-10 |
 | HS116 | CUTEst | 13 | 14 | NumericalError | 9.758747e+01 |
 | MEYER3 | CUTEst | 3 | 0 | MaxIterations | 8.794586e+01 |
 | MGH10LS | CUTEst | 3 | 0 | NumericalError | 8.794586e+01 |
-| OET5 | CUTEst | 5 | 1002 | Timeout | 2.650077e-03 |
 | STRATEC | CUTEst | 10 | 0 | NumericalError | 2.212262e+03 |
 | TRO3X3 | CUTEst | 30 | 13 | NumericalError | 8.967478e+00 |
 
@@ -146,26 +146,25 @@ On 551 commonly-solved problems:
 | SPIRAL | CUTEst | 3 | 2 | Infeasible | 1.259927e-01 |
 | SSI | CUTEst | 3 | 0 | MaxIterations | 3.363463e-04 |
 | TAX13322 | CUTEst | 72 | 1261 | MaxIterations | -3.726455e+03 |
-| TRO4X4 | CUTEst | 63 | 25 | IpoptStatus(4) | 9.005219e+00 |
+| TRO4X4 | CUTEst | 63 | 25 | IpoptStatus(4) | 9.284887e+00 |
 | WACHBIEG | CUTEst | 3 | 2 | Infeasible | 1.000000e+00 |
 | YFITNE | CUTEst | 3 | 17 | IpoptStatus(-10) | 0.000000e+00 |
 
-## Acceptable (not Optimal) — 241 problems
+## Acceptable (not Optimal) — 240 problems
 
 These problems converged within relaxed tolerances but not strict tolerances.
 
 | Problem | Suite | n | m | Ipopt status | ripopt obj | Ipopt obj |
 |---------|-------|---|---|-------------|------------|-----------|
 | 3PK | CUTEst | 30 | 0 | Optimal | 5.682734e+00 | 1.720119e+00 |
-| ACOPP30 | CUTEst | 72 | 142 | Optimal | 5.768923e+02 | 5.768924e+02 |
-| ACOPR14 | CUTEst | 38 | 82 | Optimal | 8.859569e+03 | 8.081526e+03 |
+| ACOPR14 | CUTEst | 38 | 82 | Optimal | 8.081526e+03 | 8.081526e+03 |
 | AIRPORT | CUTEst | 84 | 42 | Optimal | 4.791640e+04 | 4.795270e+04 |
 | ALLINITA | CUTEst | 4 | 4 | Optimal | 3.329576e+01 | 3.329611e+01 |
 | ALLINITC | CUTEst | 4 | 1 | Optimal | 3.049348e+01 | 3.049261e+01 |
 | ANTWERP | CUTEst | 27 | 10 | Optimal | 3.245242e+03 | 3.245241e+03 |
 | ARGAUSS | CUTEst | 3 | 15 | IpoptStatus(-10) | 0.000000e+00 | 0.000000e+00 |
 | AVION2 | CUTEst | 49 | 15 | MaxIterations | 9.468013e+07 | 9.468013e+07 |
-| BATCH | CUTEst | 48 | 73 | Optimal | 2.591825e+05 | 2.591803e+05 |
+| BATCH | CUTEst | 48 | 73 | Optimal | 2.591866e+05 | 2.591803e+05 |
 | BENNETT5LS | CUTEst | 3 | 0 | Optimal | 5.389456e-04 | 5.563289e-04 |
 | BIGGSC4 | CUTEst | 4 | 7 | Optimal | -2.449980e+01 | -2.450000e+01 |
 | BOX2 | CUTEst | 3 | 0 | Optimal | 6.334773e-14 | 6.251257e-23 |
@@ -185,7 +184,6 @@ These problems converged within relaxed tolerances but not strict tolerances.
 | CLUSTERLS | CUTEst | 2 | 0 | Optimal | 1.958029e-14 | 2.724155e-18 |
 | CONCON | CUTEst | 15 | 11 | Optimal | -6.230796e+03 | -6.230796e+03 |
 | COOLHANSLS | CUTEst | 9 | 0 | Optimal | 2.587513e-05 | 1.208512e-18 |
-| CORE1 | CUTEst | 65 | 59 | Optimal | 9.105624e+01 | 9.105624e+01 |
 | DECONVB | CUTEst | 63 | 0 | MaxIterations | 3.894509e-02 | 2.569475e-03 |
 | DECONVBNE | CUTEst | 63 | 40 | Optimal | 0.000000e+00 | 0.000000e+00 |
 | DECONVU | CUTEst | 63 | 0 | Optimal | 2.369401e-07 | 4.146188e-13 |
@@ -309,6 +307,7 @@ These problems converged within relaxed tolerances but not strict tolerances.
 | NET1 | CUTEst | 48 | 57 | Optimal | 9.411943e+05 | 9.411943e+05 |
 | OET2 | CUTEst | 3 | 1002 | Optimal | 8.709576e-02 | 8.715962e-02 |
 | OET4 | CUTEst | 4 | 1002 | Optimal | 5.011192e-03 | 4.295421e-03 |
+| OET5 | CUTEst | 5 | 1002 | Optimal | 5.972873e-03 | 2.650077e-03 |
 | OET6 | CUTEst | 5 | 1002 | Optimal | 8.704970e-02 | 2.069727e-03 |
 | OET7 | CUTEst | 7 | 1002 | Optimal | 8.710336e-02 | 4.465915e-05 |
 | OPTCNTRL | CUTEst | 32 | 20 | Optimal | 5.500000e+02 | 5.500000e+02 |
@@ -371,7 +370,6 @@ These problems converged within relaxed tolerances but not strict tolerances.
 | RK23 | CUTEst | 17 | 11 | Optimal | 8.333684e-02 | 8.333327e-02 |
 | ROSZMAN1LS | CUTEst | 4 | 0 | Optimal | 3.951903e-02 | 4.948485e-04 |
 | SANTALS | CUTEst | 21 | 0 | Optimal | 1.224627e-05 | 1.224358e-05 |
-| SIPOW3 | CUTEst | 4 | 2000 | Optimal | 5.346380e-01 | 5.346586e-01 |
 | SISSER | CUTEst | 2 | 0 | Optimal | 1.229019e-10 | 6.331104e-13 |
 | SISSER2 | CUTEst | 2 | 0 | Optimal | 2.057380e-11 | 8.121606e-13 |
 | SPANHYD | CUTEst | 97 | 33 | Optimal | 2.397380e+02 | 2.397380e+02 |
@@ -380,13 +378,14 @@ These problems converged within relaxed tolerances but not strict tolerances.
 | SYNTHES1 | CUTEst | 6 | 6 | Optimal | 7.592849e-01 | 7.592842e-01 |
 | SYNTHES2 | CUTEst | 11 | 14 | Optimal | -5.544049e-01 | -5.544063e-01 |
 | SYNTHES3 | CUTEst | 17 | 23 | Optimal | 1.508396e+01 | 1.508219e+01 |
+| TAXR13322 | CUTEst | 72 | 1261 | Acceptable | -3.611652e+02 | -3.429089e+02 |
 | TFI1 | CUTEst | 3 | 101 | Optimal | 2.876995e+02 | 5.334687e+00 |
 | THURBERLS | CUTEst | 7 | 0 | Optimal | 5.642708e+03 | 5.642708e+03 |
 | TOINTGOR | CUTEst | 50 | 0 | Optimal | 1.373905e+03 | 1.373905e+03 |
 | TOINTPSP | CUTEst | 50 | 0 | Optimal | 2.255604e+02 | 2.255604e+02 |
 | TOINTQOR | CUTEst | 50 | 0 | Optimal | 1.175472e+03 | 1.175472e+03 |
 | TRIGGER | CUTEst | 7 | 6 | Optimal | 0.000000e+00 | 0.000000e+00 |
-| TRO4X4 | CUTEst | 63 | 25 | IpoptStatus(4) | 9.005219e+00 | -1.957476e+20 |
+| TRO4X4 | CUTEst | 63 | 25 | IpoptStatus(4) | 9.284887e+00 | -1.957476e+20 |
 | TRUSPYR1 | CUTEst | 11 | 4 | Optimal | 1.122874e+01 | 1.122874e+01 |
 | VESUVIALS | CUTEst | 8 | 0 | Optimal | 1.500440e+03 | 9.914100e+02 |
 | VESUVIOLS | CUTEst | 8 | 0 | Optimal | 9.914100e+02 | 9.914100e+02 |
@@ -405,16 +404,16 @@ Both solvers receive the exact same NlpProblem struct via the Rust trait interfa
 
 | Problem | n | m | ripopt | iters | time | Ipopt | iters | time | speedup |
 |---------|---|---|--------|-------|------|-------|-------|------|---------|
-| Rosenbrock 500 | 500 | 0 | Acceptable | 70 | 0.001s | Optimal | 749 | 0.190s | 196.2x |
+| Rosenbrock 500 | 500 | 0 | Acceptable | 70 | 0.002s | Optimal | 749 | 0.210s | 88.3x |
 | SparseQP 1K | 500 | 500 | Optimal | 8 | 0.009s | Optimal | 6 | 0.004s | 0.4x |
-| Bratu 1K | 1,000 | 998 | Optimal | 3 | 0.002s | Optimal | 2 | 0.003s | 1.7x |
-| OptControl 2.5K | 2,499 | 1,250 | Optimal | 1 | 0.006s | Optimal | 1 | 0.003s | 0.4x |
-| Rosenbrock 5K | 5,000 | 0 | Acceptable | 74 | 0.010s | Failed | 3000 | 3.725s | 375.3x |
+| Bratu 1K | 1,000 | 998 | Optimal | 3 | 0.002s | Optimal | 2 | 0.002s | 1.1x |
+| OptControl 2.5K | 2,499 | 1,250 | Optimal | 1 | 0.006s | Optimal | 1 | 0.002s | 0.4x |
+| Rosenbrock 5K | 5,000 | 0 | Acceptable | 74 | 0.010s | Failed | 3000 | 3.730s | 383.7x |
 | Poisson 2.5K | 5,000 | 2,500 | Optimal | 1 | 0.026s | Optimal | 1 | 0.010s | 0.4x |
-| Bratu 10K | 10,000 | 9,998 | Optimal | 11 | 0.130s | Optimal | 2 | 0.012s | 0.1x |
-| OptControl 20K | 19,999 | 10,000 | Optimal | 1 | 0.196s | Optimal | 1 | 0.021s | 0.1x |
-| Poisson 50K | 49,928 | 24,964 | Optimal | 1 | 1.710s | Optimal | 1 | 0.138s | 0.1x |
-| SparseQP 100K | 50,000 | 50,000 | Optimal | 8 | 4.901s | Optimal | 6 | 0.320s | 0.1x |
+| Bratu 10K | 10,000 | 9,998 | Optimal | 11 | 0.127s | Optimal | 2 | 0.013s | 0.1x |
+| OptControl 20K | 19,999 | 10,000 | Optimal | 1 | 0.198s | Optimal | 1 | 0.020s | 0.1x |
+| Poisson 50K | 49,928 | 24,964 | Optimal | 1 | 1.714s | Optimal | 1 | 0.130s | 0.1x |
+| SparseQP 100K | 50,000 | 50,000 | Optimal | 8 | 4.870s | Optimal | 6 | 0.312s | 0.1x |
 
 ripopt: **10/10 solved** in 7.0s total
 Ipopt: **9/10 solved** in 4.4s total
