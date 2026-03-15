@@ -74,7 +74,9 @@ The contributions of this paper are:
 
 10. A C API that mirrors the Ipopt C interface, enabling direct linking from C, C++, Python (via =ctypes=/=cffi=), and other languages without subprocess overhead (Section [[*C API]]).
 
-11. An iterative KKT solver based on preconditioned MINRES citep:paige1975solution with an incomplete LDL$^T$ preconditioner citep:meijerink1977iterative, and a hybrid direct-iterative solver that automatically switches between direct and iterative modes based on factorization cost and convergence behavior (Section [[*Iterative Solver: Preconditioned MINRES]]).
+11. A GAMS solver link that bridges GAMS's GMO (GAMS Modeling Object) API to ripopt's C API, enabling =option nlp = ripopt;= in GAMS models with automatic Hessian support, option file integration, and status mapping (Section [[*GAMS Solver Link]]).
+
+12. An iterative KKT solver based on preconditioned MINRES citep:paige1975solution with an incomplete LDL$^T$ preconditioner citep:meijerink1977iterative, and a hybrid direct-iterative solver that automatically switches between direct and iterative modes based on factorization cost and convergence behavior (Section [[*Iterative Solver: Preconditioned MINRES]]).
 
 ** Notation and Conventions
 
@@ -716,6 +718,26 @@ On HS071 the C API test produces the correct solution ($f^* \approx 17.0140$, $x
 
 All raw pointer dereferences in the C API implementation are confined to =unsafe= blocks. Each =CApiProblem= handle is heap-allocated and self-contained; the solver carries no global state, so =ripopt_solve= is re-entrant and multiple handles can be solved concurrently from different threads without synchronization.
 
+** GAMS Solver Link
+
+To support GAMS (General Algebraic Modeling System) citep:bussieck2004general, ripopt includes a standalone solver link that bridges GAMS's GMO (GAMS Modeling Object) API to ripopt's C API. The solver link is a shared library (=libGamsRipopt.dylib= on macOS, =libGamsRipopt.so= on Linux) that exports the standard GAMS solver entry points (=ripCreate=, =ripReadyAPI=, =ripCallSolver=, =ripFree=) and registers as an NLP solver in GAMS's solver configuration file.
+
+The bridge implements five callbacks that delegate from ripopt's Ipopt-compatible callback interface to GMO evaluation functions:
+
+- *Objective and gradient*: =gmoEvalFuncObj= and =gmoEvalGradObj= evaluate the objective function and its dense gradient. For maximization problems, both are negated (ripopt always minimizes).
+- *Constraints*: =gmoEvalFunc= evaluates each constraint row individually.
+- *Jacobian*: The sparsity pattern is obtained once from =gmoGetMatrixRow= in CSR format and expanded to COO. Values are computed row-by-row via =gmoEvalGrad=, extracting sparse entries from the dense gradient at the structural nonzero positions.
+- *Hessian*: =gmoHessLagStruct= provides the lower-triangular sparsity in COO format. =gmoHessLagValue= evaluates the weighted Hessian of the Lagrangian, with =conweight = -1.0= to account for the GAMS multiplier sign convention ($\pi_{\text{GAMS}} = -\lambda_{\text{Ipopt}}$).
+
+Constraint bounds are derived from GAMS equation types (===E===, ===G===, ===L===, ===N===) and the right-hand side. GAMS infinity values (=gmoPinf=/=gmoMinf=) are mapped to ripopt's $\pm 10^{30}$. When the analytical Hessian is not available (e.g., DNLP models), the solver link automatically enables L-BFGS approximation. GAMS iteration and resource limits are forwarded, and solver-specific options can be set via =ripopt.opt= files using the standard key-value format.
+
+The solver link is built independently of the GAMS source tree (=make -C gams=) and installed by copying the library to the GAMS system directory and adding an entry to =gmscmpun.txt=. Once installed, GAMS models use ripopt with:
+
+#+begin_src gams
+option nlp = ripopt;
+Solve mymodel using nlp minimizing obj;
+#+end_src
+
 * Computational Results
   :PROPERTIES:
   :CUSTOM_ID: results
@@ -976,7 +998,7 @@ On the Hock-Schittkowski test suite, ripopt solves 119 of 120 problems (99.2%) c
 
 The failure analysis reveals that ripopt's two-phase restoration has nearly eliminated =RestorationFailed= as a failure mode (3 cases, down from 56 in earlier versions), and the best-du tracking has reduced =MaxIterations= from 18 to 4 cases. The dominant remaining failure mode is =LocalInfeasibility= (94 cases), where improved detection strategies and multi-start approaches could yield significant gains. Collectively, further improvements could push the solve rate toward 88--92%, approaching the practical ceiling imposed by genuinely infeasible problems.
 
-The built-in AMPL NL interface and Pyomo solver plugin enable ripopt to serve as a drop-in replacement for Ipopt in existing Pyomo workflows, requiring only a one-line change to switch solvers. The sIPOPT-style parametric sensitivity analysis enables post-optimal what-if analysis and uncertainty propagation at near-zero cost, extending ripopt's utility beyond single-solve optimization.
+The built-in AMPL NL interface and Pyomo solver plugin enable ripopt to serve as a drop-in replacement for Ipopt in existing Pyomo workflows, requiring only a one-line change to switch solvers. The GAMS solver link extends this accessibility to the GAMS modeling ecosystem, enabling =option nlp = ripopt;= with full Hessian support and option file integration. The sIPOPT-style parametric sensitivity analysis enables post-optimal what-if analysis and uncertainty propagation at near-zero cost, extending ripopt's utility beyond single-solve optimization.
 
 The source code for ripopt is available at https://github.com/jkitchin/ripopt under the EPL-2.0 license.
 

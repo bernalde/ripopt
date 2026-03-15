@@ -36,6 +36,7 @@ The ripopt source code is organized as follows:
 | =src/nl/problem_impl.rs=            | =NlProblem= (NlpProblem for NL files)            |
 | =src/nl/autodiff.rs=                | Automatic differentiation for NL expressions     |
 | =src/bin/ripopt_ampl.rs=            | AMPL binary interface                            |
+| =gams/gams_ripopt.c=               | GAMS solver link (GMO API to ripopt C API)       |
 
 * Implicit Slack Formulation
 

@@ -48,6 +48,7 @@ It implements a primal-dual interior point method with a barrier formulation, si
 - **Parametric sensitivity analysis**: sIPOPT-style post-optimal sensitivity (`ds/dp = -M⁻¹ · Nₚ`) for computing how the optimal solution changes under parameter perturbations, plus reduced Hessian extraction for covariance estimation
 - **C API** mirroring the Ipopt C interface for direct linking from C/C++/Python/Julia
 - **AMPL NL interface** with Pyomo integration via `SolverFactory('ripopt')`, with `--help` listing all options
+- **GAMS solver link** enabling `option nlp = ripopt;` in GAMS models via the GMO API
 
 ## Benchmarks
 
@@ -230,6 +231,41 @@ Or link directly from the build directory without installing:
 cargo build --release
 cc my_program.c -I. -Ltarget/release -lripopt \
    -Wl,-rpath,$(pwd)/target/release -o my_program -lm
+```
+
+### Using ripopt with GAMS
+
+ripopt includes a GAMS solver link (`gams/`) that bridges between GAMS's GMO API and ripopt's C API. This allows GAMS models to use ripopt as an NLP solver via `option nlp = ripopt;`.
+
+**Build and install** (requires a GAMS installation):
+
+```bash
+cargo build --release
+make -C gams
+sudo make -C gams install   # copies libs to GAMS sysdir, registers in gmscmpun.txt
+```
+
+**Use in a GAMS model:**
+
+```gams
+option nlp = ripopt;
+Solve mymodel using nlp minimizing obj;
+```
+
+**Solver options** are set via a `ripopt.opt` file (same key-value format as Ipopt):
+
+```
+tol 1e-8
+max_iter 1000
+print_level 5
+```
+
+GAMS iteration and resource limits (`option iterlim`, `option reslim`) are automatically forwarded. The solver link supports NLP, DNLP, and RMINLP model types. When the analytical Hessian is not available (e.g., DNLP models), it automatically falls back to L-BFGS approximation.
+
+**Test:**
+
+```bash
+sudo make -C gams test   # solves HS071 and checks the result
 ```
 
 ### Uninstall
@@ -706,6 +742,12 @@ tests/
   large_scale.rs      Large-scale correctness tests (up to 100K variables)
   large_scale_benchmark.rs  Large-scale ripopt vs Ipopt comparison
   nl_integration.rs   NL file parsing and solving tests
+
+gams/
+  gams_ripopt.c       GAMS solver link (GMO API → ripopt C API bridge)
+  Makefile            Build, install, and test targets
+  install.sh          Registration script for gmscmpun.txt
+  test_hs071.gms      Smoke test (HS071 via `option nlp = ripopt`)
 
 examples/
   rosenbrock.rs       Unconstrained optimization
