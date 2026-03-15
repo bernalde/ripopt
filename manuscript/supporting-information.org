@@ -243,15 +243,19 @@ If no dual infeasibility improvement occurs for 500+ iterations, the best-du poi
 
 ** Algorithm Description
 
-*** Simplified Oracle
+*** Barrier Oracle with Mehrotra Integration
 
-The barrier parameter is computed as $\mu = \bar{c} / \kappa$ where $\bar{c}$ is the average complementarity (variable bounds + constraint slack pairs) and $\kappa = 10$. This replaces Ipopt's quality-function golden-section search.
+The barrier parameter update combines a Loqo-style oracle with Mehrotra predictor-corrector feedback. In Free mode, the base update is $\mu = \bar{c} / \kappa$ where $\bar{c}$ is the average complementarity and $\kappa = 10$. When Mehrotra predictor-corrector is enabled (default), the centering parameter $\sigma = (\mu_{\text{aff}} / \mu)^3$ from the affine scaling probe is stored and used in the next mu update via a geometric blend: $\mu = \mu_\sigma^{1-\sigma} \cdot \mu_{\text{Loqo}}^\sigma$ where $\mu_\sigma = \sigma \cdot \mu_{\text{current}}$. This allows aggressive mu decreases when the affine step is near full-length ($\sigma \to 0$) while staying conservative otherwise.
+
+*** Mehrotra Predictor-Corrector and Gondzio Corrections
+
+Enabled by default (=mehrotra_pc=true=, =gondzio_mcc_max=3=). After factoring the KKT system, an affine predictor step ($\mu = 0$) probes the Newton direction. The centering parameter $\sigma$ determines how much to reduce $\mu$ in the corrector RHS. Up to 3 Gondzio centrality corrections further improve centering by driving outlier complementarity pairs back toward the central path.
 
 *** Free and Fixed Modes
 
-- *Free mode*: $\mu$ updated via oracle each iteration; filter reset each iteration.
+- *Free mode*: $\mu$ updated via oracle (with Mehrotra blend) each iteration; filter reset each iteration.
 - *Fixed mode*: $\mu$ decreases monotonically via $\mu_{\text{new}} = \min(\kappa_\mu \mu, \mu^{\theta_\mu})$ with $\kappa_\mu = 0.2$, $\theta_\mu = 1.5$. Subproblem convergence checked via $\epsilon_{\text{barrier}} \cdot \mu$.
-- Mode switching based on sliding window of 4 KKT error values.
+- Mode switching based on sliding window of 4 KKT error values (=refs_red_fact = 0.999=).
 
 *** Fraction-to-Boundary
 
@@ -307,15 +311,15 @@ Reject trial points where $\phi_{\text{trial}} > \phi_{\text{current}} + 5(1 + |
 
 *** Sparse Solver Dispatch
 
-The IPM automatically selects the linear solver based on problem size and available features. For systems with dimension $< 110$ (configurable via =sparse_threshold=), a dense solver is used. For larger systems, the default sparse solver is =rmumps= (a pure Rust multifrontal solver); if the =faer= feature is enabled instead, =faer='s simplicial LDL^T is used as an alternative.
+The IPM automatically selects the linear solver based on problem size and available features. For systems with dimension $< 110$ (configurable via =sparse_threshold=), a dense solver is used. For larger systems, the default sparse solver is =rmumps= (a pure Rust multifrontal solver).
 
-- Solver dispatch: [[../src/ipm.rs::16][src/ipm.rs:16]] (=new_sparse_solver=)
+For tall-narrow problems ($m \ge 2n$ with $n \le 100$), the dense condensed KKT path is used even when $n + m$ exceeds the sparse threshold, replacing an $(n+m) \times (n+m)$ sparse factorization with an $n \times n$ dense solve. This gives 100--800$\times$ speedup on problems like EXPFITC ($n=5$, $m=502$) and OET3 ($n=4$, $m=1002$).
 
 *** rmumps: Pure Rust Multifrontal LDL^T
 
 The default sparse solver is =rmumps=, a pure Rust multifrontal solver (CeCILL-C license) included as a workspace member. It implements:
 
-1. *AMD fill-reducing ordering* to minimize fill during factorization.
+1. *SuiteSparse AMD fill-reducing ordering* (via the =amd= crate) to minimize fill during factorization.
 2. *Supernodal symbolic factorization* to identify groups of columns with the same sparsity structure.
 3. *Level-set parallel numeric factorization*: supernodes at the same depth in the elimination tree are independent and factored concurrently via =rayon=.
 4. *Dense frontal operations*: each supernode does dense BK pivoting on its fully-summed block, computes the $L_{21}$ sub-diagonal factor, and forms the Schur complement $S = A_{22} - L_{21} D L_{21}^T$ via SIMD-accelerated GEMM (NEON on aarch64, AVX2+FMA on x86_64).

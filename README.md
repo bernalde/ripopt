@@ -100,18 +100,18 @@ Where Ipopt is faster:
 
 Both solvers receive the exact same NlpProblem struct via the Rust trait interface, ensuring a fair comparison. ripopt uses rmumps (pure Rust multifrontal LDL^T with SuiteSparse AMD ordering); Ipopt uses MUMPS (Fortran).
 
-| Problem | n | m | ripopt | time | Ipopt | time | speedup |
-|---------|---|---|--------|------|-------|------|---------|
-| Rosenbrock 500 | 500 | 0 | Acceptable | 0.001s | Optimal | 0.189s | **196x** |
-| Bratu 1K | 1,000 | 998 | Optimal | 0.002s | Optimal | 0.003s | 1.7x |
-| SparseQP 1K | 500 | 500 | Optimal | 0.009s | Optimal | 0.004s | 0.4x |
-| OptControl 2.5K | 2,499 | 1,250 | Optimal | 0.006s | Optimal | 0.003s | 0.4x |
-| Rosenbrock 5K | 5,000 | 0 | Acceptable | 0.010s | **Failed** | 3.725s | **375x** |
-| Poisson 2.5K | 5,000 | 2,500 | Optimal | 0.026s | Optimal | 0.010s | 0.4x |
-| Bratu 10K | 10,000 | 9,998 | Optimal | 0.130s | Optimal | 0.012s | 0.1x |
-| OptControl 20K | 19,999 | 10,000 | Optimal | 0.196s | Optimal | 0.021s | 0.1x |
-| Poisson 50K | 49,928 | 24,964 | Optimal | 1.710s | Optimal | 0.138s | 0.1x |
-| SparseQP 100K | 50,000 | 50,000 | Optimal | 4.900s | Optimal | 0.317s | 0.07x |
+| Problem         | n      | m      | ripopt     | time   | Ipopt      | time   | speedup  |
+|-----------------|--------|--------|------------|--------|------------|--------|----------|
+| Rosenbrock 500  | 500    | 0      | Acceptable | 0.001s | Optimal    | 0.189s | **196x** |
+| Bratu 1K        | 1,000  | 998    | Optimal    | 0.002s | Optimal    | 0.003s | 1.7x     |
+| SparseQP 1K     | 500    | 500    | Optimal    | 0.009s | Optimal    | 0.004s | 0.4x     |
+| OptControl 2.5K | 2,499  | 1,250  | Optimal    | 0.006s | Optimal    | 0.003s | 0.4x     |
+| Rosenbrock 5K   | 5,000  | 0      | Acceptable | 0.010s | **Failed** | 3.725s | **375x** |
+| Poisson 2.5K    | 5,000  | 2,500  | Optimal    | 0.026s | Optimal    | 0.010s | 0.4x     |
+| Bratu 10K       | 10,000 | 9,998  | Optimal    | 0.130s | Optimal    | 0.012s | 0.1x     |
+| OptControl 20K  | 19,999 | 10,000 | Optimal    | 0.196s | Optimal    | 0.021s | 0.1x     |
+| Poisson 50K     | 49,928 | 24,964 | Optimal    | 1.710s | Optimal    | 0.138s | 0.1x     |
+| SparseQP 100K   | 50,000 | 50,000 | Optimal    | 4.900s | Optimal    | 0.317s | 0.07x    |
 
 ripopt solves **10/10** (Ipopt: 9/10 — fails on Rosenbrock 5K). On large constrained problems, Ipopt's Fortran MUMPS is ~10-15x faster per factorization. ripopt dominates on unconstrained problems via L-BFGS fallback.
 
@@ -474,57 +474,57 @@ Option-setting functions return `1` on success, `0` if the keyword is unknown. A
 
 **Numeric options** (`ripopt_add_num_option`):
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `tol` | 1e-8 | Convergence tolerance |
-| `acceptable_tol` | 1e-4 | Acceptable convergence tolerance |
-| `acceptable_constr_viol_tol` | 1e-2 | Acceptable constraint violation |
-| `acceptable_dual_inf_tol` | 1e10 | Acceptable dual infeasibility |
-| `acceptable_compl_inf_tol` | 1e-2 | Acceptable complementarity |
-| `mu_init` | 0.1 | Initial barrier parameter |
-| `mu_min` | 1e-11 | Minimum barrier parameter |
-| `bound_push` | 1e-2 | Initial bound push |
-| `bound_frac` | 1e-2 | Initial bound fraction |
-| `constr_viol_tol` | 1e-4 | Constraint violation tolerance |
-| `dual_inf_tol` | 100.0 | Dual infeasibility tolerance |
-| `compl_inf_tol` | 1e-4 | Complementarity tolerance |
-| `max_wall_time` | 0.0 | Wall-clock time limit in seconds (0 = no limit) |
-| `warm_start_bound_push` | 1e-3 | Warm-start bound push |
-| `warm_start_bound_frac` | 1e-3 | Warm-start bound fraction |
-| `warm_start_mult_bound_push` | 1e-3 | Warm-start multiplier push |
-| `nlp_lower_bound_inf` | -1e19 | Threshold for -infinity bounds |
-| `nlp_upper_bound_inf` | 1e19 | Threshold for +infinity bounds |
-| `kappa` | 10.0 | Adaptive mu divisor |
-| `constr_mult_init_max` | 1000.0 | Max initial constraint multiplier |
-| `barrier_tol_factor` | 10.0 | Barrier tolerance factor |
+| Option                       | Default | Description                                     |
+|------------------------------|---------|-------------------------------------------------|
+| `tol`                        | 1e-8    | Convergence tolerance                           |
+| `acceptable_tol`             | 1e-4    | Acceptable convergence tolerance                |
+| `acceptable_constr_viol_tol` | 1e-2    | Acceptable constraint violation                 |
+| `acceptable_dual_inf_tol`    | 1e10    | Acceptable dual infeasibility                   |
+| `acceptable_compl_inf_tol`   | 1e-2    | Acceptable complementarity                      |
+| `mu_init`                    | 0.1     | Initial barrier parameter                       |
+| `mu_min`                     | 1e-11   | Minimum barrier parameter                       |
+| `bound_push`                 | 1e-2    | Initial bound push                              |
+| `bound_frac`                 | 1e-2    | Initial bound fraction                          |
+| `constr_viol_tol`            | 1e-4    | Constraint violation tolerance                  |
+| `dual_inf_tol`               | 100.0   | Dual infeasibility tolerance                    |
+| `compl_inf_tol`              | 1e-4    | Complementarity tolerance                       |
+| `max_wall_time`              | 0.0     | Wall-clock time limit in seconds (0 = no limit) |
+| `warm_start_bound_push`      | 1e-3    | Warm-start bound push                           |
+| `warm_start_bound_frac`      | 1e-3    | Warm-start bound fraction                       |
+| `warm_start_mult_bound_push` | 1e-3    | Warm-start multiplier push                      |
+| `nlp_lower_bound_inf`        | -1e19   | Threshold for -infinity bounds                  |
+| `nlp_upper_bound_inf`        | 1e19    | Threshold for +infinity bounds                  |
+| `kappa`                      | 10.0    | Adaptive mu divisor                             |
+| `constr_mult_init_max`       | 1000.0  | Max initial constraint multiplier               |
+| `barrier_tol_factor`         | 10.0    | Barrier tolerance factor                        |
 
 **Integer options** (`ripopt_add_int_option`):
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `max_iter` | 3000 | Maximum iterations |
-| `print_level` | 5 | Output verbosity (0 = silent, 5 = verbose, 12 = debug) |
-| `acceptable_iter` | 10 | Consecutive acceptable iterations for convergence |
-| `max_soc` | 4 | Maximum second-order correction steps |
-| `sparse_threshold` | 110 | KKT dimension threshold for sparse solver |
-| `restoration_max_iter` | 200 | Max iterations in NLP restoration subproblem |
+| Option                 | Default | Description                                            |
+|------------------------|---------|--------------------------------------------------------|
+| `max_iter`             | 3000    | Maximum iterations                                     |
+| `print_level`          | 5       | Output verbosity (0 = silent, 5 = verbose, 12 = debug) |
+| `acceptable_iter`      | 10      | Consecutive acceptable iterations for convergence      |
+| `max_soc`              | 4       | Maximum second-order correction steps                  |
+| `sparse_threshold`     | 110     | KKT dimension threshold for sparse solver              |
+| `restoration_max_iter` | 200     | Max iterations in NLP restoration subproblem           |
 
 **String options** (`ripopt_add_str_option`):
 
-| Option | Default | Values | Description |
-|--------|---------|--------|-------------|
-| `mu_strategy` | `"adaptive"` | `"adaptive"`, `"monotone"` | Barrier parameter update strategy |
-| `warm_start_init_point` | `"no"` | `"yes"`, `"no"` | Enable warm-start initialization |
-| `mu_allow_increase` | `"yes"` | `"yes"`, `"no"` | Allow barrier parameter increase |
-| `least_squares_mult_init` | `"yes"` | `"yes"`, `"no"` | LS estimate for initial multipliers |
-| `enable_slack_fallback` | `"yes"` | `"yes"`, `"no"` | Slack reformulation fallback |
-| `enable_lbfgs_fallback` | `"yes"` | `"yes"`, `"no"` | L-BFGS fallback for unconstrained |
-| `enable_al_fallback` | `"yes"` | `"yes"`, `"no"` | Augmented Lagrangian fallback |
-| `enable_preprocessing` | `"yes"` | `"yes"`, `"no"` | Preprocessing (fixed vars, redundant constraints) |
-| `detect_linear_constraints` | `"yes"` | `"yes"`, `"no"` | Skip Hessian for linear constraints |
-| `enable_sqp_fallback` | `"yes"` | `"yes"`, `"no"` | SQP fallback for constrained problems |
-| `hessian_approximation` | `"exact"` | `"exact"`, `"limited-memory"` | Use L-BFGS Hessian approximation |
-| `enable_lbfgs_hessian_fallback` | `"yes"` | `"yes"`, `"no"` | Auto-retry with L-BFGS Hessian on failure |
+| Option                          | Default      | Values                        | Description                                       |
+|---------------------------------|--------------|-------------------------------|---------------------------------------------------|
+| `mu_strategy`                   | `"adaptive"` | `"adaptive"`, `"monotone"`    | Barrier parameter update strategy                 |
+| `warm_start_init_point`         | `"no"`       | `"yes"`, `"no"`               | Enable warm-start initialization                  |
+| `mu_allow_increase`             | `"yes"`      | `"yes"`, `"no"`               | Allow barrier parameter increase                  |
+| `least_squares_mult_init`       | `"yes"`      | `"yes"`, `"no"`               | LS estimate for initial multipliers               |
+| `enable_slack_fallback`         | `"yes"`      | `"yes"`, `"no"`               | Slack reformulation fallback                      |
+| `enable_lbfgs_fallback`         | `"yes"`      | `"yes"`, `"no"`               | L-BFGS fallback for unconstrained                 |
+| `enable_al_fallback`            | `"yes"`      | `"yes"`, `"no"`               | Augmented Lagrangian fallback                     |
+| `enable_preprocessing`          | `"yes"`      | `"yes"`, `"no"`               | Preprocessing (fixed vars, redundant constraints) |
+| `detect_linear_constraints`     | `"yes"`      | `"yes"`, `"no"`               | Skip Hessian for linear constraints               |
+| `enable_sqp_fallback`           | `"yes"`      | `"yes"`, `"no"`               | SQP fallback for constrained problems             |
+| `hessian_approximation`         | `"exact"`    | `"exact"`, `"limited-memory"` | Use L-BFGS Hessian approximation                  |
+| `enable_lbfgs_hessian_fallback` | `"yes"`      | `"yes"`, `"no"`               | Auto-retry with L-BFGS Hessian on failure         |
 
 ### Error handling
 
@@ -593,12 +593,12 @@ cargo run --release --example sensitivity
 
 See [Compile and run the examples](#compile-and-run-the-examples) above for build instructions. The C examples are:
 
-| Example | Problem type | Demonstrates |
-|---------|-------------|-------------|
-| `c_api_test.c` | HS071 (constrained) | Basic usage, all 5 callbacks |
-| `c_rosenbrock.c` | Rosenbrock (unconstrained) | No constraints, no bounds |
-| `c_hs035.c` | HS035 (bounds + inequality) | Bound multipliers, constraint multiplier |
-| `c_example_with_options.c` | HS071 (multiple solves) | Options tuning, multiplier extraction, status interpretation |
+| Example                    | Problem type                | Demonstrates                                                 |
+|----------------------------|-----------------------------|--------------------------------------------------------------|
+| `c_api_test.c`             | HS071 (constrained)         | Basic usage, all 5 callbacks                                 |
+| `c_rosenbrock.c`           | Rosenbrock (unconstrained)  | No constraints, no bounds                                    |
+| `c_hs035.c`                | HS035 (bounds + inequality) | Bound multipliers, constraint multiplier                     |
+| `c_example_with_options.c` | HS071 (multiple solves)     | Options tuning, multiplier extraction, status interpretation |
 
 ## Tests
 
@@ -606,7 +606,7 @@ See [Compile and run the examples](#compile-and-run-the-examples) above for buil
 cargo test
 ```
 
-209 tests total:
+230 tests total:
 - **131 unit tests**: Dense LDL factorization, convergence checking, filter line search, fraction-to-boundary, KKT assembly, restoration, preprocessing, linearity detection, SQP, linear solver, autodiff, L-BFGS, sensitivity analysis
 - **12 C API tests**: FFI integration tests
 - **29 integration tests**: Rosenbrock, SimpleQP, HS071, HS035, PureBoundConstrained, MultipleEqualityConstraints, NE-to-LS reformulation, augmented Lagrangian, NL file parsing, IPM code paths, parametric sensitivity, and more
@@ -630,30 +630,38 @@ cargo llvm-cov test --html && open target/llvm-cov/html/index.html
 
 Current coverage by module:
 
-| Module | Line Coverage |
-|--------|-------------|
-| slack_formulation.rs | 99% |
-| kkt.rs | 96% |
-| filter.rs | 96% |
-| restoration_nlp.rs | 96% |
-| sqp.rs | 92% |
-| nl/header.rs | 92% |
-| convergence.rs | 90% |
-| preprocessing.rs | 90% |
-| restoration.rs | 90% |
-| dense.rs (linear solver) | 90% |
-| c_api.rs | 92% |
-| nl/sol.rs | 77% |
-| lbfgs.rs | 76% |
-| nl/parser.rs | 72% |
-| augmented_lagrangian.rs | 70% |
-| nl/autodiff.rs | 62% |
-| linearity.rs | 58% |
-| ipm.rs | 58% |
-| nl/problem_impl.rs | 47% |
-| nl/expr.rs | 38% |
+| Module                   | Line Coverage |
+|--------------------------|---------------|
+| slack_formulation.rs     | 99%           |
+| options.rs               | 100%          |
+| kkt.rs                   | 91%           |
+| filter.rs                | 96%           |
+| restoration_nlp.rs       | 93%           |
+| sqp.rs                   | 92%           |
+| warmstart.rs             | 98%           |
+| sensitivity.rs           | 89%           |
+| preprocessing.rs         | 91%           |
+| convergence.rs           | 90%           |
+| c_api.rs                 | 91%           |
+| dense.rs (linear solver) | 90%           |
+| restoration.rs           | 90%           |
+| nl/header.rs             | 92%           |
+| banded.rs                | 92%           |
+| linear_solver/mod.rs     | 87%           |
+| sparse.rs                | 84%           |
+| lbfgs.rs                 | 76%           |
+| nl/autodiff.rs           | 74%           |
+| nl/parser.rs             | 72%           |
+| multifrontal.rs          | 70%           |
+| augmented_lagrangian.rs  | 70%           |
+| iterative.rs             | 76%           |
+| linearity.rs             | 58%           |
+| ipm.rs                   | 57%           |
+| nl/problem_impl.rs       | 59%           |
+| nl/expr.rs               | 38%           |
+| hybrid.rs                | 36%           |
 
-**Overall: 45% line coverage** (193 tests)
+**Overall: 61% line coverage** (230 tests)
 
 ## Architecture
 
