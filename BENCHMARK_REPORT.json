@@ -114,7 +114,7 @@
     "suite": "HS",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 0.9936482498783632,
+    "ripopt_obj": 0.9936559706344292,
     "ipopt_obj": 0.9945785328133928,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -134,7 +134,7 @@
     "suite": "HS",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 3.0650000007463407,
+    "ripopt_obj": 3.0649999970605926,
     "ipopt_obj": 3.0649997552023147,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -154,7 +154,7 @@
     "suite": "HS",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 1.0000120751098898,
+    "ripopt_obj": 1.0000255868796915,
     "ipopt_obj": 1.000000025757341,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -214,7 +214,7 @@
     "suite": "HS",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 9.47646657522992,
+    "ripopt_obj": 9.473893364678554,
     "ipopt_obj": 1.9999999600664324,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -292,9 +292,9 @@
   {
     "name": "HS032",
     "suite": "HS",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 1.0000000354314735,
+    "ripopt_obj": 1.0000047480398664,
     "ipopt_obj": 0.9999999616268184,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -384,7 +384,7 @@
     "suite": "HS",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 1.9259259413001035,
+    "ripopt_obj": 1.9259259375163307,
     "ipopt_obj": 1.9259259237137036,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -412,9 +412,9 @@
   {
     "name": "HS044",
     "suite": "HS",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -14.999999974774656,
+    "ripopt_obj": -14.999932523223416,
     "ipopt_obj": -15.000000149960002,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -664,7 +664,7 @@
     "suite": "HS",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 0.05396814794715521,
+    "ripopt_obj": 0.9999999977556426,
     "ipopt_obj": 0.05394984777027145,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -682,9 +682,9 @@
   {
     "name": "HS108",
     "suite": "HS",
-    "ripopt_status": "Acceptable",
+    "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -0.8660253962680138,
+    "ripopt_obj": -0.866025402989766,
     "ipopt_obj": -0.8660254123848568,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -702,9 +702,9 @@
   {
     "name": "HS114",
     "suite": "HS",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -1768.8069637159424,
+    "ripopt_obj": -1768.8280034591362,
     "ipopt_obj": -1768.80715226965,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -834,7 +834,7 @@
     "suite": "HS",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 1.00000000000001,
+    "ripopt_obj": 1.0000677784335594,
     "ipopt_obj": 0.9999999900100015,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -842,9 +842,9 @@
   {
     "name": "HS221",
     "suite": "HS",
-    "ripopt_status": "Acceptable",
+    "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -0.999999702202318,
+    "ripopt_obj": -0.9999999988933636,
     "ipopt_obj": -1.0000000099899016,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -1032,9 +1032,9 @@
   {
     "name": "HS255",
     "suite": "HS",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -18850.17821782178,
+    "ripopt_obj": -18679.200974632986,
     "ipopt_obj": -18850.178593728528,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -1084,7 +1084,7 @@
     "suite": "HS",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -9.999994259079582,
+    "ripopt_obj": -9.999982925518006,
     "ipopt_obj": -10.000000019969654,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -1182,9 +1182,9 @@
   {
     "name": "HS374",
     "suite": "HS",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "IpoptStatus(-199)",
-    "ripopt_obj": -549755813887999.9,
+    "ripopt_obj": -24989999.9,
     "ipopt_obj": null,
     "ripopt_solved": true,
     "ipopt_solved": false
@@ -1194,7 +1194,7 @@
     "suite": "HS",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -1614.9473998217427,
+    "ripopt_obj": -1614.9569026520578,
     "ipopt_obj": -1614.9591078201101,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -1212,9 +1212,9 @@
   {
     "name": "ACOPP14",
     "suite": "CUTEst",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 8081.526322163736,
+    "ripopt_obj": 8081.526322168381,
     "ipopt_obj": 8081.526314065163,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -1222,29 +1222,29 @@
   {
     "name": "ACOPP30",
     "suite": "CUTEst",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Timeout",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 576.8923065059241,
+    "ripopt_obj": null,
     "ipopt_obj": 576.892421898335,
-    "ripopt_solved": true,
+    "ripopt_solved": false,
     "ipopt_solved": true
   },
   {
     "name": "ACOPR14",
     "suite": "CUTEst",
-    "ripopt_status": "Acceptable",
+    "ripopt_status": "NumericalError",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 8081.525688889367,
+    "ripopt_obj": 8101.295147307582,
     "ipopt_obj": 8081.526236731194,
-    "ripopt_solved": true,
+    "ripopt_solved": false,
     "ipopt_solved": true
   },
   {
     "name": "ACOPR30",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "RestorationFailed",
     "ipopt_status": "Optimal",
-    "ripopt_obj": null,
+    "ripopt_obj": 801.0219133662481,
     "ipopt_obj": 576.892402381318,
     "ripopt_solved": false,
     "ipopt_solved": true
@@ -1274,7 +1274,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 47916.39540104175,
+    "ripopt_obj": 47951.743614180894,
     "ipopt_obj": 47952.70140963148,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -1304,7 +1304,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 33.295764241689824,
+    "ripopt_obj": 33.295740914204686,
     "ipopt_obj": 33.29610895278262,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -1314,7 +1314,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 30.493475874553955,
+    "ripopt_obj": 30.49269421237165,
     "ipopt_obj": 30.492605562691978,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -1344,7 +1344,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 3245.2418130421006,
+    "ripopt_obj": 3245.240492450385,
     "ipopt_obj": 3245.240887989833,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -1384,7 +1384,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "MaxIterations",
-    "ripopt_obj": 94680131.46380024,
+    "ripopt_obj": 94680129.71789633,
     "ipopt_obj": 94680129.03179865,
     "ripopt_solved": true,
     "ipopt_solved": false
@@ -1452,11 +1452,11 @@
   {
     "name": "BATCH",
     "suite": "CUTEst",
-    "ripopt_status": "Acceptable",
+    "ripopt_status": "NumericalError",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 259186.5586855899,
+    "ripopt_obj": 421253.8615193701,
     "ipopt_obj": 259180.3371654187,
-    "ripopt_solved": true,
+    "ripopt_solved": false,
     "ipopt_solved": true
   },
   {
@@ -1544,7 +1544,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -24.49980374981508,
+    "ripopt_obj": -24.49999729894389,
     "ipopt_obj": -24.5000003482288,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -1844,7 +1844,7 @@
     "suite": "CUTEst",
     "ripopt_status": "NumericalError",
     "ipopt_status": "Infeasible",
-    "ripopt_obj": -0.0034675573963125375,
+    "ripopt_obj": -0.003553357379339161,
     "ipopt_obj": -4.078734625091242e-06,
     "ripopt_solved": false,
     "ipopt_solved": false
@@ -1874,7 +1874,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 1.3399563534184298,
+    "ripopt_obj": 1.3399563605840676,
     "ipopt_obj": 1.339956356142499,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -1914,7 +1914,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 334.8152066144024,
+    "ripopt_obj": 349.7843874526561,
     "ipopt_obj": 334.81523468585453,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -1934,7 +1934,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 95.89532165587704,
+    "ripopt_obj": 95.89674648024592,
     "ipopt_obj": 95.89532253264892,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -1954,7 +1954,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 56.57971652952932,
+    "ripopt_obj": 58.335309893631624,
     "ipopt_obj": 56.57971241876603,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -2094,7 +2094,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -6230.7955077137285,
+    "ripopt_obj": -6230.795241691284,
     "ipopt_obj": -6230.795614719196,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -2132,9 +2132,9 @@
   {
     "name": "CORE1",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "NumericalError",
     "ipopt_status": "Optimal",
-    "ripopt_obj": null,
+    "ripopt_obj": 85.20272031244512,
     "ipopt_obj": 91.05623953090804,
     "ripopt_solved": false,
     "ipopt_solved": true
@@ -2142,9 +2142,9 @@
   {
     "name": "CRESC100",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "MaxIterations",
     "ipopt_status": "Infeasible",
-    "ripopt_obj": null,
+    "ripopt_obj": 6.914757612712313e-09,
     "ipopt_obj": -3.4120043127474586e-14,
     "ripopt_solved": false,
     "ipopt_solved": false
@@ -2164,7 +2164,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 0.8718975662395425,
+    "ripopt_obj": 0.871897550294243,
     "ipopt_obj": 0.8718975346465687,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -2172,11 +2172,11 @@
   {
     "name": "CRESC50",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": null,
+    "ripopt_obj": 0.786252513919545,
     "ipopt_obj": 0.7862466868539991,
-    "ripopt_solved": false,
+    "ripopt_solved": true,
     "ipopt_solved": true
   },
   {
@@ -2184,7 +2184,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -49.07519998898868,
+    "ripopt_obj": -49.07520000058711,
     "ipopt_obj": -49.07520073430104,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -2224,7 +2224,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -32393.22421723246,
+    "ripopt_obj": -32393.224296347027,
     "ipopt_obj": -32393.224298963058,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -2292,9 +2292,9 @@
   {
     "name": "DECONVC",
     "suite": "CUTEst",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 0.003734473868950157,
+    "ripopt_obj": 0.004806264183289833,
     "ipopt_obj": 0.0025694748774262215,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -2322,9 +2322,9 @@
   {
     "name": "DEGENLPA",
     "suite": "CUTEst",
-    "ripopt_status": "Acceptable",
+    "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 3.0609295704313273,
+    "ripopt_obj": 18.457273125597812,
     "ipopt_obj": 3.0548808952563182,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -2334,7 +2334,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -30.72266310980609,
+    "ripopt_obj": -30.731242943399913,
     "ipopt_obj": -30.764007520210157,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -2344,7 +2344,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 174.78911859907024,
+    "ripopt_obj": 174.78698801753316,
     "ipopt_obj": 174.78697568942871,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -2532,9 +2532,9 @@
   {
     "name": "DGOSPEC",
     "suite": "CUTEst",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -988.9524800145126,
+    "ripopt_obj": -996.9592109919304,
     "ipopt_obj": -993.3506218521712,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -2552,11 +2552,11 @@
   {
     "name": "DIAMON2DLS",
     "suite": "CUTEst",
-    "ripopt_status": "NumericalError",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Timeout",
-    "ripopt_obj": 8679.705574089812,
+    "ripopt_obj": 8950.802324876215,
     "ipopt_obj": null,
-    "ripopt_solved": false,
+    "ripopt_solved": true,
     "ipopt_solved": false
   },
   {
@@ -2572,11 +2572,11 @@
   {
     "name": "DIAMON3DLS",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Timeout",
-    "ripopt_obj": null,
+    "ripopt_obj": 575.4758944886916,
     "ipopt_obj": null,
-    "ripopt_solved": false,
+    "ripopt_solved": true,
     "ipopt_solved": false
   },
   {
@@ -2594,7 +2594,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 1.562500000015,
+    "ripopt_obj": 1.5624999996611733,
     "ipopt_obj": 1.5624999975199962,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -2602,11 +2602,11 @@
   {
     "name": "DISCS",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": null,
+    "ripopt_obj": 12.000074999121686,
     "ipopt_obj": 12.000074872030725,
-    "ripopt_solved": false,
+    "ripopt_solved": true,
     "ipopt_solved": true
   },
   {
@@ -2642,11 +2642,11 @@
   {
     "name": "DMN15102LS",
     "suite": "CUTEst",
-    "ripopt_status": "MaxIterations",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Timeout",
-    "ripopt_obj": 8796.312947934208,
+    "ripopt_obj": 8950.802324876215,
     "ipopt_obj": null,
-    "ripopt_solved": false,
+    "ripopt_solved": true,
     "ipopt_solved": false
   },
   {
@@ -2662,11 +2662,11 @@
   {
     "name": "DMN15103LS",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Timeout",
-    "ripopt_obj": null,
+    "ripopt_obj": 1123.5049466830303,
     "ipopt_obj": null,
-    "ripopt_solved": false,
+    "ripopt_solved": true,
     "ipopt_solved": false
   },
   {
@@ -2682,11 +2682,11 @@
   {
     "name": "DMN15332LS",
     "suite": "CUTEst",
-    "ripopt_status": "NumericalError",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Timeout",
-    "ripopt_obj": 1177.9653803844274,
+    "ripopt_obj": 1406.9836104700278,
     "ipopt_obj": null,
-    "ripopt_solved": false,
+    "ripopt_solved": true,
     "ipopt_solved": false
   },
   {
@@ -2702,11 +2702,11 @@
   {
     "name": "DMN15333LS",
     "suite": "CUTEst",
-    "ripopt_status": "MaxIterations",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Timeout",
-    "ripopt_obj": 221.41378427676096,
+    "ripopt_obj": 343.3509138961339,
     "ipopt_obj": null,
-    "ripopt_solved": false,
+    "ripopt_solved": true,
     "ipopt_solved": false
   },
   {
@@ -2722,11 +2722,11 @@
   {
     "name": "DMN37142LS",
     "suite": "CUTEst",
-    "ripopt_status": "NumericalError",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Timeout",
-    "ripopt_obj": 178.73919369232758,
+    "ripopt_obj": 293.74514537472936,
     "ipopt_obj": null,
-    "ripopt_solved": false,
+    "ripopt_solved": true,
     "ipopt_solved": false
   },
   {
@@ -2742,11 +2742,11 @@
   {
     "name": "DMN37143LS",
     "suite": "CUTEst",
-    "ripopt_status": "MaxIterations",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Timeout",
-    "ripopt_obj": 273.4052373484641,
+    "ripopt_obj": 326.21032171550024,
     "ipopt_obj": null,
-    "ripopt_solved": false,
+    "ripopt_solved": true,
     "ipopt_solved": false
   },
   {
@@ -2754,7 +2754,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 18708.756548041496,
+    "ripopt_obj": 18744.01441937208,
     "ipopt_obj": 18744.009767302457,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -2784,7 +2784,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 0.7460948511135514,
+    "ripopt_obj": 0.7460948585319317,
     "ipopt_obj": 0.7460906189405001,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -2794,7 +2794,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 6155.277863396046,
+    "ripopt_obj": 6155.251924828707,
     "ipopt_obj": 6155.210106120124,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -2824,7 +2824,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 21253.52058604539,
+    "ripopt_obj": 18309.361509084247,
     "ipopt_obj": 18309.36005801744,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -2972,9 +2972,9 @@
   {
     "name": "EQC",
     "suite": "CUTEst",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "ErrorInStepComputation",
-    "ripopt_obj": -829.547705283049,
+    "ripopt_obj": -836.7977789099597,
     "ipopt_obj": -865.1227138604481,
     "ripopt_solved": true,
     "ipopt_solved": false
@@ -2984,7 +2984,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 28.04525592684097,
+    "ripopt_obj": 28.045273722498965,
     "ipopt_obj": 28.0452550288578,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -3172,9 +3172,9 @@
   {
     "name": "FEEDLOC",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "NumericalError",
     "ipopt_status": "Optimal",
-    "ripopt_obj": null,
+    "ripopt_obj": 2.0669025824508495e-05,
     "ipopt_obj": -9.539853769965943e-10,
     "ripopt_solved": false,
     "ipopt_solved": true
@@ -3182,9 +3182,9 @@
   {
     "name": "FLETCHER",
     "suite": "CUTEst",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 11.656854229380802,
+    "ripopt_obj": 11.65685418726379,
     "ipopt_obj": 11.656854112253866,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -3214,7 +3214,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 1315.822893875012,
+    "ripopt_obj": 1316.6079002520785,
     "ipopt_obj": 1315.8222432033774,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -3234,7 +3234,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 1247.5282100222105,
+    "ripopt_obj": 1247.724181646034,
     "ipopt_obj": 1247.5282092309972,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -3254,7 +3254,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 1244.4846366686836,
+    "ripopt_obj": 1336.6734883446677,
     "ipopt_obj": 1244.484636013158,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -3354,7 +3354,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -3485.319107950425,
+    "ripopt_obj": -3485.333239053129,
     "ipopt_obj": -3485.333375574878,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -3424,7 +3424,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 33.553560734831166,
+    "ripopt_obj": 69.98600265963074,
     "ipopt_obj": 33.38424367080115,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -3432,11 +3432,11 @@
   {
     "name": "HAIFAM",
     "suite": "CUTEst",
-    "ripopt_status": "Acceptable",
+    "ripopt_status": "NumericalError",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 0.8034755939708876,
+    "ripopt_obj": 36.43233670952443,
     "ipopt_obj": -45.00036022673628,
-    "ripopt_solved": true,
+    "ripopt_solved": false,
     "ipopt_solved": true
   },
   {
@@ -3444,7 +3444,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -0.4500000013457233,
+    "ripopt_obj": -0.44999999996264733,
     "ipopt_obj": -0.4500000099715406,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -3642,9 +3642,9 @@
   {
     "name": "HATFLDH",
     "suite": "CUTEst",
-    "ripopt_status": "Acceptable",
+    "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -24.50303847678154,
+    "ripopt_obj": -24.34375001552143,
     "ipopt_obj": -24.50000034811448,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -3832,9 +3832,9 @@
   {
     "name": "HIMMELBI",
     "suite": "CUTEst",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -813.8433457889091,
+    "ripopt_obj": -1735.5693552516889,
     "ipopt_obj": -1735.5695799158036,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -3844,7 +3844,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "ErrorInStepComputation",
-    "ripopt_obj": -1910.3447138988097,
+    "ripopt_obj": -1910.344721602116,
     "ipopt_obj": -1910.3447232659728,
     "ripopt_solved": true,
     "ipopt_solved": false
@@ -3854,7 +3854,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 0.05181444591752399,
+    "ripopt_obj": 0.0518143406963257,
     "ipopt_obj": 0.05181432108215193,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -3984,7 +3984,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 1809.7647105491735,
+    "ripopt_obj": 1809.7647648130944,
     "ipopt_obj": 1809.764682474692,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -3994,7 +3994,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 911.8805661477644,
+    "ripopt_obj": 911.8805712324726,
     "ipopt_obj": 911.8805326354676,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -4014,7 +4014,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 3.9511634433909224,
+    "ripopt_obj": 3.951163440311453,
     "ipopt_obj": 3.9511633367433294,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -4024,7 +4024,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 1136.3073035740838,
+    "ripopt_obj": 1143.0554659640236,
     "ipopt_obj": 1136.3073035633026,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -4054,7 +4054,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -0.8660286191629443,
+    "ripopt_obj": -0.6749807198871349,
     "ipopt_obj": -0.5000000089363473,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -4062,11 +4062,11 @@
   {
     "name": "HS109",
     "suite": "CUTEst",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "NumericalError",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 5362.069181110205,
+    "ripopt_obj": 5362.207140049581,
     "ipopt_obj": 5362.069156537171,
-    "ripopt_solved": true,
+    "ripopt_solved": false,
     "ipopt_solved": true
   },
   {
@@ -4122,9 +4122,9 @@
   {
     "name": "HS114",
     "suite": "CUTEst",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -1768.806963710529,
+    "ripopt_obj": -1768.8280034539384,
     "ipopt_obj": -1768.807152264235,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -4132,11 +4132,11 @@
   {
     "name": "HS116",
     "suite": "CUTEst",
-    "ripopt_status": "NumericalError",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 98.1211479311804,
+    "ripopt_obj": 97.33539526624106,
     "ipopt_obj": 97.58747313810716,
-    "ripopt_solved": false,
+    "ripopt_solved": true,
     "ipopt_solved": true
   },
   {
@@ -4144,7 +4144,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 32.348684486732566,
+    "ripopt_obj": 32.348685433531706,
     "ipopt_obj": 32.3486775795973,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -4152,9 +4152,9 @@
   {
     "name": "HS118",
     "suite": "CUTEst",
-    "ripopt_status": "Acceptable",
+    "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 664.8214336021524,
+    "ripopt_obj": 664.8204500212204,
     "ipopt_obj": 664.8204490508699,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -4164,7 +4164,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 244.91275523857215,
+    "ripopt_obj": 244.92132298552409,
     "ipopt_obj": 244.89969542323823,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -4184,7 +4184,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 0.9936482498954804,
+    "ripopt_obj": 0.9936559706306703,
     "ipopt_obj": 0.994578532848864,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -4204,7 +4204,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 306.50000022851884,
+    "ripopt_obj": 306.49999984714634,
     "ipopt_obj": 306.4999754904822,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -4314,7 +4314,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 9.472167326330268,
+    "ripopt_obj": 2.002171539129615,
     "ipopt_obj": 1.9999999600664324,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -4442,9 +4442,9 @@
   {
     "name": "HS32",
     "suite": "CUTEst",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 1.0000000357920529,
+    "ripopt_obj": 1.0000047480398662,
     "ipopt_obj": 0.9999999616268184,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -4602,9 +4602,9 @@
   {
     "name": "HS44",
     "suite": "CUTEst",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -14.999999974774656,
+    "ripopt_obj": -14.999932523223464,
     "ipopt_obj": -15.000000149960002,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -4614,7 +4614,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -14.99986839280042,
+    "ripopt_obj": -15.000000010606604,
     "ipopt_obj": -15.000000149960002,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -4864,7 +4864,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -0.9204250036882,
+    "ripopt_obj": -0.9204250036397036,
     "ipopt_obj": -0.920425003640406,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -5024,7 +5024,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 0.05396814794715521,
+    "ripopt_obj": 0.9999999977556424,
     "ipopt_obj": 0.053949847770272896,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -5034,7 +5034,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -30665.61484134305,
+    "ripopt_obj": -30665.536813657764,
     "ipopt_obj": -30665.539128862412,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -5042,9 +5042,9 @@
   {
     "name": "HS84",
     "suite": "CUTEst",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -5239215.0869722115,
+    "ripopt_obj": -5280335.113411765,
     "ipopt_obj": -5280335.247153389,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -5054,7 +5054,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -2.215604688036607,
+    "ripopt_obj": -2.2156046374066163,
     "ipopt_obj": -2.215604693465009,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -5072,11 +5072,11 @@
   {
     "name": "HS87",
     "suite": "CUTEst",
-    "ripopt_status": "Acceptable",
+    "ripopt_status": "NumericalError",
     "ipopt_status": "MaxIterations",
-    "ripopt_obj": 8996.857652197086,
+    "ripopt_obj": 8909.221614418988,
     "ipopt_obj": 8913.97004565477,
-    "ripopt_solved": true,
+    "ripopt_solved": false,
     "ipopt_solved": false
   },
   {
@@ -5152,9 +5152,9 @@
   {
     "name": "HS95",
     "suite": "CUTEst",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 0.015619565246588706,
+    "ripopt_obj": 0.016046907795635137,
     "ipopt_obj": 0.01561771822030354,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -5162,9 +5162,9 @@
   {
     "name": "HS96",
     "suite": "CUTEst",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 0.015619565922212334,
+    "ripopt_obj": 0.016048360351167905,
     "ipopt_obj": 0.015617749733961996,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -5174,7 +5174,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 3.1358091990692194,
+    "ripopt_obj": 3.135809205606754,
     "ipopt_obj": 3.1358058304484815,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -5184,7 +5184,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 3.1358101215446927,
+    "ripopt_obj": 3.135809900778302,
     "ipopt_obj": 3.135805830448478,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -5484,7 +5484,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 9.00497609454047,
+    "ripopt_obj": 9.008037210402357,
     "ipopt_obj": 9.004901790139508,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -5622,11 +5622,11 @@
   {
     "name": "LHAIFAM",
     "suite": "CUTEst",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "NumericalError",
     "ipopt_status": "InvalidNumberDetected",
     "ripopt_obj": 0.6931471805599453,
     "ipopt_obj": 0.0,
-    "ripopt_solved": true,
+    "ripopt_solved": false,
     "ipopt_solved": false
   },
   {
@@ -5644,7 +5644,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -77.00000000001408,
+    "ripopt_obj": -77.00000000007229,
     "ipopt_obj": -77.00004548557075,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -5684,7 +5684,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 1.4142138906702788,
+    "ripopt_obj": 1.414213802053217,
     "ipopt_obj": 1.4142134488730451,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -5692,9 +5692,9 @@
   {
     "name": "LOTSCHD",
     "suite": "CUTEst",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 2398.4158385417463,
+    "ripopt_obj": 2398.4158385375304,
     "ipopt_obj": 2398.4158374772633,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -5864,7 +5864,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 1136.3072969520863,
+    "ripopt_obj": 1154.194384830335,
     "ipopt_obj": 1136.3072968862346,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -5874,7 +5874,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -6230.7955077137285,
+    "ripopt_obj": -6230.795241691284,
     "ipopt_obj": -6230.795614719196,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -5884,7 +5884,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 3.773171372308823e-07,
+    "ripopt_obj": 7.807065201454078e-08,
     "ipopt_obj": -9.969119577782212e-09,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -5894,7 +5894,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "IpoptStatus(4)",
-    "ripopt_obj": -3.2457443420808243,
+    "ripopt_obj": -62121412488.7485,
     "ipopt_obj": -2.201154999104979e+37,
     "ripopt_solved": true,
     "ipopt_solved": false
@@ -5952,11 +5952,11 @@
   {
     "name": "MEYER3",
     "suite": "CUTEst",
-    "ripopt_status": "MaxIterations",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
     "ripopt_obj": 87.94585517043298,
     "ipopt_obj": 87.9458551704532,
-    "ripopt_solved": false,
+    "ripopt_solved": true,
     "ipopt_solved": true
   },
   {
@@ -6002,11 +6002,11 @@
   {
     "name": "MGH10LS",
     "suite": "CUTEst",
-    "ripopt_status": "NumericalError",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 198817.5989560855,
+    "ripopt_obj": 87.9458551706387,
     "ipopt_obj": 87.94585517106553,
-    "ripopt_solved": false,
+    "ripopt_solved": true,
     "ipopt_solved": true
   },
   {
@@ -6094,7 +6094,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 115.71187631568012,
+    "ripopt_obj": 115.70643952012016,
     "ipopt_obj": 115.70643951023332,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -6204,7 +6204,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -1.0000054172778667,
+    "ripopt_obj": -1.00000633960937,
     "ipopt_obj": -1.000000010033345,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -6212,9 +6212,9 @@
   {
     "name": "MRIBASIS",
     "suite": "CUTEst",
-    "ripopt_status": "Acceptable",
+    "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 18.217900005093448,
+    "ripopt_obj": 18.21790000705661,
     "ipopt_obj": 18.217899817831,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -6264,7 +6264,7 @@
     "suite": "CUTEst",
     "ripopt_status": "RestorationFailed",
     "ipopt_status": "Infeasible",
-    "ripopt_obj": 3.945083054893196e-05,
+    "ripopt_obj": 3.945641910951505e-05,
     "ipopt_obj": 4.9890865241107344e-05,
     "ripopt_solved": false,
     "ipopt_solved": false
@@ -6284,7 +6284,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 941194.331901161,
+    "ripopt_obj": 941194.2064821604,
     "ipopt_obj": 941194.2587740216,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -6334,7 +6334,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 0.08709576182755724,
+    "ripopt_obj": 1.999999997026402,
     "ipopt_obj": 0.08715962390059094,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -6352,21 +6352,21 @@
   {
     "name": "OET4",
     "suite": "CUTEst",
-    "ripopt_status": "Acceptable",
+    "ripopt_status": "Timeout",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 0.005011191715265762,
+    "ripopt_obj": null,
     "ipopt_obj": 0.004295420787716771,
-    "ripopt_solved": true,
+    "ripopt_solved": false,
     "ipopt_solved": true
   },
   {
     "name": "OET5",
     "suite": "CUTEst",
-    "ripopt_status": "Acceptable",
+    "ripopt_status": "NumericalError",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 0.005972873117542855,
+    "ripopt_obj": 0.006075980641431924,
     "ipopt_obj": 0.0026500766742341727,
-    "ripopt_solved": true,
+    "ripopt_solved": false,
     "ipopt_solved": true
   },
   {
@@ -6374,7 +6374,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 0.08704970241712429,
+    "ripopt_obj": 0.00204204549366473,
     "ipopt_obj": 0.0020697270255729643,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -6384,7 +6384,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 0.08710335594691289,
+    "ripopt_obj": 8.850147782125179e-05,
     "ipopt_obj": 4.465915088363962e-05,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -6394,7 +6394,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 549.9999999999491,
+    "ripopt_obj": 550.000000005698,
     "ipopt_obj": 549.999998881209,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -6404,7 +6404,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -15.980606568320164,
+    "ripopt_obj": -16.419773621426224,
     "ipopt_obj": -16.419774005823893,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -6664,7 +6664,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 2265.958218263063,
+    "ripopt_obj": 2419.3963670075623,
     "ipopt_obj": 2416.980320830355,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -6754,7 +6754,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 2424.0164608241935,
+    "ripopt_obj": 2424.681623664202,
     "ipopt_obj": 2285.383225429007,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -7004,7 +7004,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "MaxIterations",
-    "ripopt_obj": 10.160789844798469,
+    "ripopt_obj": 10.59342289803157,
     "ipopt_obj": 6.572691005063448,
     "ripopt_solved": true,
     "ipopt_solved": false
@@ -7074,7 +7074,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 1623.7456038835105,
+    "ripopt_obj": 1627.9995571818918,
     "ipopt_obj": 1623.7432582173208,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -7364,7 +7364,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 58.79094401187659,
+    "ripopt_obj": 58.79018619669124,
     "ipopt_obj": 58.79009827957107,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -7374,7 +7374,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 35.73927730655837,
+    "ripopt_obj": 35.74379776713673,
     "ipopt_obj": 35.73896607952278,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -7402,9 +7402,9 @@
   {
     "name": "QC",
     "suite": "CUTEst",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -853.3467096102794,
+    "ripopt_obj": -823.9327368663057,
     "ipopt_obj": -956.5378575817144,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -7412,9 +7412,9 @@
   {
     "name": "QCNEW",
     "suite": "CUTEst",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -806.5218543531086,
+    "ripopt_obj": -813.7719279800192,
     "ipopt_obj": -806.5219397501434,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -7514,7 +7514,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 0.08333684326767989,
+    "ripopt_obj": 0.08334610954025291,
     "ipopt_obj": 0.08333327340359872,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -7694,7 +7694,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 1.0000000000121108,
+    "ripopt_obj": 1.0000000000121845,
     "ipopt_obj": 0.9999999882537524,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -7834,7 +7834,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 239.73800065831887,
+    "ripopt_obj": 239.73800065832535,
     "ipopt_obj": 239.73800065831855,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -7844,7 +7844,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Optimal",
     "ipopt_status": "Infeasible",
-    "ripopt_obj": 0.12599270621792266,
+    "ripopt_obj": 6.250036755988623e-09,
     "ipopt_obj": 16850.970451288653,
     "ripopt_solved": true,
     "ipopt_solved": false
@@ -7862,11 +7862,11 @@
   {
     "name": "SSINE",
     "suite": "CUTEst",
-    "ripopt_status": "Acceptable",
+    "ripopt_status": "NumericalError",
     "ipopt_status": "Optimal",
     "ripopt_obj": 0.0,
     "ipopt_obj": 0.0,
-    "ripopt_solved": true,
+    "ripopt_solved": false,
     "ipopt_solved": true
   },
   {
@@ -7882,11 +7882,11 @@
   {
     "name": "STRATEC",
     "suite": "CUTEst",
-    "ripopt_status": "NumericalError",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -23274841.407302182,
+    "ripopt_obj": 2345.1346363457633,
     "ipopt_obj": 2212.262290907358,
-    "ripopt_solved": false,
+    "ripopt_solved": true,
     "ipopt_solved": true
   },
   {
@@ -7932,9 +7932,9 @@
   {
     "name": "SYNTHES1",
     "suite": "CUTEst",
-    "ripopt_status": "Acceptable",
+    "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 0.7592849054396111,
+    "ripopt_obj": 0.7592847148295057,
     "ipopt_obj": 0.7592841841112793,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -7942,9 +7942,9 @@
   {
     "name": "SYNTHES2",
     "suite": "CUTEst",
-    "ripopt_status": "Acceptable",
+    "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -0.5544049263956836,
+    "ripopt_obj": -0.554405324613624,
     "ipopt_obj": -0.554406285533589,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -7954,7 +7954,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 15.083964580950166,
+    "ripopt_obj": 15.0821898283988,
     "ipopt_obj": 15.082189912753243,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -7972,11 +7972,11 @@
   {
     "name": "TAX13322",
     "suite": "CUTEst",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Timeout",
     "ipopt_status": "MaxIterations",
-    "ripopt_obj": -3726.4552928896705,
+    "ripopt_obj": null,
     "ipopt_obj": -1073213514832.9406,
-    "ripopt_solved": true,
+    "ripopt_solved": false,
     "ipopt_solved": false
   },
   {
@@ -7984,7 +7984,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Acceptable",
-    "ripopt_obj": -361.1651803591328,
+    "ripopt_obj": -14977.743627506046,
     "ipopt_obj": -342.9088661121257,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -7992,9 +7992,9 @@
   {
     "name": "TENBARS1",
     "suite": "CUTEst",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 2302.548512615936,
+    "ripopt_obj": 2295.3734568618843,
     "ipopt_obj": 2295.3734345145012,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -8002,9 +8002,9 @@
   {
     "name": "TENBARS2",
     "suite": "CUTEst",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 2302.5485125440473,
+    "ripopt_obj": 2302.5485147785057,
     "ipopt_obj": 2302.5484894305705,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -8012,9 +8012,9 @@
   {
     "name": "TENBARS3",
     "suite": "CUTEst",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 2247.129067715718,
+    "ripopt_obj": 2247.129067670352,
     "ipopt_obj": 2247.1290450599327,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -8122,11 +8122,11 @@
   {
     "name": "TRO3X3",
     "suite": "CUTEst",
-    "ripopt_status": "NumericalError",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -2980.3367103056316,
+    "ripopt_obj": 8.999999972076234,
     "ipopt_obj": 8.967478352707397,
-    "ripopt_solved": false,
+    "ripopt_solved": true,
     "ipopt_solved": true
   },
   {
@@ -8134,7 +8134,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "IpoptStatus(4)",
-    "ripopt_obj": 9.284886833263458,
+    "ripopt_obj": 9.000000593915589,
     "ipopt_obj": -1.957476279591892e+20,
     "ripopt_solved": true,
     "ipopt_solved": false
@@ -8142,11 +8142,11 @@
   {
     "name": "TRO6X2",
     "suite": "CUTEst",
-    "ripopt_status": "NumericalError",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "RestorationFailed",
-    "ripopt_obj": 1224.98624300099,
+    "ripopt_obj": 1224.9999999914553,
     "ipopt_obj": -317796557934275.44,
-    "ripopt_solved": false,
+    "ripopt_solved": true,
     "ipopt_solved": false
   },
   {
@@ -8162,9 +8162,9 @@
   {
     "name": "TRUSPYR2",
     "suite": "CUTEst",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 11.228740882358844,
+    "ripopt_obj": 11.228740383613736,
     "ipopt_obj": 11.228740005409454,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -8284,7 +8284,7 @@
     "suite": "CUTEst",
     "ripopt_status": "Acceptable",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 10549.381190942884,
+    "ripopt_obj": 10549.379868491182,
     "ipopt_obj": 10549.379465197322,
     "ripopt_solved": true,
     "ipopt_solved": true
