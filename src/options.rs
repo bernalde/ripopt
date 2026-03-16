@@ -187,11 +187,6 @@ pub struct SolverOptions {
     /// oracle when the iterate is well-centered.
     /// Default: true.
     pub mu_oracle_quality_function: bool,
-    /// Use alternative sparse solver backend (faer instead of rmumps).
-    /// When both backends are compiled in, this selects faer SparseLdl
-    /// which uses a different AMD ordering and factorization method.
-    /// Default: false.
-    pub use_alternative_sparse_solver: bool,
 }
 
 impl Default for SolverOptions {
@@ -212,7 +207,7 @@ impl Default for SolverOptions {
             slack_bound_push: 1e-2,
             slack_bound_frac: 1e-2,
             constr_viol_tol: 1e-4,
-            dual_inf_tol: 100.0,  // TEST: Relaxed gate to unblock problems with large unscaled dual infeasibility
+            dual_inf_tol: 1.0,
             compl_inf_tol: 1e-4,
             mu_strategy_adaptive: true,
             max_soc: 4,
@@ -229,7 +224,7 @@ impl Default for SolverOptions {
             constraint_slack_barrier: false,
             max_wall_time: 0.0,
             acceptable_constr_viol_tol: 1e-2,
-            acceptable_dual_inf_tol: 1e10,
+            acceptable_dual_inf_tol: 1e4,
             acceptable_compl_inf_tol: 1e-2,
             watchdog_shortened_iter_trigger: 10,
             watchdog_trial_iter_max: 3,
@@ -253,7 +248,6 @@ impl Default for SolverOptions {
             stall_iter_limit: 30,
             early_stall_timeout: 10.0,
             mu_oracle_quality_function: false,
-            use_alternative_sparse_solver: false,
         }
     }
 }

@@ -5,7 +5,7 @@ use crate::filter::{self, Filter, FilterEntry};
 use crate::kkt::{self, InertiaCorrectionParams};
 use crate::linear_solver::banded::BandedLdl;
 use crate::linear_solver::dense::DenseLdl;
-#[cfg(feature = "faer")]
+#[cfg(all(feature = "faer", not(feature = "rmumps")))]
 use crate::linear_solver::sparse::SparseLdl;
 #[cfg(feature = "rmumps")]
 use crate::linear_solver::multifrontal::MultifrontalLdl;
@@ -20,30 +20,6 @@ use crate::options::LinearSolverChoice;
 /// Prefers rmumps (multifrontal) when available, falls back to faer (SparseLdl).
 fn new_sparse_solver() -> Box<dyn LinearSolver> {
     new_sparse_solver_with_choice(LinearSolverChoice::Direct)
-}
-
-/// Create a sparse direct solver sized for a given KKT dimension.
-/// Prefers rmumps MultifrontalLdl (faster factorization via multifrontal method)
-/// when available. Falls back to faer SparseLdl.
-fn new_sparse_solver_for_dim(_dim: usize) -> Box<dyn LinearSolver> {
-    #[cfg(feature = "rmumps")]
-    { return Box::new(MultifrontalLdl::new()); }
-    #[cfg(all(not(feature = "rmumps"), feature = "faer"))]
-    { return Box::new(SparseLdl::new()); }
-    #[cfg(not(any(feature = "rmumps", feature = "faer")))]
-    { return Box::new(DenseLdl::new()); }
-}
-
-/// Create an alternative sparse solver (faer SparseLdl when rmumps is the default).
-/// Returns `None` if no alternative is available (only one backend compiled in).
-/// Used by the fallback cascade: different AMD orderings and factorization numerics
-/// can change the Newton direction enough to recover problems that fail with the
-/// primary solver (e.g., CORE1, CRESC50 after the rmumps AMD swap).
-#[allow(unreachable_code)]
-fn new_alternative_sparse_solver() -> Option<Box<dyn LinearSolver>> {
-    #[cfg(all(feature = "rmumps", feature = "faer"))]
-    { return Some(Box::new(SparseLdl::new())); }
-    None
 }
 
 /// Create a sparse linear solver with the specified choice.
@@ -1494,7 +1470,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     } else {
         // For constrained problems with wall time limits, reserve budget for fallbacks.
         // Without this, the first solve_ipm consumes the full max_wall_time, leaving
-        // nothing for SQP/slack/AL fallbacks that might succeed (e.g., ACOPR30).
+        // nothing for SQP/slack/AL fallbacks that might succeed.
         if options.max_wall_time > 0.0 && problem.num_constraints() > 0 {
             let mut main_opts = options.clone();
             main_opts.max_wall_time = options.max_wall_time * 0.5;
@@ -1504,139 +1480,23 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
     };
 
-    // Conservative IPM retry: when the main IPM failed on a small problem and
-    // Gondzio centrality corrections were active, retry with gondzio_mcc_max=0.
-    // The centrality corrections (new in v0.4.0) change early Newton directions enough
-    // to steer the solver into different basins on sensitive problems (e.g., MGH10LS,
-    // STRATEC, TRO3X3). Disabling them recovers the pre-v0.4.0 trajectory.
-    let n_conservative = problem.num_variables();
-    if n_conservative <= 200
-        && options.gondzio_mcc_max > 0
-        && matches!(
-            result.status,
-            SolveStatus::MaxIterations | SolveStatus::NumericalError | SolveStatus::RestorationFailed
-        )
-    {
-        if options.print_level >= 5 {
-            eprintln!(
-                "ripopt: IPM failed ({:?}), retrying with conservative settings (no Gondzio MCC)",
-                result.status
-            );
-        }
-        let mut conservative_opts = options.clone();
-        // Revert all v0.4.0 algorithmic changes that affect Newton direction
-        // and convergence trajectory to recover the pre-regression behavior.
-        conservative_opts.gondzio_mcc_max = 0;
-        conservative_opts.stall_iter_limit = 0; // was added in v0.4.0
-        conservative_opts.proactive_infeasibility_detection = true; // was true pre-v0.4.0
-        // For small unconstrained problems, give full iteration budget — problems like
-        // MGH10LS need ~1800 iterations to traverse flat objective landscapes, and
-        // per-iteration cost is negligible at n<=200.
-        conservative_opts.max_iter = if problem.num_constraints() == 0 && n_conservative <= 200 {
-            options.max_iter
-        } else {
-            options.max_iter.min(500).max(options.max_iter / 3)
-        };
-        if options.max_wall_time > 0.0 {
-            let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
-            if remaining <= 0.1 {
-                return result;
-            }
-            // Use at most 40% of remaining time to leave budget for later fallbacks
-            conservative_opts.max_wall_time = (remaining * 0.4).min(remaining);
-        }
-        let conservative_result = solve_ipm(problem, &conservative_opts);
-        let conservative_better = matches!(
-            conservative_result.status,
-            SolveStatus::Optimal | SolveStatus::Acceptable
-        );
-        let current_solved = matches!(
-            result.status,
-            SolveStatus::Optimal | SolveStatus::Acceptable
-        );
-        if conservative_better && !current_solved {
-            if options.print_level >= 5 {
-                eprintln!(
-                    "ripopt: Conservative IPM retry succeeded ({:?}, obj={:.6e})",
-                    conservative_result.status, conservative_result.objective
-                );
-            }
-            result = conservative_result;
-            result.diagnostics.fallback_used = Some("conservative_ipm".into());
-        } else if options.print_level >= 5 {
-            eprintln!(
-                "ripopt: Conservative IPM retry did not improve ({:?})",
-                conservative_result.status
-            );
-        }
-    }
-
-    // Alternative sparse solver retry: when the main IPM failed and an alternative
-    // sparse backend is available (faer vs rmumps), retry with different AMD ordering
-    // and factorization numerics. Different pivot sequences can change the Newton
-    // direction enough to recover problems that fail with one solver but not another
-    // (e.g., CORE1, CRESC50, DISCS, FEEDLOC after the rmumps AMD ordering change).
-    if !options.use_alternative_sparse_solver
-        && new_alternative_sparse_solver().is_some()
-        && (n_conservative + problem.num_constraints()) >= options.sparse_threshold
-        && matches!(
-            result.status,
-            SolveStatus::MaxIterations | SolveStatus::NumericalError | SolveStatus::RestorationFailed
-        )
-    {
-        if options.print_level >= 5 {
-            eprintln!(
-                "ripopt: IPM failed ({:?}), retrying with alternative sparse solver",
-                result.status
-            );
-        }
-        let mut alt_opts = options.clone();
-        alt_opts.use_alternative_sparse_solver = true;
-        alt_opts.max_iter = options.max_iter.min(500).max(options.max_iter / 3);
-        if options.max_wall_time > 0.0 {
-            let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
-            if remaining <= 0.1 {
-                return result;
-            }
-            // Use at most 40% of remaining time to leave budget for SQP/slack fallbacks
-            alt_opts.max_wall_time = (remaining * 0.4).min(remaining);
-        }
-        let alt_result = solve_ipm(problem, &alt_opts);
-        let alt_better = matches!(
-            alt_result.status,
-            SolveStatus::Optimal | SolveStatus::Acceptable
-        );
-        let current_solved = matches!(
-            result.status,
-            SolveStatus::Optimal | SolveStatus::Acceptable
-        );
-        if alt_better && !current_solved {
-            if options.print_level >= 5 {
-                eprintln!(
-                    "ripopt: Alternative sparse solver succeeded ({:?}, obj={:.6e})",
-                    alt_result.status, alt_result.objective
-                );
-            }
-            result = alt_result;
-            result.diagnostics.fallback_used = Some("alt_sparse_solver".into());
-        } else if options.print_level >= 5 {
-            eprintln!(
-                "ripopt: Alternative sparse solver did not improve ({:?})",
-                alt_result.status
-            );
-        }
-    }
+    // Compute cost-based retry budget: estimate how many iterations are affordable
+    // based on the per-iteration cost of the failed solve and remaining time.
+    let per_iter_cost = result.diagnostics.wall_time_secs / result.iterations.max(1) as f64;
+    let remaining_time = if options.max_wall_time > 0.0 {
+        options.max_wall_time - solve_start.elapsed().as_secs_f64()
+    } else {
+        60.0 // default budget for retries
+    };
+    let affordable_iters = (remaining_time / per_iter_cost.max(1e-6)) as usize;
 
     // L-BFGS Hessian fallback: retry with L-BFGS Hessian approximation when
     // the exact-Hessian IPM failed. Skip if already in limited-memory mode.
-    // Skip for large problems: L-BFGS forms an explicit dense n×n matrix (O(n²) memory).
     // Exclude RestorationFailed: if exact Hessian couldn't find feasible restoration,
-    // L-BFGS approximation won't either, and consuming wall time here prevents
-    // subsequent fallbacks (SQP, slack) from running (e.g., ACOPR30).
-    let n_lbfgs = problem.num_variables();
+    // L-BFGS approximation won't either.
     if options.enable_lbfgs_hessian_fallback
         && !options.hessian_approximation_lbfgs
-        && n_lbfgs <= 5000
+        && affordable_iters >= 100
         && matches!(
             result.status,
             SolveStatus::MaxIterations | SolveStatus::NumericalError
@@ -1688,12 +1548,9 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     }
 
     // Augmented Lagrangian fallback for constrained problems
-    // Skip for large problems: AL creates penalized subproblems that each run a full IPM solve,
-    // which is prohibitively expensive at scale.
-    let kkt_dim_al = problem.num_variables() + problem.num_constraints();
     if options.enable_al_fallback
         && problem.num_constraints() > 0
-        && kkt_dim_al <= 5000
+        && affordable_iters >= 50
         && matches!(
             result.status,
             SolveStatus::MaxIterations | SolveStatus::NumericalError
@@ -1739,11 +1596,9 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     }
 
     // SQP fallback: try SQP when IPM didn't reach Optimal and problem has constraints
-    // Skip for large problems — SQP uses dense QP subproblems, O(n³) per iteration
-    let kkt_dim = problem.num_variables() + problem.num_constraints();
     if options.enable_sqp_fallback
         && problem.num_constraints() > 0
-        && kkt_dim <= 1000
+        && affordable_iters >= 30
         && !matches!(result.status, SolveStatus::Optimal)
     {
         if options.print_level >= 5 {
@@ -1794,28 +1649,11 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
     // Slack variable fallback: if the solve didn't reach Optimal and the problem
     // has inequality constraints, retry with explicit slacks (g(x)-s=0, bounds on s).
-    // Also try when only Acceptable was achieved — slack formulation may find a better solution
-    // (e.g. ACOPR14 where AL gives Acceptable at a suboptimal local minimum).
-    // For Acceptable results, only try slack if the problem is small enough
-    // that the slack formulation (n + n_ineq variables) won't be too expensive.
-    // For failure statuses, always try (the original behavior).
-    let is_failure = matches!(
-        result.status,
-        SolveStatus::RestorationFailed | SolveStatus::MaxIterations | SolveStatus::NumericalError
-    );
-    let n_ineq = if !is_failure {
-        let m = problem.num_constraints();
-        let mut g_l = vec![0.0; m];
-        let mut g_u = vec![0.0; m];
-        problem.constraint_bounds(&mut g_l, &mut g_u);
-        (0..m).filter(|&i| (g_l[i] - g_u[i]).abs() > 0.0).count()
-    } else { 0 };
-    let slack_too_large = !is_failure && problem.num_variables() + n_ineq > 200;
-
+    // Also try when only Acceptable was achieved — slack formulation may find a better solution.
     if options.enable_slack_fallback
         && has_inequality_constraints(problem)
         && !matches!(result.status, SolveStatus::Optimal)
-        && !slack_too_large
+        && affordable_iters >= 50
     {
         if options.print_level >= 5 {
             eprintln!(
@@ -2094,15 +1932,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     // Initialize linear solver — use sparse for large KKT systems
     let use_sparse = (n + m) >= options.sparse_threshold;
     let mut lin_solver: Box<dyn LinearSolver> = if use_sparse {
-        if options.use_alternative_sparse_solver {
-            // Use faer SparseLdl if available (different AMD ordering, different numerics)
-            new_alternative_sparse_solver().unwrap_or_else(|| new_sparse_solver_for_dim(n + m))
-        } else {
-            match options.linear_solver {
-                LinearSolverChoice::Direct => new_sparse_solver_for_dim(n + m),
-                _ => new_sparse_solver_with_choice(options.linear_solver),
-            }
-        }
+        new_sparse_solver_with_choice(options.linear_solver)
     } else {
         Box::new(DenseLdl::new())
     };
@@ -2375,8 +2205,8 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         // --- Dual stagnation detection (runs every iteration, including restoration) ---
         // Track best du seen. If du hasn't improved for 500+ iterations and we have a
         // best feasible point, restore it with fresh filter/mu.
-        // This catches problems like ACOPR14 where restoration cycling pushes the solver
-        // off a good region and it gets stuck for thousands of iterations.
+        // This catches cases where restoration cycling pushes the solver off a good
+        // region and it gets stuck for thousands of iterations.
         if iteration > 0 {
             let current_du = convergence::dual_infeasibility(
                 &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
@@ -2509,8 +2339,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             n,
         );
 
-        // Unscaled dual infeasibility uses iterative z (catches false convergence)
-        let dual_inf_unscaled = convergence::dual_infeasibility(
+        // Unscaled dual infeasibility uses iterative z with component-wise scaling
+        // (catches false convergence while being insensitive to gradient magnitude)
+        let dual_inf_unscaled = convergence::dual_infeasibility_scaled(
             &state.grad_f,
             &state.jac_rows,
             &state.jac_cols,
@@ -3445,6 +3276,14 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 }
             }
         } else {
+            // Save original RHS for Mehrotra PC deflection check
+            let saved_rhs = if options.mehrotra_pc {
+                kkt_system_opt.as_ref().map(|k| k.rhs.clone())
+            } else {
+                None
+            };
+            let mut mehrotra_applied = false;
+
             // Mehrotra predictor-corrector (PC): probe the affine-scaling direction to
             // estimate a better barrier parameter μ before solving the main step.
             //
@@ -3546,12 +3385,13 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     // Apply the improved RHS to the KKT system
                     if let Some(new_rhs) = pc_rhs {
                         kkt_system_opt.as_mut().unwrap().rhs = new_rhs;
+                        mehrotra_applied = true;
                     }
                 }
             }
 
             let dir_result = kkt::solve_for_direction(kkt_system_opt.as_ref().unwrap(), lin_solver.as_mut());
-            match dir_result {
+            let (mut dx_dir, mut dy_dir) = match dir_result {
                 Ok(d) => d,
                 Err(e) => {
                     log::warn!("KKT solve failed: {}", e);
@@ -3584,7 +3424,36 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         return make_result(&state, SolveStatus::NumericalError);
                     }
                 }
+            };
+
+            // Mehrotra PC deflection check: if the PC direction deflects > 30% from
+            // the original (non-PC) direction, revert to the original direction.
+            if mehrotra_applied {
+                if let Some(ref orig_rhs) = saved_rhs {
+                    if let Some(ref kkt) = kkt_system_opt {
+                        if let Ok((dx_orig, dy_orig)) = kkt::solve_with_custom_rhs(kkt.n, kkt.dim, lin_solver.as_mut(), orig_rhs) {
+                            let norm_orig: f64 = dx_orig.iter().map(|v| v * v).sum::<f64>().sqrt();
+                            let norm_pc: f64 = dx_dir.iter().map(|v| v * v).sum::<f64>().sqrt();
+                            if norm_orig > 1e-30 && norm_pc > 1e-30 {
+                                let dot: f64 = dx_orig.iter().zip(dx_dir.iter()).map(|(a, b)| a * b).sum::<f64>();
+                                let cos_angle = dot / (norm_orig * norm_pc);
+                                if cos_angle < 0.7 {
+                                    log::debug!(
+                                        "Mehrotra PC deflection too large (cos={:.3}), reverting",
+                                        cos_angle
+                                    );
+                                    dx_dir = dx_orig;
+                                    dy_dir = dy_orig;
+                                    // Restore original RHS for Gondzio MCC
+                                    kkt_system_opt.as_mut().unwrap().rhs = orig_rhs.clone();
+                                }
+                            }
+                        }
+                    }
+                }
             }
+
+            (dx_dir, dy_dir)
         };
 
         timings.direction_solve += t_dir.elapsed();
@@ -3636,6 +3505,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 let mu_target = state.mu;
                 let beta_min = 0.01_f64;  // centrality lower bound: z·s ≥ β_min·μ
                 let beta_max = 100.0_f64; // centrality upper bound: z·s ≤ β_max·μ
+
+                // Save original direction norm for deflection check
+                let dx_norm_orig: f64 = state.dx.iter().map(|v| v * v).sum::<f64>().sqrt();
 
                 for _mcc_iter in 0..options.gondzio_mcc_max {
                     // Build centrality correction RHS: target z·s → μ for outliers
@@ -3693,9 +3565,30 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
                             // Tentatively update direction
                             let mut dx_c: Vec<f64> = state.dx.iter().zip(ddx.iter()).map(|(a, b)| a + b).collect();
-                            let dy_c: Vec<f64> = state.dy.iter().zip(ddy.iter()).map(|(a, b)| a + b).collect();
-                            let dz_l_c: Vec<f64> = state.dz_l.iter().zip(ddz_l.iter()).map(|(a, b)| a + b).collect();
-                            let dz_u_c: Vec<f64> = state.dz_u.iter().zip(ddz_u.iter()).map(|(a, b)| a + b).collect();
+                            let mut dy_c: Vec<f64> = state.dy.iter().zip(ddy.iter()).map(|(a, b)| a + b).collect();
+                            let mut dz_l_c: Vec<f64> = state.dz_l.iter().zip(ddz_l.iter()).map(|(a, b)| a + b).collect();
+                            let mut dz_u_c: Vec<f64> = state.dz_u.iter().zip(ddz_u.iter()).map(|(a, b)| a + b).collect();
+
+                            // Deflection check: if correction deflects direction > 30%,
+                            // dampen to prevent basin-switching on nonconvex problems
+                            if dx_norm_orig > 1e-30 {
+                                let dx_c_norm: f64 = dx_c.iter().map(|v| v * v).sum::<f64>().sqrt();
+                                if dx_c_norm > 1e-30 {
+                                    let dot: f64 = state.dx.iter().zip(dx_c.iter()).map(|(a, b)| a * b).sum::<f64>();
+                                    let cos_angle = dot / (dx_norm_orig * dx_c_norm);
+                                    if cos_angle < 0.7 {
+                                        let alpha_damp = 0.3;
+                                        for i in 0..n { dx_c[i] = (1.0 - alpha_damp) * state.dx[i] + alpha_damp * dx_c[i]; }
+                                        for i in 0..m { dy_c[i] = (1.0 - alpha_damp) * state.dy[i] + alpha_damp * dy_c[i]; }
+                                        for i in 0..n { dz_l_c[i] = (1.0 - alpha_damp) * state.dz_l[i] + alpha_damp * dz_l_c[i]; }
+                                        for i in 0..n { dz_u_c[i] = (1.0 - alpha_damp) * state.dz_u[i] + alpha_damp * dz_u_c[i]; }
+                                        log::debug!(
+                                            "Gondzio MCC iter {}: dampened correction (cos={:.3})",
+                                            iteration, cos_angle
+                                        );
+                                    }
+                                }
+                            }
 
                             // Compute new alpha for the corrected direction
                             let new_zl = filter::fraction_to_boundary(&state.z_l, &dz_l_c, tau_mcc);
@@ -5449,7 +5342,7 @@ fn attempt_nlp_restoration<P: NlpProblem>(
         inner_opts.max_wall_time = remaining;
     }
     // Scale early stall timeout by restoration NLP size — large restoration NLPs
-    // (e.g., FEEDLOC with n_resto=867) need more time than the default 3s cap.
+    // need more time than the default 3s cap.
     let resto_dim = resto_nlp.num_variables() + resto_nlp.num_constraints();
     inner_opts.early_stall_timeout = if options.early_stall_timeout > 0.0 {
         if resto_dim > 500 {
@@ -5461,32 +5354,8 @@ fn attempt_nlp_restoration<P: NlpProblem>(
         3.0
     };
 
-    // Solve the restoration NLP — try primary solver first, then alternative if available
+    // Solve the restoration NLP
     let result = solve_ipm(&resto_nlp, &inner_opts);
-
-    // If restoration failed and alternative sparse solver is available, retry with it.
-    // NLP restoration sub-problems can be sensitive to AMD ordering (FEEDLOC).
-    let result = if !matches!(result.status, SolveStatus::Optimal | SolveStatus::Acceptable)
-        && !inner_opts.use_alternative_sparse_solver
-        && new_alternative_sparse_solver().is_some()
-        && resto_dim >= inner_opts.sparse_threshold
-    {
-        let mut alt_inner = inner_opts.clone();
-        alt_inner.use_alternative_sparse_solver = true;
-        if options.max_wall_time > 0.0 {
-            let remaining = options.max_wall_time - start_time.elapsed().as_secs_f64();
-            if remaining > 0.5 {
-                alt_inner.max_wall_time = remaining;
-                solve_ipm(&resto_nlp, &alt_inner)
-            } else {
-                result
-            }
-        } else {
-            solve_ipm(&resto_nlp, &alt_inner)
-        }
-    } else {
-        result
-    };
 
     // Extract x_orig from the restoration solution
     let x_nlp: Vec<f64> = result.x[..n].to_vec();

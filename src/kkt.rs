@@ -268,11 +268,50 @@ impl Default for InertiaCorrectionParams {
     }
 }
 
+/// Check if a factorization produces acceptable backward error for the KKT system.
+/// Does a trial solve and checks ||b - Ax|| / (||x|| + ||b||).
+/// Returns true if backward error <= 1e-6.
+fn check_factorization_backward_error(
+    kkt: &KktSystem,
+    solver: &mut dyn LinearSolver,
+) -> bool {
+    check_factorization_backward_error_with_matrix(&kkt.matrix, &kkt.rhs, solver)
+}
+
+/// Check backward error using a specific matrix (may differ from kkt.matrix when perturbed).
+/// Uses a lenient threshold (1e-4) since iterative refinement in solve_for_direction
+/// will improve accuracy. This catches only grossly unreliable factorizations.
+fn check_factorization_backward_error_with_matrix(
+    matrix: &KktMatrix,
+    rhs: &[f64],
+    solver: &mut dyn LinearSolver,
+) -> bool {
+    let dim = rhs.len();
+    let mut solution = vec![0.0; dim];
+    if solver.solve(rhs, &mut solution).is_err() {
+        return false;
+    }
+    if solution.iter().any(|v| v.is_nan() || v.is_infinite()) {
+        return false;
+    }
+    let mut residual = vec![0.0; dim];
+    matrix.matvec(&solution, &mut residual);
+    let x_norm: f64 = solution.iter().map(|v| v.abs()).fold(0.0f64, f64::max).max(1.0);
+    let mut max_berr: f64 = 0.0;
+    for i in 0..dim {
+        let abs_res = (rhs[i] - residual[i]).abs();
+        let denom = x_norm + rhs[i].abs().max(1e-30);
+        max_berr = max_berr.max(abs_res / denom);
+    }
+    max_berr <= 1e-4
+}
+
 /// Perform KKT factorization with inertia correction.
 ///
 /// Factor the KKT matrix and check inertia. If inertia is wrong
 /// (should be (n, m, 0) for an n-variable, m-constraint problem),
-/// add regularization and re-factor.
+/// add regularization and re-factor. Also checks backward error
+/// to ensure the factorization is numerically reliable.
 ///
 /// Returns the factored solver and the regularization used.
 pub fn factor_with_inertia_correction(
@@ -288,8 +327,13 @@ pub fn factor_with_inertia_correction(
 
     if let Some(inertia) = inertia {
         if inertia.positive == n && inertia.negative == m && inertia.zero == 0 {
-            params.delta_w_last = 0.0;
-            return Ok((0.0, 0.0));
+            // Verify backward error is acceptable
+            if check_factorization_backward_error(kkt, solver) {
+                params.delta_w_last = 0.0;
+                return Ok((0.0, 0.0));
+            }
+            // Backward error too large — fall through to regularization
+            log::debug!("Unperturbed factorization has large backward error, adding regularization");
         }
     }
 
@@ -316,7 +360,7 @@ pub fn factor_with_inertia_correction(
         }
     }
 
-    // Inertia is wrong — apply perturbation and re-factor
+    // Inertia is wrong or backward error too large — apply perturbation and re-factor
     let mut delta_w = if params.delta_w_last == 0.0 {
         params.delta_w_init
     } else {
@@ -338,10 +382,17 @@ pub fn factor_with_inertia_correction(
 
         if let Some(inertia) = inertia {
             if inertia.positive == n && inertia.negative == m && inertia.zero == 0 {
-                // Update the KKT matrix to the perturbed version
-                kkt.matrix = perturbed;
-                params.delta_w_last = delta_w;
-                return Ok((delta_w, delta_c));
+                // Verify backward error is acceptable
+                if check_factorization_backward_error_with_matrix(&perturbed, &kkt.rhs, solver) {
+                    kkt.matrix = perturbed;
+                    params.delta_w_last = delta_w;
+                    return Ok((delta_w, delta_c));
+                }
+                // Backward error too large — increase regularization
+                log::debug!(
+                    "Inertia correct at delta_w={:.2e} but backward error too large, increasing",
+                    delta_w
+                );
             }
         }
 

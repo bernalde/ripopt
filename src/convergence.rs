@@ -156,6 +156,47 @@ pub fn dual_infeasibility(
     residual.iter().map(|r| r.abs()).fold(0.0f64, f64::max)
 }
 
+/// Compute component-wise scaled dual infeasibility.
+///
+/// Uses `|r_i| / (1 + |grad_f_i|)` per component, which makes the metric
+/// insensitive to gradient magnitude across variables. This prevents
+/// poorly-scaled problems from having artificially large unscaled dual
+/// infeasibility even when the scaled version is small.
+#[allow(clippy::too_many_arguments)]
+pub fn dual_infeasibility_scaled(
+    grad_f: &[f64],
+    jac_rows: &[usize],
+    jac_cols: &[usize],
+    jac_vals: &[f64],
+    lambda: &[f64],
+    z_l: &[f64],
+    z_u: &[f64],
+    n: usize,
+) -> f64 {
+    let mut residual = vec![0.0; n];
+
+    // Start with gradient of objective
+    residual[..n].copy_from_slice(&grad_f[..n]);
+
+    // Add J^T * lambda (Ipopt convention: L = f + y^T g)
+    for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
+        residual[col] += jac_vals[idx] * lambda[row];
+    }
+
+    // Subtract z_l and add z_u (bound multipliers)
+    for i in 0..n {
+        residual[i] -= z_l[i];
+        residual[i] += z_u[i];
+    }
+
+    // Component-wise scaling: divide by (1 + |grad_f_i|)
+    residual
+        .iter()
+        .enumerate()
+        .map(|(i, r)| r.abs() / (1.0 + grad_f[i].abs()))
+        .fold(0.0f64, f64::max)
+}
+
 /// Compute complementarity error for bound constraints.
 /// compl = max_i |x_i * z_l_i| where x_i is near lower bound,
 ///         max_i |s_u_i * z_u_i| where x_i is near upper bound.
@@ -384,7 +425,7 @@ mod tests {
         let info = ConvergenceInfo {
             primal_inf: 1e-10,
             dual_inf: 1e-10, // z_opt-based: looks converged
-            dual_inf_unscaled: 150.0, // iterative z: clearly not converged (> dual_inf_tol=100.0)
+            dual_inf_unscaled: 1.5, // iterative z: clearly not converged (> dual_inf_tol=1.0)
             compl_inf: 1e-10,
             mu: 1e-11,
             objective: 1.0,
@@ -400,7 +441,7 @@ mod tests {
 
         // Now with unscaled also passing
         let info2 = ConvergenceInfo {
-            dual_inf_unscaled: 50.0, // below dual_inf_tol=100.0
+            dual_inf_unscaled: 0.5, // below dual_inf_tol=1.0
             ..info
         };
         assert_eq!(
@@ -466,5 +507,42 @@ mod tests {
         let z_l2 = vec![0.0, 0.0];
         let di2 = dual_infeasibility(&grad_f, &jac_rows, &jac_cols, &jac_vals, &lambda, &z_l2, &z_u, n);
         assert!(di2 > 0.1, "Non-stationary should give positive dual_inf");
+    }
+
+    #[test]
+    fn test_dual_infeasibility_scaled_insensitive_to_gradient_magnitude() {
+        let n = 2;
+        // Large gradient magnitudes
+        let grad_f = vec![1e6, 1e6];
+        let jac_rows = vec![];
+        let jac_cols = vec![];
+        let jac_vals: Vec<f64> = vec![];
+        let lambda: Vec<f64> = vec![];
+        // Residual = grad_f - z_l + z_u = [1e6 - 0, 1e6 - 0] = [1e6, 1e6]
+        let z_l = vec![0.0, 0.0];
+        let z_u = vec![0.0, 0.0];
+
+        // Unscaled: max |r_i| = 1e6
+        let di = dual_infeasibility(&grad_f, &jac_rows, &jac_cols, &jac_vals, &lambda, &z_l, &z_u, n);
+        assert!(di > 1e5, "Unscaled should be large: {}", di);
+
+        // Scaled: max |r_i| / (1 + |grad_f_i|) ≈ 1e6 / (1 + 1e6) ≈ 1.0
+        let di_s = dual_infeasibility_scaled(&grad_f, &jac_rows, &jac_cols, &jac_vals, &lambda, &z_l, &z_u, n);
+        assert!(di_s < 1.1, "Scaled should be ~1.0: {}", di_s);
+    }
+
+    #[test]
+    fn test_dual_infeasibility_scaled_stationarity() {
+        let n = 2;
+        let grad_f = vec![1.0, 2.0];
+        let jac_rows = vec![0, 0];
+        let jac_cols = vec![0, 1];
+        let jac_vals = vec![1.0, 1.0];
+        let lambda = vec![-0.5];
+        let z_l = vec![0.5, 1.5];
+        let z_u = vec![0.0, 0.0];
+        // At stationarity, both scaled and unscaled should be ~0
+        let di_s = dual_infeasibility_scaled(&grad_f, &jac_rows, &jac_cols, &jac_vals, &lambda, &z_l, &z_u, n);
+        assert!(di_s < 1e-12, "Scaled stationarity should give 0, got {}", di_s);
     }
 }
