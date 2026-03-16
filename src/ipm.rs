@@ -254,6 +254,8 @@ struct MuState {
     first_iter_in_mode: bool,
     /// Count of consecutive restoration failures for giving up.
     consecutive_restoration_failures: usize,
+    /// Count of consecutive insufficient-progress iterations in Free mode.
+    consecutive_insufficient: usize,
 }
 
 impl MuState {
@@ -266,6 +268,7 @@ impl MuState {
             tiny_step: false,
             first_iter_in_mode: true,
             consecutive_restoration_failures: 0,
+            consecutive_insufficient: 0,
         }
     }
 
@@ -2371,7 +2374,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             }
             let mut zl = vec![0.0; n];
             let mut zu = vec![0.0; n];
-            let kappa_compl = 1e10;
+            let kappa_compl = 1e12;
             for i in 0..n {
                 if grad_jty[i] > 0.0 && state.x_l[i].is_finite() {
                     let s_l = (state.x[i] - state.x_l[i]).max(1e-20);
@@ -4367,20 +4370,33 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
             match mu_state.mode {
                 MuMode::Free => {
+                    // Consume Mehrotra sigma for use as quality function candidate
+                    let sigma_mu = last_mehrotra_sigma.take();
                     if sufficient && !mu_state.tiny_step {
+                        mu_state.consecutive_insufficient = 0;
                         mu_state.remember_accepted(kkt_error);
                         let avg_compl = compute_avg_complementarity(&state);
-                        // Consume Mehrotra sigma (used as lower bound hint for quality function)
-                        let _sigma = last_mehrotra_sigma.take();
                         if options.mu_oracle_quality_function && avg_compl > 0.0 {
                             // Quality function: evaluate Q(mu) for explicit candidates and
-                            // pick the one with lowest barrier KKT error. This is safer than
-                            // a continuous search because the candidates are all "reasonable"
-                            // mu values that standard strategies would produce.
+                            // pick the one with lowest barrier KKT error.
                             let mu_loqo = avg_compl / options.kappa;
                             let mu_linear = options.mu_linear_decrease_factor * state.mu;
                             let mu_third = state.mu / 3.0;
                             let mu_tenth = state.mu / 10.0;
+
+                            // Only allow aggressive decrease if barrier subproblem is solved
+                            let barrier_err = compute_barrier_error(&state);
+                            let mu_floor = if barrier_err <= options.barrier_tol_factor * state.mu {
+                                options.mu_min
+                            } else {
+                                (state.mu / 5.0).max(options.mu_min)
+                            };
+
+                            // Build candidate list, optionally including Mehrotra sigma
+                            let mut candidates = vec![mu_loqo, mu_linear, mu_third, mu_tenth];
+                            if let Some(sigma) = sigma_mu {
+                                candidates.push((sigma * state.mu).max(options.mu_min));
+                            }
 
                             let pi = state.constraint_violation();
                             let di = convergence::dual_infeasibility(
@@ -4391,8 +4407,8 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
                             let mut best_mu = mu_loqo;
                             let mut best_q = f64::INFINITY;
-                            for &mu_c in &[mu_loqo, mu_linear, mu_third, mu_tenth] {
-                                let mu_c = mu_c.clamp(options.mu_min, state.mu);
+                            for &mu_c in &candidates {
+                                let mu_c = mu_c.clamp(mu_floor, state.mu);
                                 let ci = convergence::complementarity_error(
                                     &state.x, &state.x_l, &state.x_u,
                                     &state.z_l, &state.z_u, mu_c,
@@ -4403,7 +4419,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                                     best_mu = mu_c;
                                 }
                             }
-                            state.mu = best_mu.clamp(options.mu_min, 1e5);
+                            state.mu = best_mu.clamp(mu_floor, 1e5);
                         } else if avg_compl > 0.0 {
                             // Loqo fallback
                             state.mu = (avg_compl / options.kappa).clamp(options.mu_min, 1e5);
@@ -4417,22 +4433,35 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         let theta_new = state.constraint_violation();
                         filter.set_theta_min_from_initial(theta_new);
                     } else {
-                        // Switch to fixed mode
-                        log::debug!("Switching to fixed mu mode (insufficient progress or tiny step)");
-                        state.diagnostics.mu_mode_switches += 1;
-                        mu_state.mode = MuMode::Fixed;
-                        mu_state.first_iter_in_mode = true;
-                        let avg_compl = compute_avg_complementarity(&state);
-                        if avg_compl > 0.0 {
-                            state.mu = (options.adaptive_mu_monotone_init_factor * avg_compl)
-                                .clamp(options.mu_min, 1e5);
+                        mu_state.consecutive_insufficient += 1;
+                        if mu_state.consecutive_insufficient >= 2 {
+                            // Switch to fixed mode after 2 consecutive insufficient iterations
+                            mu_state.consecutive_insufficient = 0;
+                            log::debug!("Switching to fixed mu mode (insufficient progress or tiny step)");
+                            state.diagnostics.mu_mode_switches += 1;
+                            mu_state.mode = MuMode::Fixed;
+                            mu_state.first_iter_in_mode = true;
+                            let avg_compl = compute_avg_complementarity(&state);
+                            if avg_compl > 0.0 {
+                                state.mu = (options.adaptive_mu_monotone_init_factor * avg_compl)
+                                    .clamp(options.mu_min, 1e5);
+                            } else {
+                                state.mu = (options.mu_linear_decrease_factor * state.mu)
+                                    .max(options.mu_min);
+                            }
+                            filter.reset();
+                            let theta_new = state.constraint_violation();
+                            filter.set_theta_min_from_initial(theta_new);
                         } else {
-                            state.mu = (options.mu_linear_decrease_factor * state.mu)
-                                .max(options.mu_min);
+                            // Stay in Free mode with conservative mu decrease
+                            let avg_compl = compute_avg_complementarity(&state);
+                            if avg_compl > 0.0 {
+                                state.mu = (avg_compl / options.kappa).clamp(options.mu_min, 1e5);
+                            } else {
+                                state.mu = (options.mu_linear_decrease_factor * state.mu)
+                                    .max(options.mu_min);
+                            }
                         }
-                        filter.reset();
-                        let theta_new = state.constraint_violation();
-                        filter.set_theta_min_from_initial(theta_new);
                     }
                 }
                 MuMode::Fixed => {
