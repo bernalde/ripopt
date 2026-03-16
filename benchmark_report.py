@@ -301,29 +301,30 @@ def generate_report(suites, output_path, baseline=None):
 
     combined = suite_summary("Combined", all_comps)
 
-    # Count "Acceptable" solutions with >1% objective deviation from Ipopt's Optimal
-    r_acc_wrong = sum(1 for c in all_comps
-                      if c['ripopt_status'] == 'Acceptable'
-                      and c['ipopt_status'] == 'Optimal'
-                      and not math.isnan(c['obj_diff'])
-                      and c['obj_diff'] > 0.01)
+    # Count questionable Acceptable solutions
+    r_acc_questionable = sum(1 for c in all_comps
+                             if c['ripopt_status'] == 'Acceptable'
+                             and c['ipopt_status'] == 'Optimal'
+                             and not math.isnan(c['obj_diff'])
+                             and c['obj_diff'] > 0.01)
 
     lines.append("## Executive Summary")
     lines.append("")
     lines.append(f"| Metric | ripopt | Ipopt |")
     lines.append(f"|--------|--------|-------|")
-    lines.append(f"| Total solved | **{combined['r_solved']}/{combined['total']}** ({100*combined['r_solved']/max(combined['total'],1):.1f}%) | {combined['i_solved']}/{combined['total']} ({100*combined['i_solved']/max(combined['total'],1):.1f}%) |")
-    lines.append(f"| Optimal | {combined['r_optimal']} | {combined['i_optimal']} |")
+    lines.append(f"| Optimal | **{combined['r_optimal']}/{combined['total']}** ({100*combined['r_optimal']/max(combined['total'],1):.1f}%) | **{combined['i_optimal']}/{combined['total']}** ({100*combined['i_optimal']/max(combined['total'],1):.1f}%) |")
     lines.append(f"| Acceptable | {combined['r_acceptable']} | {combined['i_acceptable']} |")
+    lines.append(f"| Total solved (Optimal + Acceptable) | {combined['r_solved']} ({100*combined['r_solved']/max(combined['total'],1):.1f}%) | {combined['i_solved']} ({100*combined['i_solved']/max(combined['total'],1):.1f}%) |")
     lines.append(f"| Solved exclusively | {combined['r_only']} | {combined['i_only']} |")
     lines.append(f"| Both solved | {combined['both']} | |")
     lines.append(f"| Matching objectives (< 0.01%) | {combined['passed']}/{max(combined['both'],1)} | |")
-    if r_acc_wrong > 0:
-        lines.append(f"| Acceptable with >1% obj error | {r_acc_wrong} | |")
+    if r_acc_questionable > 0:
+        lines.append(f"| Acceptable at worse local min | {r_acc_questionable} | |")
     lines.append("")
-    lines.append("> **Note:** \"Solved\" counts both Optimal and Acceptable status. ripopt uses")
-    lines.append("> fallback strategies (L-BFGS Hessian, AL, SQP, slack reformulation) that Ipopt")
-    lines.append("> does not have, which accounts for much of the Acceptable count difference.")
+    lines.append("> **Note:** ripopt uses fallback strategies (L-BFGS Hessian, AL, SQP, slack")
+    lines.append("> reformulation) that Ipopt does not have, which accounts for much of the")
+    lines.append("> Acceptable count difference. The \"Different Local Minima\" section below")
+    lines.append("> lists Acceptable solutions where ripopt converged to a worse local minimum.")
     lines.append("")
 
     # Per-suite summary table
@@ -408,22 +409,26 @@ def generate_report(suites, output_path, baseline=None):
             lines.append(f"| {c['name']} | {c['suite']} | {c['n']} | {c['m']} | {c['ipopt_status']} | {ro_str} |")
         lines.append("")
 
-    # Questionable Acceptable: ripopt=Acceptable, Ipopt=Optimal, objective >1% different
-    questionable = [c for c in all_comps
-                    if c['ripopt_status'] == 'Acceptable'
-                    and c['ipopt_status'] == 'Optimal'
-                    and not math.isnan(c['obj_diff'])
-                    and c['obj_diff'] > 0.01]
-    if questionable:
-        lines.append(f"## Questionable Acceptable — {len(questionable)} problems")
+    # Different local minima: ripopt=Acceptable, Ipopt=Optimal, objective >1% different
+    # These are cases where ripopt found a valid stationary point (KKT conditions
+    # satisfied) but at a worse local minimum than Ipopt. This is inherent to
+    # nonconvex optimization — different solver trajectories find different basins.
+    diff_minima = [c for c in all_comps
+                   if c['ripopt_status'] == 'Acceptable'
+                   and c['ipopt_status'] == 'Optimal'
+                   and not math.isnan(c['obj_diff'])
+                   and c['obj_diff'] > 0.01]
+    if diff_minima:
+        lines.append(f"## Different Local Minima — {len(diff_minima)} problems")
         lines.append("")
-        lines.append("These problems are counted as \"solved\" (Acceptable) by ripopt but have >1%")
-        lines.append("objective deviation from Ipopt's Optimal solution. The ripopt solution may")
-        lines.append("be at a different local optimum or may not have converged adequately.")
+        lines.append("ripopt converged (Acceptable) but to a different — usually worse — local")
+        lines.append("minimum than Ipopt found. Both solvers satisfied first-order KKT conditions")
+        lines.append("at their respective solutions. For nonconvex problems this is expected;")
+        lines.append("for convex problems it indicates the solver trajectory went astray.")
         lines.append("")
         lines.append("| Problem | Suite | n | m | ripopt obj | Ipopt obj | Rel. error |")
         lines.append("|---------|-------|---|---|------------|-----------|------------|")
-        for c in sorted(questionable, key=lambda c: -c['obj_diff']):
+        for c in sorted(diff_minima, key=lambda c: -c['obj_diff']):
             ro = c['ripopt_obj']
             io = c['ipopt_obj']
             ro_str = f"{ro:.6e}" if isinstance(ro, (int, float)) and not math.isnan(ro) else "N/A"

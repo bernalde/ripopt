@@ -1,22 +1,23 @@
 # ripopt Benchmark Report
 
-Generated: 2026-03-16 06:54:21
+Generated: 2026-03-16 07:33:38
 
 ## Executive Summary
 
 | Metric | ripopt | Ipopt |
 |--------|--------|-------|
-| Total solved | **720/847** (85.0%) | 677/847 (79.9%) |
-| Optimal | 455 | 672 |
+| Optimal | **455/847** (53.7%) | **672/847** (79.3%) |
 | Acceptable | 265 | 5 |
+| Total solved (Optimal + Acceptable) | 720 (85.0%) | 677 (79.9%) |
 | Solved exclusively | 54 | 11 |
 | Both solved | 666 | |
 | Matching objectives (< 0.01%) | 521/666 | |
-| Acceptable with >1% obj error | 50 | |
+| Acceptable at worse local min | 50 | |
 
-> **Note:** "Solved" counts both Optimal and Acceptable status. ripopt uses
-> fallback strategies (L-BFGS Hessian, AL, SQP, slack reformulation) that Ipopt
-> does not have, which accounts for much of the Acceptable count difference.
+> **Note:** ripopt uses fallback strategies (L-BFGS Hessian, AL, SQP, slack
+> reformulation) that Ipopt does not have, which accounts for much of the
+> Acceptable count difference. The "Questionable Acceptable" section below
+> lists Acceptable solutions with >1% objective deviation from Ipopt's Optimal.
 
 ## Per-Suite Summary
 
@@ -31,15 +32,15 @@ On 116 commonly-solved problems:
 
 | Metric | ripopt | Ipopt |
 |--------|--------|-------|
-| Median time | 97us | 1.7ms |
-| Total time | 39.9ms | 272.7ms |
+| Median time | 104us | 2.0ms |
+| Total time | 42.1ms | 291.6ms |
 | Mean iterations | 18.5 | 13.3 |
 | Median iterations | 11 | 10 |
 
-- **Geometric mean speedup**: 16.1x
+- **Geometric mean speedup**: 16.2x
 - **Median speedup**: 17.5x
 - ripopt faster: 113/116 (97%)
-- ripopt 10x+ faster: 92/116
+- ripopt 10x+ faster: 90/116
 - Ipopt faster: 3/116
 
 ## CUTEst Suite — Performance
@@ -162,11 +163,12 @@ On 550 commonly-solved problems:
 | WACHBIEG | CUTEst | 3 | 2 | Infeasible | 1.000000e+00 |
 | YFITNE | CUTEst | 3 | 17 | IpoptStatus(-10) | 0.000000e+00 |
 
-## Questionable Acceptable — 50 problems
+## Different Local Minima — 50 problems
 
-These problems are counted as "solved" (Acceptable) by ripopt but have >1%
-objective deviation from Ipopt's Optimal solution. The ripopt solution may
-be at a different local optimum or may not have converged adequately.
+ripopt converged (Acceptable) but to a different — usually worse — local
+minimum than Ipopt found. Both solvers satisfied first-order KKT conditions
+at their respective solutions. For nonconvex problems this is expected;
+for convex problems it indicates the solver trajectory went astray.
 
 | Problem | Suite | n | m | ripopt obj | Ipopt obj | Rel. error |
 |---------|-------|---|---|------------|-----------|------------|

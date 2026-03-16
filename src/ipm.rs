@@ -6017,6 +6017,27 @@ fn make_result(state: &SolverState, status: SolveStatus) -> SolveResult {
         g_out[i] /= state.g_scaling[i];
     }
 
+    // Validate Acceptable results: downgrade to MaxIterations if the raw
+    // convergence metrics show the solver didn't genuinely converge.
+    // This prevents claiming "solved" when constraint violation, dual
+    // infeasibility, or complementarity are still large.
+    let validated_status = if status == SolveStatus::Acceptable {
+        let cv_ok = diag.final_primal_inf <= 1e-4;
+        let du_ok = diag.final_dual_inf <= 1e6;
+        let co_ok = diag.final_compl <= 1e6;
+        if cv_ok && du_ok && co_ok {
+            SolveStatus::Acceptable
+        } else {
+            log::debug!(
+                "Acceptable downgraded: cv={:.2e} du={:.2e} co={:.2e}",
+                diag.final_primal_inf, diag.final_dual_inf, diag.final_compl
+            );
+            SolveStatus::MaxIterations
+        }
+    } else {
+        status
+    };
+
     SolveResult {
         x: state.x.clone(),
         objective: state.obj / state.obj_scaling,
@@ -6024,7 +6045,7 @@ fn make_result(state: &SolverState, status: SolveStatus) -> SolveResult {
         bound_multipliers_lower: z_l_out,
         bound_multipliers_upper: z_u_out,
         constraint_values: g_out,
-        status,
+        status: validated_status,
         iterations: state.iter,
         diagnostics: diag,
     }
