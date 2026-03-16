@@ -265,7 +265,7 @@ fn main() {
 
     let p1 = UnconstrainedQP { a: 2.0, b: -1.0 };
     let mut ctx1 = ripopt::solve_with_sensitivity(&p1, &opts);
-    assert!(matches!(ctx1.result.status, SolveStatus::Optimal | SolveStatus::Acceptable));
+    assert!(matches!(ctx1.result.status, SolveStatus::Optimal));
 
     println!("  Solved:     x*={:.6}, y*={:.6}", ctx1.result.x[0], ctx1.result.x[1]);
 
@@ -297,7 +297,7 @@ fn main() {
 
     let p2 = EqualityQP { a: 2.0, b: 1.0, c: 5.0 };
     let mut ctx2 = ripopt::solve_with_sensitivity(&p2, &opts);
-    assert!(matches!(ctx2.result.status, SolveStatus::Optimal | SolveStatus::Acceptable));
+    assert!(matches!(ctx2.result.status, SolveStatus::Optimal));
 
     let x_an = (p2.c + p2.a - p2.b) / 2.0;
     let y_an = (p2.c + p2.b - p2.a) / 2.0;
@@ -347,7 +347,7 @@ fn main() {
 
     let p3 = ActiveInequalityNLP { p: 2.0 };
     let mut ctx3 = ripopt::solve_with_sensitivity(&p3, &opts);
-    assert!(matches!(ctx3.result.status, SolveStatus::Optimal | SolveStatus::Acceptable));
+    assert!(matches!(ctx3.result.status, SolveStatus::Optimal));
 
     println!("  Solved:     x*={:.6}, y*={:.6}", ctx3.result.x[0], ctx3.result.x[1]);
 

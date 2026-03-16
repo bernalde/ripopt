@@ -150,7 +150,7 @@ fn main() {
     println!();
 
     assert!(
-        matches!(result.status, SolveStatus::Optimal | SolveStatus::Acceptable),
+        matches!(result.status, SolveStatus::Optimal),
         "Rosenbrock should converge"
     );
 
@@ -165,9 +165,6 @@ fn main() {
         &Hs071NoHessian,
         &SolverOptions {
             hessian_approximation_lbfgs: true,
-            acceptable_tol: 1e-2,
-            acceptable_dual_inf_tol: 1e10,
-            acceptable_iter: 3,
             ..SolverOptions::default()
         },
     );

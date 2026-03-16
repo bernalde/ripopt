@@ -5,7 +5,6 @@ use std::io::Write;
 fn solve_code(status: SolveStatus) -> i32 {
     match status {
         SolveStatus::Optimal => 0,
-        SolveStatus::Acceptable => 100,
         SolveStatus::LocalInfeasibility | SolveStatus::Infeasible => 200,
         SolveStatus::Unbounded => 300,
         SolveStatus::MaxIterations => 400,
@@ -19,7 +18,6 @@ fn solve_code(status: SolveStatus) -> i32 {
 fn status_message(status: SolveStatus) -> &'static str {
     match status {
         SolveStatus::Optimal => "Optimal Solution Found",
-        SolveStatus::Acceptable => "Solved To Acceptable Level",
         SolveStatus::Infeasible => "Infeasible Problem Detected",
         SolveStatus::LocalInfeasibility => "Converged to a point of local infeasibility",
         SolveStatus::MaxIterations => "Maximum Number of Iterations Exceeded",

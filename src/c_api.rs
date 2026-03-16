@@ -270,7 +270,6 @@ impl NlpProblem for CApiProblem {
 #[repr(C)]
 pub enum RipoptReturnStatus {
     SolveSucceeded = 0,
-    AcceptableLevel = 1,
     InfeasibleProblem = 2,
     MaxIterExceeded = 5,
     RestorationFailed = 6,
@@ -283,7 +282,6 @@ pub enum RipoptReturnStatus {
 fn map_status(s: SolveStatus) -> RipoptReturnStatus {
     match s {
         SolveStatus::Optimal => RipoptReturnStatus::SolveSucceeded,
-        SolveStatus::Acceptable => RipoptReturnStatus::AcceptableLevel,
         SolveStatus::Infeasible | SolveStatus::LocalInfeasibility => {
             RipoptReturnStatus::InfeasibleProblem
         }
@@ -380,7 +378,6 @@ pub unsafe extern "C" fn ripopt_add_num_option(
     };
     match key {
         "tol" => p.options.tol = val,
-        "acceptable_tol" => p.options.acceptable_tol = val,
         "mu_init" => p.options.mu_init = val,
         "mu_min" => p.options.mu_min = val,
         "tau_min" => p.options.tau_min = val,
@@ -401,9 +398,6 @@ pub unsafe extern "C" fn ripopt_add_num_option(
         "kappa" => p.options.kappa = val,
         "constr_mult_init_max" => p.options.constr_mult_init_max = val,
         "max_wall_time" => p.options.max_wall_time = val,
-        "acceptable_constr_viol_tol" => p.options.acceptable_constr_viol_tol = val,
-        "acceptable_dual_inf_tol" => p.options.acceptable_dual_inf_tol = val,
-        "acceptable_compl_inf_tol" => p.options.acceptable_compl_inf_tol = val,
         "barrier_tol_factor" => p.options.barrier_tol_factor = val,
         "adaptive_mu_monotone_init_factor" => p.options.adaptive_mu_monotone_init_factor = val,
         _ => return 0,
@@ -431,7 +425,6 @@ pub unsafe extern "C" fn ripopt_add_int_option(
     match key {
         "max_iter" => p.options.max_iter = val as usize,
         "print_level" => p.options.print_level = val.clamp(0, 12) as u8,
-        "acceptable_iter" => p.options.acceptable_iter = val as usize,
         "max_soc" => p.options.max_soc = val as usize,
         "watchdog_shortened_iter_trigger" => {
             p.options.watchdog_shortened_iter_trigger = val as usize

@@ -71,7 +71,6 @@ fn main() {
         env!("CARGO_PKG_VERSION"),
         match result.status {
             ripopt::SolveStatus::Optimal => "Optimal",
-            ripopt::SolveStatus::Acceptable => "Acceptable",
             ripopt::SolveStatus::Infeasible => "Infeasible",
             ripopt::SolveStatus::LocalInfeasibility => "LocalInfeasibility",
             ripopt::SolveStatus::MaxIterations => "MaxIterations",
@@ -125,8 +124,6 @@ fn print_help() {
     println!("  Convergence");
     println!("    tol=<float>                          Optimality convergence tolerance [1e-8]");
     println!("    max_iter=<int>                       Maximum iterations [3000]");
-    println!("    acceptable_tol=<float>               Less strict convergence tolerance [1e-4]");
-    println!("    acceptable_iter=<int>                Consecutive acceptable iters before success [10]");
     println!("    max_wall_time=<float>                Max wall-clock time in seconds (0=no limit) [0.0]");
     println!("    stall_iter_limit=<int>               Iters without 1% improvement before stall (0=off) [30]");
     println!();
@@ -134,9 +131,6 @@ fn print_help() {
     println!("    constr_viol_tol=<float>              Constraint violation tolerance [1e-4]");
     println!("    dual_inf_tol=<float>                 Dual infeasibility tolerance [100.0]");
     println!("    compl_inf_tol=<float>                Complementarity tolerance [1e-4]");
-    println!("    acceptable_constr_viol_tol=<float>   Acceptable constraint violation [1e-2]");
-    println!("    acceptable_dual_inf_tol=<float>      Acceptable dual infeasibility [1e10]");
-    println!("    acceptable_compl_inf_tol=<float>     Acceptable complementarity [1e-2]");
     println!();
     println!("  Barrier Parameter");
     println!("    mu_init=<float>                      Initial barrier parameter [0.1]");
@@ -213,31 +207,6 @@ fn apply_option(opts: &mut SolverOptions, key: &str, value: &str) {
         "max_iter" => {
             if let Ok(v) = value.parse() {
                 opts.max_iter = v;
-            }
-        }
-        "acceptable_tol" => {
-            if let Ok(v) = value.parse() {
-                opts.acceptable_tol = v;
-            }
-        }
-        "acceptable_iter" => {
-            if let Ok(v) = value.parse() {
-                opts.acceptable_iter = v;
-            }
-        }
-        "acceptable_constr_viol_tol" => {
-            if let Ok(v) = value.parse() {
-                opts.acceptable_constr_viol_tol = v;
-            }
-        }
-        "acceptable_dual_inf_tol" => {
-            if let Ok(v) = value.parse() {
-                opts.acceptable_dual_inf_tol = v;
-            }
-        }
-        "acceptable_compl_inf_tol" => {
-            if let Ok(v) = value.parse() {
-                opts.acceptable_compl_inf_tol = v;
             }
         }
         "mu_init" => {
