@@ -6017,7 +6017,7 @@ fn make_result(state: &SolverState, status: SolveStatus) -> SolveResult {
         g_out[i] /= state.g_scaling[i];
     }
 
-    // Validate Acceptable results: downgrade to MaxIterations if the raw
+    // Validate Acceptable results: downgrade to NumericalError if the raw
     // convergence metrics show the solver didn't genuinely converge.
     // This prevents claiming "solved" when constraint violation, dual
     // infeasibility, or complementarity are still large.
@@ -6029,10 +6029,10 @@ fn make_result(state: &SolverState, status: SolveStatus) -> SolveResult {
             SolveStatus::Acceptable
         } else {
             log::debug!(
-                "Acceptable downgraded: cv={:.2e} du={:.2e} co={:.2e}",
+                "Acceptable downgraded to NumericalError: cv={:.2e} du={:.2e} co={:.2e}",
                 diag.final_primal_inf, diag.final_dual_inf, diag.final_compl
             );
-            SolveStatus::MaxIterations
+            SolveStatus::NumericalError
         }
     } else {
         status
