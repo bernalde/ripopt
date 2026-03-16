@@ -389,7 +389,7 @@ fn hs071_constrained() {
         result.status
     );
     assert!(
-        (result.objective - 17.014).abs() < 0.1,
+        (result.objective - 17.014).abs() < 0.01,
         "f* should be ~17.014, got {}",
         result.objective
     );

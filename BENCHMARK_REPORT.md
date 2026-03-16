@@ -1,6 +1,6 @@
 # ripopt Benchmark Report
 
-Generated: 2026-03-15 23:14:15
+Generated: 2026-03-16 06:54:21
 
 ## Executive Summary
 
@@ -11,7 +11,12 @@ Generated: 2026-03-15 23:14:15
 | Acceptable | 265 | 5 |
 | Solved exclusively | 54 | 11 |
 | Both solved | 666 | |
-| Matching objectives | 521/666 | |
+| Matching objectives (< 0.01%) | 521/666 | |
+| Acceptable with >1% obj error | 50 | |
+
+> **Note:** "Solved" counts both Optimal and Acceptable status. ripopt uses
+> fallback strategies (L-BFGS Hessian, AL, SQP, slack reformulation) that Ipopt
+> does not have, which accounts for much of the Acceptable count difference.
 
 ## Per-Suite Summary
 
@@ -156,6 +161,65 @@ On 550 commonly-solved problems:
 | TRO6X2 | CUTEst | 45 | 21 | RestorationFailed | 1.225000e+03 |
 | WACHBIEG | CUTEst | 3 | 2 | Infeasible | 1.000000e+00 |
 | YFITNE | CUTEst | 3 | 17 | IpoptStatus(-10) | 0.000000e+00 |
+
+## Questionable Acceptable — 50 problems
+
+These problems are counted as "solved" (Acceptable) by ripopt but have >1%
+objective deviation from Ipopt's Optimal solution. The ripopt solution may
+be at a different local optimum or may not have converged adequately.
+
+| Problem | Suite | n | m | ripopt obj | Ipopt obj | Rel. error |
+|---------|-------|---|---|------------|-----------|------------|
+| HEART8LS | CUTEst | 8 | 0 | 1.140151e+00 | 5.961138e-29 | 100.0% |
+| LEVYMONT5 | CUTEst | 2 | 0 | 7.773811e+00 | 1.239502e-25 | 100.0% |
+| WOMFLET | CUTEst | 3 | 3 | -1.723896e-19 | 6.050000e+00 | 100.0% |
+| MGH10SLS | CUTEst | 3 | 0 | 1.417868e+09 | 8.794586e+01 | 100.0% |
+| HS002 | HS | 2 | 0 | 5.044083e-02 | 4.941229e+00 | 99.0% |
+| HS2 | CUTEst | 2 | 0 | 5.044083e-02 | 4.941229e+00 | 99.0% |
+| TFI1 | CUTEst | 3 | 101 | 2.876995e+02 | 5.334687e+00 | 98.1% |
+| ELATVIDUB | CUTEst | 2 | 0 | 1.712780e+00 | 5.475112e+01 | 96.9% |
+| LOGHAIRY | CUTEst | 2 | 0 | 5.350676e+00 | 1.823216e-01 | 96.6% |
+| VIBRBEAM | CUTEst | 8 | 0 | 9.119267e+00 | 3.322376e-01 | 96.4% |
+| OET2 | CUTEst | 3 | 1002 | 2.000000e+00 | 8.715962e-02 | 95.6% |
+| HALDMADS | CUTEst | 6 | 42 | 1.807809e-01 | 2.218282e+00 | 91.9% |
+| BOXBODLS | CUTEst | 2 | 0 | 1.168009e+03 | 9.771500e+03 | 88.0% |
+| PALMER7C | CUTEst | 8 | 0 | 4.320687e+00 | 6.019856e-01 | 86.1% |
+| ECKERLE4LS | CUTEst | 3 | 0 | 6.996961e-01 | 1.463589e-03 | 69.8% |
+| 3PK | CUTEst | 30 | 0 | 5.682734e+00 | 1.720119e+00 | 69.7% |
+| HYDC20LS | CUTEst | 99 | 0 | 5.531032e-01 | 2.967522e-15 | 55.3% |
+| HAHN1LS | CUTEst | 7 | 0 | 6.998600e+01 | 3.338424e+01 | 52.3% |
+| PALMER8C | CUTEst | 8 | 0 | 5.905795e-01 | 1.597681e-01 | 43.1% |
+| VESUVIALS | CUTEst | 8 | 0 | 1.500440e+03 | 9.914100e+02 | 33.9% |
+| PALMER4C | CUTEst | 8 | 0 | 3.729344e-01 | 5.031069e-02 | 32.3% |
+| KOEBHELB | CUTEst | 3 | 0 | 1.122151e+02 | 7.751635e+01 | 30.9% |
+| HYDCAR6LS | CUTEst | 29 | 0 | 3.053228e-01 | 2.863560e-18 | 30.5% |
+| LRCOVTYPE | CUTEst | 54 | 0 | 8.693444e-01 | 5.723072e-01 | 29.7% |
+| EG1 | CUTEst | 3 | 0 | -1.132800e+00 | -1.429307e+00 | 20.7% |
+| METHANL8LS | CUTEst | 31 | 0 | 1.892675e-01 | 5.699326e-17 | 18.9% |
+| HS108 | CUTEst | 9 | 13 | -6.749807e-01 | -5.000000e-01 | 17.5% |
+| MUONSINELS | CUTEst | 1 | 0 | 5.114204e+04 | 4.387412e+04 | 14.2% |
+| QC | CUTEst | 9 | 4 | -8.239327e+02 | -9.565379e+02 | 13.9% |
+| PALMER3C | CUTEst | 8 | 0 | 1.576191e-01 | 1.953764e-02 | 13.8% |
+| PALMER2C | CUTEst | 8 | 0 | 1.406377e-01 | 1.436889e-02 | 12.6% |
+| MSS1 | CUTEst | 90 | 73 | -1.600000e+01 | -1.400000e+01 | 12.5% |
+| PALMER1E | CUTEst | 8 | 0 | 1.145320e-01 | 8.352685e-04 | 11.4% |
+| PALMER6C | CUTEst | 8 | 0 | 1.209246e-01 | 1.638742e-02 | 10.5% |
+| PALMER8E | CUTEst | 8 | 0 | 1.089516e-01 | 6.339308e-03 | 10.3% |
+| PALMER5B | CUTEst | 9 | 0 | 1.066612e-01 | 9.752496e-03 | 9.7% |
+| GAUSS3LS | CUTEst | 8 | 0 | 1.336673e+03 | 1.244485e+03 | 6.9% |
+| PALMER4E | CUTEst | 8 | 0 | 6.354217e-02 | 1.480042e-04 | 6.3% |
+| PALMER4 | CUTEst | 4 | 0 | 2.424682e+03 | 2.285383e+03 | 5.7% |
+| STRATEC | CUTEst | 10 | 0 | 2.345135e+03 | 2.212262e+03 | 5.7% |
+| PALMER6E | CUTEst | 8 | 0 | 4.369251e-02 | 2.239551e-04 | 4.3% |
+| CERI651ALS | CUTEst | 7 | 0 | 3.497844e+02 | 3.348152e+02 | 4.3% |
+| ROSZMAN1LS | CUTEst | 4 | 0 | 3.951903e-02 | 4.948485e-04 | 3.9% |
+| HEART6LS | CUTEst | 6 | 0 | 3.304817e-02 | 9.463828e-23 | 3.3% |
+| PALMER3E | CUTEst | 8 | 0 | 3.022987e-02 | 5.074083e-05 | 3.0% |
+| CERI651CLS | CUTEst | 7 | 0 | 5.833531e+01 | 5.657971e+01 | 3.0% |
+| PALMER2E | CUTEst | 8 | 0 | 2.681950e-02 | 2.065001e-04 | 2.7% |
+| DEVGLA2 | CUTEst | 5 | 0 | 2.501146e-02 | 6.672171e-19 | 2.5% |
+| MAXLIKA | CUTEst | 8 | 0 | 1.154194e+03 | 1.136307e+03 | 1.5% |
+| PFIT3LS | CUTEst | 3 | 0 | 1.081693e-02 | 3.063567e-20 | 1.1% |
 
 ## Acceptable (not Optimal) — 265 problems
 

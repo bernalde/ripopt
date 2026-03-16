@@ -125,7 +125,7 @@ fn opf_case30_ieee() {
     assert!(cv < 1e-4, "cv={:.2e}", cv);
     // Known optimal: ~8081.52 $/h (nonconvex, may find local optimum)
     assert!(
-        result.objective < 9000.0 && result.objective > 7000.0,
-        "obj={:.2}, expected near 8081.52", result.objective
+        (result.objective - 8081.52).abs() < 500.0,
+        "obj={:.2}, expected near 8081.52 (±6%)", result.objective
     );
 }

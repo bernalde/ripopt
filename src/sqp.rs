@@ -383,10 +383,10 @@ mod tests {
         };
         let result = solve(&prob, &opts);
         // SQP is a fallback — for inequality problems it may not converge tightly
-        // but should get close to the optimal (obj ≈ 17.014)
+        // but should get within 5% of the optimal (obj ≈ 17.014)
         assert!(
-            (result.objective - 17.014).abs() < 1.0,
-            "SQP obj={:.4e}, expected ~17.014",
+            (result.objective - 17.014).abs() < 0.5,
+            "SQP obj={:.4e}, expected ~17.014 (±3%)",
             result.objective
         );
     }

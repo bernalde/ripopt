@@ -128,7 +128,7 @@ fn lbfgs_ipm_hs071_constrained() {
         enable_lbfgs_fallback: false,
         enable_lbfgs_hessian_fallback: false,
         acceptable_tol: 1e-2,
-        acceptable_dual_inf_tol: 1e10,
+        acceptable_dual_inf_tol: 1e4,
         acceptable_compl_inf_tol: 1e-1,
         acceptable_iter: 3,
         ..SolverOptions::default()
@@ -147,14 +147,16 @@ fn lbfgs_ipm_hs071_constrained() {
         max_v
     };
     assert!(
-        cv < 1.0,
-        "constraint violation too large: {}, x={:?}",
+        cv < 0.1,
+        "constraint violation too large: {:.2e}, x={:?}",
         cv, result.x
     );
-    // Objective should be reasonable (exact optimum is 17.014)
+    // Objective should be close to exact optimum 17.014
+    // L-BFGS Hessian approximation won't match exact Hessian precision,
+    // but should get within 10% of the known optimum.
     assert!(
-        result.objective < 25.0 && result.objective > 10.0,
-        "obj={}, expected roughly ~17 (L-BFGS approximation)",
+        (result.objective - 17.014).abs() < 2.0,
+        "obj={}, expected ~17.014 (L-BFGS approximation)",
         result.objective
     );
 }
