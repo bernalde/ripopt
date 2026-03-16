@@ -25,3 +25,13 @@
 - Keep test execution under 1 second per test
 - Unit tests (`#[cfg(test)] mod tests`) for module-internal functions
 - Integration tests (`tests/`) for cross-module behavior and solver paths
+
+## Honesty in Benchmarks and Tests
+**No misleading benchmarks or problem-specific hacks.** The following are explicitly prohibited:
+- Counting `NumericalError`, `MaxIterations`, or any non-`Optimal` status as a "solve" in benchmark summaries
+- Writing tests that accept failure statuses (e.g., `|| NumericalError`) just to make the pass rate look better
+- Tuning solver parameters specifically for individual benchmark problems to inflate scores
+- Adding special-case code paths triggered only by specific problem structures seen in benchmarks
+- Hiding known failures behind lenient statuses (`Acceptable` was removed for this reason)
+
+**Tests must be honest:** If the solver cannot solve a problem to `Optimal`, the test should either fail (exposing the real limitation), be marked `#[ignore]` with a clear explanation, or be removed. A failing test that documents a real limitation is more valuable than a passing test that hides one.
