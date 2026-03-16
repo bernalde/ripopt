@@ -1111,6 +1111,82 @@ fn detect_ne_problem<P: NlpProblem>(problem: &P) -> bool {
     true
 }
 
+/// Diagnosis of why the IPM failed, used to select targeted recovery strategies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FailureDiagnosis {
+    /// Constraint violation is large and not decreasing.
+    StallAtInfeasibility,
+    /// All metrics are small but strict tolerances not met.
+    StallNearOptimal,
+    /// Factorization failed, NaN/Inf, or other numerical breakdown.
+    NumericalBreakdown,
+    /// Making progress but hit max iterations.
+    SlowConvergence,
+    /// Dual variables growing unboundedly (ill-conditioned Hessian).
+    DualDivergence,
+}
+
+/// Classify the failure mode from diagnostics to select the best recovery strategy.
+fn diagnose_failure(result: &SolveResult) -> FailureDiagnosis {
+    let d = &result.diagnostics;
+    match result.status {
+        SolveStatus::NumericalError => {
+            if d.final_dual_inf > 1e4 {
+                FailureDiagnosis::DualDivergence
+            } else {
+                FailureDiagnosis::NumericalBreakdown
+            }
+        }
+        SolveStatus::RestorationFailed => FailureDiagnosis::StallAtInfeasibility,
+        SolveStatus::MaxIterations => {
+            // Check dual divergence first — large dual infeasibility indicates
+            // the Hessian or problem scaling is the root issue, not convergence speed.
+            if d.final_dual_inf > 1e4 {
+                FailureDiagnosis::DualDivergence
+            } else if d.final_primal_inf > 1e-2 {
+                FailureDiagnosis::StallAtInfeasibility
+            } else if d.final_primal_inf < 1e-6 && d.final_compl < 1e-4 {
+                FailureDiagnosis::StallNearOptimal
+            } else {
+                FailureDiagnosis::SlowConvergence
+            }
+        }
+        _ => FailureDiagnosis::SlowConvergence,
+    }
+}
+
+/// Check if `candidate` is strictly better than `current`.
+fn is_strictly_better(current: &SolveResult, candidate: &SolveResult) -> bool {
+    let candidate_solved = matches!(
+        candidate.status,
+        SolveStatus::Optimal | SolveStatus::Acceptable
+    );
+    let current_solved = matches!(
+        current.status,
+        SolveStatus::Optimal | SolveStatus::Acceptable
+    );
+    candidate_solved
+        && (!current_solved
+            || matches!(candidate.status, SolveStatus::Optimal)
+                && !matches!(current.status, SolveStatus::Optimal)
+            || candidate.status == current.status && candidate.objective < current.objective)
+}
+
+/// Prepare options for a fallback solve: cap iterations and set remaining time budget.
+/// Returns `None` if there is no time budget remaining.
+fn prepare_fallback_opts(options: &SolverOptions, solve_start: &Instant) -> Option<SolverOptions> {
+    let mut opts = options.clone();
+    opts.max_iter = options.max_iter.min(500).max(options.max_iter / 3);
+    if options.max_wall_time > 0.0 {
+        let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
+        if remaining <= 0.1 {
+            return None;
+        }
+        opts.max_wall_time = remaining;
+    }
+    Some(opts)
+}
+
 /// Solve the NLP using the interior point method.
 pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult {
     let solve_start = Instant::now();
@@ -1480,264 +1556,249 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
     };
 
-    // Compute cost-based retry budget: estimate how many iterations are affordable
-    // based on the per-iteration cost of the failed solve and remaining time.
-    let per_iter_cost = result.diagnostics.wall_time_secs / result.iterations.max(1) as f64;
-    let remaining_time = if options.max_wall_time > 0.0 {
-        options.max_wall_time - solve_start.elapsed().as_secs_f64()
-    } else {
-        60.0 // default budget for retries
+    // --- Diagnostic-driven recovery ---
+    // Instead of trying every fallback in a fixed order, diagnose the failure
+    // and select targeted recovery strategies.
+    let diagnosis = diagnose_failure(&result);
+    let has_constraints = problem.num_constraints() > 0;
+    let has_inequalities = has_inequality_constraints(problem);
+
+    if options.print_level >= 5 && !matches!(result.status, SolveStatus::Optimal | SolveStatus::Acceptable) {
+        eprintln!("ripopt: Failure diagnosis: {:?}", diagnosis);
+    }
+
+    // Helper closure: try L-BFGS Hessian fallback
+    let try_lbfgs_hessian = |result: &mut SolveResult| {
+        if !options.enable_lbfgs_hessian_fallback || options.hessian_approximation_lbfgs {
+            return;
+        }
+        if let Some(mut opts) = prepare_fallback_opts(options, &solve_start) {
+            opts.hessian_approximation_lbfgs = true;
+            opts.enable_lbfgs_hessian_fallback = false;
+            opts.stall_iter_limit = 0;
+            if options.print_level >= 5 {
+                eprintln!("ripopt: Trying L-BFGS Hessian fallback ({:?})", diagnosis);
+            }
+            let candidate = solve_ipm(problem, &opts);
+            if is_strictly_better(result, &candidate) {
+                if options.print_level >= 5 {
+                    eprintln!(
+                        "ripopt: L-BFGS Hessian fallback succeeded ({:?}, obj={:.6e})",
+                        candidate.status, candidate.objective
+                    );
+                }
+                *result = candidate;
+                result.diagnostics.fallback_used = Some("lbfgs_hessian".into());
+            } else if options.print_level >= 5 {
+                eprintln!("ripopt: L-BFGS Hessian fallback did not improve ({:?})", candidate.status);
+            }
+        }
     };
-    let affordable_iters = (remaining_time / per_iter_cost.max(1e-6)) as usize;
 
-    // L-BFGS Hessian fallback: retry with L-BFGS Hessian approximation when
-    // the exact-Hessian IPM failed. Skip if already in limited-memory mode.
-    // Exclude RestorationFailed: if exact Hessian couldn't find feasible restoration,
-    // L-BFGS approximation won't either.
-    if options.enable_lbfgs_hessian_fallback
-        && !options.hessian_approximation_lbfgs
-        && affordable_iters >= 100
-        && matches!(
-            result.status,
-            SolveStatus::MaxIterations | SolveStatus::NumericalError
-        )
-    {
-        if options.print_level >= 5 {
-            eprintln!(
-                "ripopt: Exact-Hessian IPM failed ({:?}), retrying with L-BFGS Hessian approximation",
-                result.status
-            );
+    // Helper closure: try AL fallback
+    let try_al = |result: &mut SolveResult| {
+        if !options.enable_al_fallback || !has_constraints {
+            return;
         }
-        let mut lbfgs_opts = options.clone();
-        lbfgs_opts.hessian_approximation_lbfgs = true;
-        lbfgs_opts.enable_lbfgs_hessian_fallback = false; // prevent recursion
-        lbfgs_opts.stall_iter_limit = 0; // disable stall detection for fallback
-        // Cap fallback iterations
-        lbfgs_opts.max_iter = options.max_iter.min(500).max(options.max_iter / 3);
-        if options.max_wall_time > 0.0 {
-            let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
-            if remaining <= 0.1 {
-                return result;
-            }
-            lbfgs_opts.max_wall_time = remaining;
-        }
-        let lbfgs_result = solve_ipm(problem, &lbfgs_opts);
-        let lbfgs_better = matches!(
-            lbfgs_result.status,
-            SolveStatus::Optimal | SolveStatus::Acceptable
-        );
-        let current_solved = matches!(
-            result.status,
-            SolveStatus::Optimal | SolveStatus::Acceptable
-        );
-        if lbfgs_better && !current_solved {
+        if let Some(opts) = prepare_fallback_opts(options, &solve_start) {
             if options.print_level >= 5 {
-                eprintln!(
-                    "ripopt: L-BFGS Hessian fallback succeeded ({:?}, obj={:.6e})",
-                    lbfgs_result.status, lbfgs_result.objective
-                );
+                eprintln!("ripopt: Trying AL fallback ({:?})", diagnosis);
             }
-            result = lbfgs_result;
-            result.diagnostics.fallback_used = Some("lbfgs_hessian".into());
-        } else if options.print_level >= 5 {
-            eprintln!(
-                "ripopt: L-BFGS Hessian fallback did not improve ({:?})",
-                lbfgs_result.status
-            );
+            let candidate = crate::augmented_lagrangian::solve(problem, &opts);
+            if is_strictly_better(result, &candidate) {
+                if options.print_level >= 5 {
+                    eprintln!(
+                        "ripopt: AL fallback succeeded ({:?}, obj={:.6e})",
+                        candidate.status, candidate.objective
+                    );
+                }
+                *result = candidate;
+                result.diagnostics.fallback_used = Some("augmented_lagrangian".into());
+            } else if options.print_level >= 5 {
+                eprintln!("ripopt: AL fallback did not improve ({:?})", candidate.status);
+            }
+        }
+    };
+
+    // Helper closure: try SQP fallback
+    let try_sqp = |result: &mut SolveResult| {
+        if !options.enable_sqp_fallback || !has_constraints {
+            return;
+        }
+        if let Some(opts) = prepare_fallback_opts(options, &solve_start) {
+            if options.print_level >= 5 {
+                eprintln!("ripopt: Trying SQP fallback ({:?})", diagnosis);
+            }
+            let candidate = crate::sqp::solve(problem, &opts);
+            if is_strictly_better(result, &candidate) {
+                if options.print_level >= 5 {
+                    eprintln!(
+                        "ripopt: SQP fallback succeeded ({:?}, obj={:.6e})",
+                        candidate.status, candidate.objective
+                    );
+                }
+                *result = candidate;
+                result.diagnostics.fallback_used = Some("sqp".into());
+            } else if options.print_level >= 5 {
+                eprintln!("ripopt: SQP fallback did not improve ({:?})", candidate.status);
+            }
+        }
+    };
+
+    // Helper closure: try slack reformulation fallback
+    let try_slack = |result: &mut SolveResult| -> Option<SolveResult> {
+        if !options.enable_slack_fallback || !has_inequalities {
+            return None;
+        }
+        if let Some(mut opts) = prepare_fallback_opts(options, &solve_start) {
+            opts.enable_slack_fallback = false; // prevent recursion
+            if options.print_level >= 5 {
+                eprintln!("ripopt: Trying slack fallback ({:?})", diagnosis);
+            }
+            let slack_prob = SlackFormulation::new(problem, &result.x);
+            let candidate = solve_ipm(&slack_prob, &opts);
+            if is_strictly_better(result, &candidate) {
+                let n = problem.num_variables();
+                let m = problem.num_constraints();
+                if options.print_level >= 5 {
+                    eprintln!(
+                        "ripopt: Slack fallback succeeded ({:?}, obj={:.6e})",
+                        candidate.status, candidate.objective
+                    );
+                }
+                let x_out = candidate.x[..n].to_vec();
+                let mut g_out = vec![0.0; m];
+                problem.constraints(&x_out, &mut g_out);
+                let mut diag = candidate.diagnostics;
+                diag.fallback_used = Some("slack".into());
+                diag.wall_time_secs = solve_start.elapsed().as_secs_f64();
+                return Some(SolveResult {
+                    x: x_out,
+                    objective: candidate.objective,
+                    constraint_multipliers: candidate.constraint_multipliers,
+                    bound_multipliers_lower: candidate.bound_multipliers_lower[..n].to_vec(),
+                    bound_multipliers_upper: candidate.bound_multipliers_upper[..n].to_vec(),
+                    constraint_values: g_out,
+                    status: candidate.status,
+                    iterations: result.iterations + candidate.iterations,
+                    diagnostics: diag,
+                });
+            } else if options.print_level >= 5 {
+                eprintln!("ripopt: Slack fallback did not improve ({:?})", candidate.status);
+            }
+        }
+        None
+    };
+
+    // Conservative IPM retry: revert v0.4.0 algorithmic changes (Gondzio MCC,
+    // Mehrotra PC, stall detection) to recover the pre-regression trajectory.
+    // This is the most reliable recovery for problems sensitive to Newton direction
+    // changes (TRO3X3, STRATEC, MGH10LS, ACOPR30).
+    let n_problem = problem.num_variables();
+    if n_problem <= 200
+        && !matches!(result.status, SolveStatus::Optimal | SolveStatus::Acceptable)
+    {
+        if let Some(mut opts) = prepare_fallback_opts(options, &solve_start) {
+            opts.gondzio_mcc_max = 0;
+            opts.mehrotra_pc = false;
+            opts.stall_iter_limit = 0;
+            opts.proactive_infeasibility_detection = true;
+            // Full iteration budget for small problems (ACOPR30 needed 1047, MGH10LS ~1800)
+            opts.max_iter = options.max_iter;
+            // Give most of remaining time — this is the best recovery strategy
+            if options.max_wall_time > 0.0 {
+                let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
+                opts.max_wall_time = remaining * 0.7;
+            }
+            if options.print_level >= 5 {
+                eprintln!("ripopt: Trying conservative IPM retry (no Gondzio/Mehrotra, no stall detection)");
+            }
+            let candidate = solve_ipm(problem, &opts);
+            if is_strictly_better(&result, &candidate) {
+                if options.print_level >= 5 {
+                    eprintln!(
+                        "ripopt: Conservative retry succeeded ({:?}, obj={:.6e})",
+                        candidate.status, candidate.objective
+                    );
+                }
+                result = candidate;
+                result.diagnostics.fallback_used = Some("conservative_ipm".into());
+            } else if options.print_level >= 5 {
+                eprintln!("ripopt: Conservative retry did not improve ({:?})", candidate.status);
+            }
         }
     }
 
-    // Augmented Lagrangian fallback for constrained problems
-    if options.enable_al_fallback
-        && problem.num_constraints() > 0
-        && affordable_iters >= 50
-        && matches!(
-            result.status,
-            SolveStatus::MaxIterations | SolveStatus::NumericalError
-        )
-    {
-        if options.print_level >= 5 {
-            eprintln!(
-                "ripopt: IPM failed ({:?}) on equality-only problem, trying AL fallback",
-                result.status
-            );
-        }
-        let mut al_opts = options.clone();
-        // Cap fallback iterations — if it hasn't converged in 500 iters, it likely won't in 3000
-        al_opts.max_iter = options.max_iter.min(500).max(options.max_iter / 3);
-        if options.max_wall_time > 0.0 {
-            let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
-            if remaining <= 0.1 {
-                return result;
+    // Dispatch based on diagnosis — try targeted strategies rather than
+    // a fixed sequence of every possible fallback.
+    if !matches!(result.status, SolveStatus::Optimal | SolveStatus::Acceptable) {
+        match diagnosis {
+            FailureDiagnosis::StallAtInfeasibility => {
+                // Constraint violation stuck high — slack reformulation changes the
+                // problem structure, SQP handles infeasible starts better than IPM
+                if let Some(slack_result) = try_slack(&mut result) {
+                    return slack_result;
+                }
+                try_sqp(&mut result);
             }
-            al_opts.max_wall_time = remaining;
-        }
-        let al_result = crate::augmented_lagrangian::solve(problem, &al_opts);
-        let al_better = matches!(
-            al_result.status,
-            SolveStatus::Optimal | SolveStatus::Acceptable
-        );
-
-        if al_better {
-            if options.print_level >= 5 {
-                eprintln!(
-                    "ripopt: AL fallback succeeded ({:?}, obj={:.6e})",
-                    al_result.status, al_result.objective
-                );
+            FailureDiagnosis::NumericalBreakdown => {
+                // Factorization issues — L-BFGS avoids the user-provided Hessian
+                // which is often the root cause
+                try_lbfgs_hessian(&mut result);
             }
-            result = al_result;
-            result.diagnostics.fallback_used = Some("augmented_lagrangian".into());
-        } else if options.print_level >= 5 {
-            eprintln!(
-                "ripopt: AL fallback did not improve ({:?})",
-                al_result.status
-            );
-        }
-    }
-
-    // SQP fallback: try SQP when IPM didn't reach Optimal and problem has constraints
-    if options.enable_sqp_fallback
-        && problem.num_constraints() > 0
-        && affordable_iters >= 30
-        && !matches!(result.status, SolveStatus::Optimal)
-    {
-        if options.print_level >= 5 {
-            eprintln!(
-                "ripopt: Trying SQP fallback (result was {:?})",
-                result.status
-            );
-        }
-        let mut sqp_opts = options.clone();
-        sqp_opts.max_iter = options.max_iter.min(500).max(options.max_iter / 3);
-        if options.max_wall_time > 0.0 {
-            let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
-            if remaining <= 0.1 {
-                return result;
+            FailureDiagnosis::DualDivergence => {
+                // Large dual infeasibility often means advanced Newton corrections
+                // (Gondzio MCC, Mehrotra PC) steered the solver into a bad basin.
+                // Retry with plain IPM (no corrections) as a targeted fix.
+                if let Some(mut opts) = prepare_fallback_opts(options, &solve_start) {
+                    opts.gondzio_mcc_max = 0;
+                    opts.mehrotra_pc = false;
+                    opts.stall_iter_limit = 0;
+                    if options.print_level >= 5 {
+                        eprintln!("ripopt: Trying plain IPM retry (no corrections) for DualDivergence");
+                    }
+                    let candidate = solve_ipm(problem, &opts);
+                    if is_strictly_better(&result, &candidate) {
+                        if options.print_level >= 5 {
+                            eprintln!(
+                                "ripopt: Plain IPM retry succeeded ({:?}, obj={:.6e})",
+                                candidate.status, candidate.objective
+                            );
+                        }
+                        result = candidate;
+                        result.diagnostics.fallback_used = Some("plain_ipm".into());
+                    } else if options.print_level >= 5 {
+                        eprintln!("ripopt: Plain IPM retry did not improve ({:?})", candidate.status);
+                    }
+                }
+                // If plain IPM didn't help, try L-BFGS Hessian
+                if !matches!(result.status, SolveStatus::Optimal | SolveStatus::Acceptable) {
+                    try_lbfgs_hessian(&mut result);
+                }
             }
-            sqp_opts.max_wall_time = remaining;
-        }
-        let sqp_result = crate::sqp::solve(problem, &sqp_opts);
-        let sqp_better = matches!(
-            sqp_result.status,
-            SolveStatus::Optimal | SolveStatus::Acceptable
-        );
-        let current_solved = matches!(
-            result.status,
-            SolveStatus::Optimal | SolveStatus::Acceptable
-        );
-        let sqp_strictly_better = sqp_better
-            && (!current_solved
-                || matches!(sqp_result.status, SolveStatus::Optimal)
-                    && !matches!(result.status, SolveStatus::Optimal)
-                || sqp_result.status == result.status && sqp_result.objective < result.objective);
-        if sqp_strictly_better {
-            if options.print_level >= 5 {
-                eprintln!(
-                    "ripopt: SQP fallback succeeded ({:?}, obj={:.6e})",
-                    sqp_result.status, sqp_result.objective
-                );
+            FailureDiagnosis::SlowConvergence => {
+                // IPM is making progress but too slowly — try a completely
+                // different algorithm (AL or SQP)
+                try_al(&mut result);
+                if !matches!(result.status, SolveStatus::Optimal) {
+                    try_sqp(&mut result);
+                }
             }
-            result = sqp_result;
-            result.diagnostics.fallback_used = Some("sqp".into());
-        } else if options.print_level >= 5 {
-            eprintln!(
-                "ripopt: SQP fallback did not improve ({:?})",
-                sqp_result.status
-            );
-        }
-    }
-
-    // Slack variable fallback: if the solve didn't reach Optimal and the problem
-    // has inequality constraints, retry with explicit slacks (g(x)-s=0, bounds on s).
-    // Also try when only Acceptable was achieved — slack formulation may find a better solution.
-    if options.enable_slack_fallback
-        && has_inequality_constraints(problem)
-        && !matches!(result.status, SolveStatus::Optimal)
-        && affordable_iters >= 50
-    {
-        if options.print_level >= 5 {
-            eprintln!(
-                "ripopt: Trying slack fallback (result was {:?})",
-                result.status
-            );
-        }
-
-        let slack_prob = SlackFormulation::new(problem, &result.x);
-        let mut slack_opts = options.clone();
-        slack_opts.enable_slack_fallback = false; // prevent recursion
-        // Cap fallback iterations
-        slack_opts.max_iter = options.max_iter.min(500).max(options.max_iter / 3);
-        if options.max_wall_time > 0.0 {
-            let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
-            if remaining <= 0.1 {
-                return result;
+            FailureDiagnosis::StallNearOptimal => {
+                // Close to optimal but can't meet strict tolerances —
+                // SQP may refine the solution
+                try_sqp(&mut result);
             }
-            slack_opts.max_wall_time = remaining;
         }
-
-        let slack_result = solve_ipm(&slack_prob, &slack_opts);
-
-        let slack_improved = matches!(
-            slack_result.status,
-            SolveStatus::Optimal | SolveStatus::Acceptable
-        );
-
-        // Only use slack result if it's strictly better than current result:
-        // - Slack solved (Optimal/Acceptable) when current failed, OR
-        // - Slack is Optimal when current is only Acceptable, OR
-        // - Both are same status but slack has lower objective
-        let current_solved = matches!(result.status, SolveStatus::Optimal | SolveStatus::Acceptable);
-        let slack_strictly_better = slack_improved && (
-            !current_solved  // any solve beats a failure
-            || matches!(slack_result.status, SolveStatus::Optimal) && !matches!(result.status, SolveStatus::Optimal)
-            || slack_result.status == result.status && slack_result.objective < result.objective
-        );
-        if slack_strictly_better {
-            let n = problem.num_variables();
-            let m = problem.num_constraints();
-
-            if options.print_level >= 5 {
-                eprintln!(
-                    "ripopt: Slack fallback succeeded ({:?}, obj={:.6e})",
-                    slack_result.status, slack_result.objective
-                );
+    } else if matches!(result.status, SolveStatus::Acceptable) {
+        // Acceptable but not Optimal — try targeted improvement
+        if has_inequalities {
+            if let Some(slack_result) = try_slack(&mut result) {
+                return slack_result;
             }
-
-            // Extract original x from [x, s]
-            let x_out = slack_result.x[..n].to_vec();
-
-            // Evaluate original constraints at solution
-            let mut g_out = vec![0.0; m];
-            problem.constraints(&x_out, &mut g_out);
-
-            // y from slack solve = original constraint multipliers
-            let y_out = slack_result.constraint_multipliers;
-
-            // z_l[..n], z_u[..n] = original bound multipliers
-            let z_l_out = slack_result.bound_multipliers_lower[..n].to_vec();
-            let z_u_out = slack_result.bound_multipliers_upper[..n].to_vec();
-
-            let mut diag = slack_result.diagnostics;
-            diag.fallback_used = Some("slack".into());
-            diag.wall_time_secs = solve_start.elapsed().as_secs_f64();
-            let slack_status = slack_result.status;
-            let slack_iters = result.iterations + slack_result.iterations;
-            return SolveResult {
-                x: x_out,
-                objective: slack_result.objective,
-                constraint_multipliers: y_out,
-                bound_multipliers_lower: z_l_out,
-                bound_multipliers_upper: z_u_out,
-                constraint_values: g_out,
-                status: slack_status,
-                iterations: slack_iters,
-                diagnostics: diag,
-            };
-        } else if options.print_level >= 5 {
-            eprintln!(
-                "ripopt: Slack fallback did not improve ({:?}), returning original result",
-                slack_result.status
-            );
+        }
+        if has_constraints {
+            try_sqp(&mut result);
         }
     }
 
@@ -2778,8 +2839,8 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         let sc = primal_inf <= stall_fpr_tol
                             && opt_du <= stall_fdu_tol
                             && opt_co_best <= stall_fco_tol;
-                        // Unscaled gate with original duals
-                        let du_u = convergence::dual_infeasibility(
+                        // Unscaled gate with original duals (component-wise scaled)
+                        let du_u = convergence::dual_infeasibility_scaled(
                             &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
                             &state.y, &state.z_l, &state.z_u, n,
                         );
@@ -4437,7 +4498,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
                 &state.y, &post_zl_opt, &post_zu_opt, n,
             );
-            let post_du_unsc = convergence::dual_infeasibility(
+            let post_du_unsc = convergence::dual_infeasibility_scaled(
                 &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
                 &state.y, &state.z_l, &state.z_u, n,
             );
@@ -4566,7 +4627,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
             &state.y, &fzl, &fzu, n,
         );
-        let fdu_u = convergence::dual_infeasibility(
+        let fdu_u = convergence::dual_infeasibility_scaled(
             &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
             &state.y, &state.z_l, &state.z_u, n,
         );
@@ -4661,7 +4722,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
             &state.y, &bp_zl, &bp_zu, n,
         );
-        let bp_du_u = convergence::dual_infeasibility(
+        let bp_du_u = convergence::dual_infeasibility_scaled(
             &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
             &state.y, &state.z_l, &state.z_u, n,
         );
