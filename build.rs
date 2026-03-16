@@ -112,5 +112,7 @@ fn main() {
         println!("cargo:rustc-link-lib=dylib=gfortran");
 
         println!("cargo:rerun-if-changed={}", trampoline_src);
+        let manifest_dir_for_rerun = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        println!("cargo:rerun-if-changed={}/cutest_suite/fortran_open_fixed.f90", manifest_dir_for_rerun);
     }
 }

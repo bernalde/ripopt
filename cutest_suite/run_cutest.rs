@@ -343,7 +343,6 @@ fn ipopt_status_to_string(status: i32) -> String {
 fn ripopt_status_to_string(status: SolveStatus) -> String {
     match status {
         SolveStatus::Optimal => "Optimal".to_string(),
-        SolveStatus::Acceptable => "Acceptable".to_string(),
         SolveStatus::Infeasible => "Infeasible".to_string(),
         SolveStatus::MaxIterations => "MaxIterations".to_string(),
         SolveStatus::NumericalError => "NumericalError".to_string(),
@@ -407,7 +406,7 @@ fn run_single_solver(name: &str, solver: &str) {
     let suite_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("cutest_suite");
     let problems_dir = suite_dir.join("problems");
 
-    let lib_path = problems_dir.join(format!("lib{}.dylib", name));
+    let lib_path = problems_dir.join(format!("lib{}.{}", name, std::env::consts::DLL_EXTENSION));
     let outsdif_path = problems_dir.join(format!("{}_OUTSDIF.d", name));
 
     let lib_str = lib_path.to_str().unwrap();
@@ -582,7 +581,7 @@ fn main() {
     let mut all_results: Vec<CutestResult> = Vec::new();
 
     for name in &problem_names {
-        let lib_path = problems_dir.join(format!("lib{}.dylib", name));
+        let lib_path = problems_dir.join(format!("lib{}.{}", name, std::env::consts::DLL_EXTENSION));
         let outsdif_path = problems_dir.join(format!("{}_OUTSDIF.d", name));
 
         if !lib_path.exists() || !outsdif_path.exists() {
