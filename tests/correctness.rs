@@ -79,7 +79,7 @@ fn rosenbrock_unconstrained() {
     let result = ripopt::solve(&problem, &options);
 
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal or Acceptable, got {:?}",
         result.status
     );
@@ -180,7 +180,7 @@ fn simple_constrained_qp() {
     let result = ripopt::solve(&problem, &options);
 
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal or Acceptable, got {:?}",
         result.status
     );
@@ -384,7 +384,7 @@ fn hs071_constrained() {
     let result = ripopt::solve(&problem, &options);
 
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal or Acceptable, got {:?}",
         result.status
     );
@@ -525,7 +525,7 @@ fn bound_constrained_quadratic() {
     let result = ripopt::solve(&problem, &options);
 
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal or Acceptable, got {:?}",
         result.status
     );
@@ -629,7 +629,7 @@ fn pure_bound_constrained() {
     let result = ripopt::solve(&problem, &options);
 
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal or Acceptable, got {:?}",
         result.status
     );
@@ -753,7 +753,7 @@ fn multiple_equality_constraints() {
     let result = ripopt::solve(&problem, &options);
 
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal or Acceptable, got {:?}",
         result.status
     );
@@ -815,7 +815,7 @@ fn inequality_only() {
     let problem = InequalityOnly;
     let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
     let result = ripopt::solve(&problem, &options);
-    assert!(result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+    assert!(result.status == SolveStatus::Optimal,
         "Got {:?}", result.status);
     assert!((result.objective - 0.5).abs() < 1e-3, "f*={}", result.objective);
 }
@@ -854,7 +854,7 @@ fn nonlinear_equality() {
     let problem = NonlinearEquality;
     let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
     let result = ripopt::solve(&problem, &options);
-    assert!(result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+    assert!(result.status == SolveStatus::Optimal,
         "Got {:?}", result.status);
     let expected = -(2.0_f64.sqrt());
     assert!((result.objective - expected).abs() < 1e-3, "f*={}, expected {}", result.objective, expected);
@@ -890,7 +890,7 @@ fn single_variable() {
     let problem = SingleVariable;
     let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
     let result = ripopt::solve(&problem, &options);
-    assert!(result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable);
+    assert!(result.status == SolveStatus::Optimal);
     assert!((result.x[0] - 3.0).abs() < 1e-4);
     assert!(result.objective.abs() < 1e-6);
 }
@@ -926,7 +926,7 @@ fn linear_objective_with_bounds() {
     let problem = LinearObjectiveWithBounds;
     let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
     let result = ripopt::solve(&problem, &options);
-    assert!(result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable);
+    assert!(result.status == SolveStatus::Optimal);
     assert!((result.objective - (-2.0)).abs() < 1e-3, "f*={}", result.objective);
 }
 
@@ -973,7 +973,7 @@ fn mixed_equality_inequality() {
     let problem = MixedEqualityInequality;
     let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
     let result = ripopt::solve(&problem, &options);
-    assert!(result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+    assert!(result.status == SolveStatus::Optimal,
         "Got {:?}", result.status);
     assert!((result.objective - 3.0).abs() < 1e-2, "f*={}", result.objective);
 }
@@ -1010,7 +1010,7 @@ fn quadratic_equality_constraint() {
     let problem = QuadraticEqualityConstraint;
     let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
     let result = ripopt::solve(&problem, &options);
-    assert!(result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+    assert!(result.status == SolveStatus::Optimal,
         "Got {:?}", result.status);
     let expected = -2.0 * 2.0_f64.sqrt();
     assert!((result.objective - expected).abs() < 1e-3, "f*={}, expected {}", result.objective, expected);
@@ -1047,7 +1047,7 @@ fn starting_at_optimum() {
     let problem = StartingAtOptimum;
     let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
     let result = ripopt::solve(&problem, &options);
-    assert!(result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable);
+    assert!(result.status == SolveStatus::Optimal);
     assert!(result.objective < 1e-6);
     assert!(result.iterations <= 30, "Should converge fast, took {} iters", result.iterations);
 }
@@ -1091,7 +1091,7 @@ fn high_dimensional() {
     let problem = HighDimensional;
     let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
     let result = ripopt::solve(&problem, &options);
-    assert!(result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable);
+    assert!(result.status == SolveStatus::Optimal);
     assert!(result.objective < 1e-4, "f*={}", result.objective);
     for i in 0..20 {
         assert!((result.x[i] - (i as f64 + 1.0)).abs() < 1e-2,
@@ -1133,7 +1133,7 @@ fn upper_bound_inequality() {
     let problem = UpperBoundInequality;
     let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
     let result = ripopt::solve(&problem, &options);
-    assert!(result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+    assert!(result.status == SolveStatus::Optimal,
         "Got {:?}", result.status);
     assert!((result.objective - (-2.0)).abs() < 1e-2, "f*={}", result.objective);
 }
@@ -1177,7 +1177,7 @@ fn many_active_bounds() {
     let problem = ManyActiveBounds;
     let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
     let result = ripopt::solve(&problem, &options);
-    assert!(result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+    assert!(result.status == SolveStatus::Optimal,
         "Got {:?}", result.status);
     // Concave minimization: IPM finds a KKT point at a vertex.
     // Both x=0 (f=-800) and x=5 (f=-200) are valid KKT points.
@@ -1260,7 +1260,7 @@ fn zero_hessian_linear_program() {
     let problem = ZeroHessianLP;
     let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
     let result = ripopt::solve(&problem, &options);
-    assert!(result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+    assert!(result.status == SolveStatus::Optimal,
         "Got {:?}", result.status);
     assert!((result.objective - (-8.0)).abs() < 0.1, "f*={}", result.objective);
 }
@@ -1308,7 +1308,7 @@ fn ne_to_ls_consistent() {
     let problem = OverdeterminedConsistent;
     let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
     let result = ripopt::solve(&problem, &options);
-    assert!(result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+    assert!(result.status == SolveStatus::Optimal,
         "Consistent NE should be solved, got {:?}", result.status);
     assert!((result.x[0] - 1.0).abs() < 1e-4, "x0={}", result.x[0]);
     assert!((result.x[1] - 2.0).abs() < 1e-4, "x1={}", result.x[1]);

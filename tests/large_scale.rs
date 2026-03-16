@@ -53,7 +53,7 @@ fn large_scale_chained_rosenbrock_5k() {
     );
 
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal/Acceptable, got {:?}",
         result.status
     );
@@ -83,7 +83,7 @@ fn large_scale_bratu_10k() {
     );
 
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal/Acceptable, got {:?}",
         result.status
     );
@@ -109,7 +109,7 @@ fn large_scale_optimal_control_20k() {
     );
 
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal/Acceptable, got {:?}",
         result.status
     );
@@ -135,7 +135,7 @@ fn large_scale_poisson_control_50k() {
     );
 
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal/Acceptable, got {:?}",
         result.status
     );
@@ -162,7 +162,7 @@ fn large_scale_sparse_qp_100k() {
     );
 
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal/Acceptable, got {:?}",
         result.status
     );
@@ -193,7 +193,7 @@ fn large_scale_rosenbrock_500() {
         result.status, result.objective, result.iterations, elapsed.as_secs_f64()
     );
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "got {:?}", result.status
     );
     assert!(result.objective < 1e-4, "f*={:.6e}", result.objective);
@@ -215,7 +215,7 @@ fn large_scale_bratu_1000() {
         result.status, result.objective, cv, result.iterations, elapsed.as_secs_f64()
     );
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "got {:?}", result.status
     );
     assert!(cv < 1e-4, "cv={:.6e}", cv);
@@ -237,7 +237,7 @@ fn large_scale_optimal_control_2500() {
         result.status, result.objective, cv, result.iterations, elapsed.as_secs_f64()
     );
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "got {:?}", result.status
     );
     assert!(cv < 1e-4, "cv={:.6e}", cv);
@@ -259,7 +259,7 @@ fn large_scale_poisson_control_2500() {
         result.status, result.objective, cv, result.iterations, elapsed.as_secs_f64()
     );
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "got {:?}", result.status
     );
     assert!(cv < 1e-3, "cv={:.6e}", cv);
@@ -283,7 +283,7 @@ fn large_scale_sparse_qp_1000() {
         result.status, result.objective, cv, result.iterations, elapsed.as_secs_f64(), f0
     );
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "got {:?}", result.status
     );
     assert!(result.objective < f0, "f*={:.6e} >= f0={:.6e}", result.objective, f0);

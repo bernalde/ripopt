@@ -49,7 +49,7 @@ fn lbfgs_ipm_rosenbrock() {
     };
     let result = ripopt::solve(&problem, &options);
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "expected Optimal or Acceptable, got {:?}",
         result.status
     );
@@ -117,7 +117,6 @@ impl NlpProblem for Hs071Lbfgs {
 fn lbfgs_ipm_hs071_constrained() {
     let problem = Hs071Lbfgs;
     // L-BFGS in IPM for constrained problems converges more slowly.
-    // Use relaxed acceptable tolerances to allow acceptable convergence.
     let options = SolverOptions {
         print_level: 0,
         hessian_approximation_lbfgs: true,
@@ -127,10 +126,6 @@ fn lbfgs_ipm_hs071_constrained() {
         enable_slack_fallback: false,
         enable_lbfgs_fallback: false,
         enable_lbfgs_hessian_fallback: false,
-        acceptable_tol: 1e-2,
-        acceptable_dual_inf_tol: 1e4,
-        acceptable_compl_inf_tol: 1e-1,
-        acceptable_iter: 3,
         ..SolverOptions::default()
     };
     let result = ripopt::solve(&problem, &options);
@@ -207,7 +202,7 @@ fn lbfgs_ipm_hessian_never_called() {
     };
     let result = ripopt::solve(&problem, &options);
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "expected convergence, got {:?}",
         result.status
     );
@@ -317,7 +312,7 @@ fn lbfgs_hessian_fallback_recovers_bad_hessian() {
     };
     let result = ripopt::solve(&problem, &options);
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "L-BFGS Hessian fallback should recover from bad Hessian, got {:?}",
         result.status
     );
@@ -469,7 +464,7 @@ fn lbfgs_hessian_fallback_constrained() {
     };
     let result = ripopt::solve(&problem, &options);
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "L-BFGS Hessian fallback should solve constrained problem, got {:?}",
         result.status
     );

@@ -108,7 +108,7 @@ macro_rules! bench_problem {
         let (is, io, ii, it) = (-999i32, f64::NAN, 0i32, 0.0f64);
 
         let rs = format!("{:?}", rr.status);
-        let ist = match is { 0 => "Optimal", 1 => "Acceptable", _ => "Failed" };
+        let ist = match is { 0 => "Optimal", _ => "Failed" };
         let speedup = if it > 0.0 { it / rt } else { 0.0 };
 
         eprintln!(

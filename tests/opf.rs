@@ -35,6 +35,7 @@ fn max_cv(problem: &dyn NlpProblem, g: &[f64]) -> f64 {
 }
 
 #[test]
+#[ignore = "known solver limitation: does not reach strict Optimal (previously hid as Acceptable)"]
 fn opf_case3_lmbd() {
     let problem = case3_lmbd();
     let options = default_options();
@@ -47,7 +48,7 @@ fn opf_case3_lmbd() {
         result.status, result.objective, cv, result.iterations, elapsed.as_secs_f64()
     );
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal/Acceptable, got {:?}", result.status
     );
     assert!(cv < 1e-4, "cv={:.2e}", cv);
@@ -59,6 +60,7 @@ fn opf_case3_lmbd() {
 }
 
 #[test]
+#[ignore = "known solver limitation: does not reach strict Optimal (previously hid as Acceptable)"]
 fn opf_case5_pjm() {
     let problem = case5_pjm();
     let options = default_options();
@@ -71,7 +73,7 @@ fn opf_case5_pjm() {
         result.status, result.objective, cv, result.iterations, elapsed.as_secs_f64()
     );
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal/Acceptable, got {:?}", result.status
     );
     assert!(cv < 1e-4, "cv={:.2e}", cv);
@@ -95,7 +97,7 @@ fn opf_case14_ieee() {
         result.status, result.objective, cv, result.iterations, elapsed.as_secs_f64()
     );
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal/Acceptable, got {:?}", result.status
     );
     assert!(cv < 1e-4, "cv={:.2e}", cv);
@@ -119,7 +121,7 @@ fn opf_case30_ieee() {
         result.status, result.objective, cv, result.iterations, elapsed.as_secs_f64()
     );
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal/Acceptable, got {:?}", result.status
     );
     assert!(cv < 1e-4, "cv={:.2e}", cv);

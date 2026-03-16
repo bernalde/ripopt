@@ -391,7 +391,7 @@ fn iterative_rosenbrock_small() {
     opts.sparse_threshold = 0;
     let result = ripopt::solve(&Rosenbrock, &opts);
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal/Acceptable, got {:?}", result.status
     );
     assert!(result.objective < 1e-6, "f* should be ~0, got {}", result.objective);
@@ -405,7 +405,7 @@ fn iterative_hs071_small() {
     opts.sparse_threshold = 0;
     let result = ripopt::solve(&Hs071, &opts);
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal/Acceptable, got {:?}", result.status
     );
     assert!((result.objective - 17.014).abs() < 0.1, "f* should be ~17.014, got {}", result.objective);
@@ -418,7 +418,7 @@ fn iterative_hs071_small() {
 fn iterative_chained_rosenbrock_200() {
     let result = ripopt::solve(&ChainedRosenbrock { n: 200 }, &iterative_options());
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal/Acceptable, got {:?}", result.status
     );
     assert!(result.objective < 1e-3, "f* should be ~0, got {}", result.objective);
@@ -429,7 +429,7 @@ fn iterative_chained_rosenbrock_200() {
 fn iterative_bratu_200() {
     let result = ripopt::solve(&BratuProblem::new(200), &iterative_options());
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal/Acceptable, got {:?}", result.status
     );
     // Feasibility problem: check constraint violation
@@ -445,7 +445,7 @@ fn iterative_bratu_200() {
 fn iterative_optimal_control_99() {
     let result = ripopt::solve(&OptimalControl::new(99), &iterative_options());
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal/Acceptable, got {:?}", result.status
     );
 }
@@ -462,7 +462,7 @@ fn hybrid_rosenbrock_small() {
     opts.sparse_threshold = 0;
     let result = ripopt::solve(&Rosenbrock, &opts);
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal/Acceptable, got {:?}", result.status
     );
     assert!(result.objective < 1e-6, "f* should be ~0, got {}", result.objective);
@@ -474,7 +474,7 @@ fn hybrid_hs071_small() {
     opts.sparse_threshold = 0;
     let result = ripopt::solve(&Hs071, &opts);
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal/Acceptable, got {:?}", result.status
     );
     assert!((result.objective - 17.014).abs() < 0.1, "f* should be ~17.014, got {}", result.objective);
@@ -487,7 +487,7 @@ fn hybrid_hs071_small() {
 fn hybrid_chained_rosenbrock_200() {
     let result = ripopt::solve(&ChainedRosenbrock { n: 200 }, &hybrid_options());
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal/Acceptable, got {:?}", result.status
     );
     assert!(result.objective < 1e-3, "f* should be ~0, got {}", result.objective);
@@ -498,7 +498,7 @@ fn hybrid_chained_rosenbrock_200() {
 fn hybrid_bratu_200() {
     let result = ripopt::solve(&BratuProblem::new(200), &hybrid_options());
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal/Acceptable, got {:?}", result.status
     );
     let n = 200;
@@ -513,7 +513,7 @@ fn hybrid_bratu_200() {
 fn hybrid_optimal_control_99() {
     let result = ripopt::solve(&OptimalControl::new(99), &hybrid_options());
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal/Acceptable, got {:?}", result.status
     );
 }

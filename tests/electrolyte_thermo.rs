@@ -50,7 +50,7 @@ macro_rules! electrolyte_test {
                 result.iterations, elapsed.as_secs_f64()
             );
             assert!(
-                result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+                result.status == SolveStatus::Optimal,
                 "Expected Optimal/Acceptable, got {:?}", result.status
             );
             if problem.num_constraints() > 0 {
@@ -187,7 +187,7 @@ fn electrolyte_13_seawater() {
         result.status, result.objective, cv, result.iterations, elapsed.as_secs_f64()
     );
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "got {:?}", result.status
     );
     assert!(cv < 1e-3, "cv={:.2e}", cv);

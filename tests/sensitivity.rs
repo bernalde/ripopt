@@ -143,7 +143,7 @@ fn test_hs071_sensitivity_vs_finite_differences() {
     assert!(
         matches!(
             ctx.result.status,
-            SolveStatus::Optimal | SolveStatus::Acceptable
+            SolveStatus::Optimal
         ),
         "Expected converged, got {:?}",
         ctx.result.status

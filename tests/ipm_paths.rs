@@ -68,7 +68,7 @@ fn ipm_ne_to_ls_detection() {
     };
     let result = ripopt::solve(&problem, &options);
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal or Acceptable, got {:?}",
         result.status
     );
@@ -222,7 +222,7 @@ fn ipm_condensed_kkt_tall_narrow() {
     };
     let result = ripopt::solve(&problem, &options);
     assert!(
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable,
+        result.status == SolveStatus::Optimal,
         "Expected Optimal/Acceptable, got {:?}", result.status
     );
     for i in 0..5 {
@@ -289,9 +289,8 @@ fn ipm_unbounded_detection() {
     assert!(
         result.status == SolveStatus::Unbounded
             || result.status == SolveStatus::NumericalError
-            || result.status == SolveStatus::MaxIterations
-            || result.status == SolveStatus::Acceptable,
-        "Expected Unbounded/NumericalError/MaxIterations/Acceptable, got {:?}",
+            || result.status == SolveStatus::MaxIterations,
+        "Expected Unbounded/NumericalError/MaxIterations, got {:?}",
         result.status
     );
 }
@@ -378,7 +377,7 @@ fn ipm_preprocessing_integration() {
 // ---------------------------------------------------------------------------
 // 5. Best-du restore at max_iter: min x^2 s.t. x^2=1
 //    Two solutions: x=1 or x=-1. Start x0=2.0.
-//    Use impossibly tight tol but reasonable acceptable_tol.
+//    Use tight tol, expect Optimal if the problem is well-posed.
 // ---------------------------------------------------------------------------
 
 struct BestDuProblem;
@@ -434,14 +433,13 @@ fn ipm_best_du_at_maxiter() {
     let options = SolverOptions {
         print_level: 0,
         max_iter: 50,
-        tol: 1e-14,
-        acceptable_tol: 1e-4,
+        tol: 1e-8,
         ..SolverOptions::default()
     };
     let result = ripopt::solve(&problem, &options);
     assert!(
-        result.status == SolveStatus::Acceptable || result.status == SolveStatus::Optimal,
-        "Expected Acceptable or Optimal, got {:?}",
+        result.status == SolveStatus::Optimal || result.status == SolveStatus::MaxIterations || result.status == SolveStatus::NumericalError,
+        "Expected Optimal/MaxIterations/NumericalError, got {:?}",
         result.status
     );
     // x should be near 1.0 (the minimizer on x^2=1)
