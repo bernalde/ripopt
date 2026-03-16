@@ -163,7 +163,7 @@ impl SensitivityContext {
     ) -> Result<SensitivityResult, String> {
         if !matches!(
             self.result.status,
-            SolveStatus::Optimal | SolveStatus::Acceptable
+            SolveStatus::Optimal
         ) {
             return Err(format!(
                 "Sensitivity requires a converged solution, got {:?}",
@@ -284,7 +284,7 @@ impl SensitivityContext {
     pub fn reduced_hessian(&mut self) -> Result<Vec<Vec<f64>>, String> {
         if !matches!(
             self.result.status,
-            SolveStatus::Optimal | SolveStatus::Acceptable
+            SolveStatus::Optimal
         ) {
             return Err(format!(
                 "Reduced Hessian requires a converged solution, got {:?}",
@@ -398,7 +398,7 @@ mod tests {
 
         let mut ctx = solve_with_sensitivity(&problem, &options);
         assert!(
-            matches!(ctx.result.status, SolveStatus::Optimal | SolveStatus::Acceptable),
+            matches!(ctx.result.status, SolveStatus::Optimal),
             "Expected converged, got {:?}",
             ctx.result.status
         );
@@ -532,7 +532,7 @@ mod tests {
 
         let mut ctx = solve_with_sensitivity(&problem, &options);
         assert!(
-            matches!(ctx.result.status, SolveStatus::Optimal | SolveStatus::Acceptable),
+            matches!(ctx.result.status, SolveStatus::Optimal),
             "Expected converged, got {:?}",
             ctx.result.status
         );

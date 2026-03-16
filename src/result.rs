@@ -3,8 +3,6 @@
 pub enum SolveStatus {
     /// Converged to optimal solution within tolerance.
     Optimal,
-    /// Converged to acceptable solution (less strict tolerances).
-    Acceptable,
     /// Problem is infeasible.
     Infeasible,
     /// Local infeasibility detected: constraint violation is at a stationary

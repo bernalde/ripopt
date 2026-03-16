@@ -1160,19 +1160,11 @@ fn diagnose_failure(result: &SolveResult) -> FailureDiagnosis {
 
 /// Check if `candidate` is strictly better than `current`.
 fn is_strictly_better(current: &SolveResult, candidate: &SolveResult) -> bool {
-    let candidate_solved = matches!(
-        candidate.status,
-        SolveStatus::Optimal | SolveStatus::Acceptable
-    );
-    let current_solved = matches!(
-        current.status,
-        SolveStatus::Optimal | SolveStatus::Acceptable
-    );
+    let candidate_solved = matches!(candidate.status, SolveStatus::Optimal);
+    let current_solved = matches!(current.status, SolveStatus::Optimal);
     candidate_solved
         && (!current_solved
-            || matches!(candidate.status, SolveStatus::Optimal)
-                && !matches!(current.status, SolveStatus::Optimal)
-            || candidate.status == current.status && candidate.objective < current.objective)
+            || candidate.objective < current.objective)
 }
 
 /// Prepare options for a fallback solve: cap iterations and set remaining time budget.
@@ -1211,7 +1203,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             let reduced_result = solve(&prep, &prep_opts);
             let result = prep.unmap_solution(&reduced_result);
             // If preprocessing made things worse, fall back to solving without it
-            if matches!(result.status, SolveStatus::Optimal | SolveStatus::Acceptable) {
+            if matches!(result.status, SolveStatus::Optimal) {
                 return result;
             }
             if options.print_level >= 5 {
@@ -1376,8 +1368,6 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
         let status = if theta < options.tol {
             SolveStatus::Optimal
-        } else if theta < options.acceptable_tol {
-            SolveStatus::Acceptable
         } else {
             SolveStatus::LocalInfeasibility
         };
@@ -1395,10 +1385,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         // - For non-square systems: only fall back if LS didn't converge
         //   (MaxIterations/RestorationFailed); if LS converged with high theta,
         //   the system is genuinely inconsistent.
-        let ls_converged = matches!(
-            ls_result.status,
-            SolveStatus::Optimal | SolveStatus::Acceptable
-        );
+        let ls_converged = matches!(ls_result.status, SolveStatus::Optimal);
         if status == SolveStatus::LocalInfeasibility && (m == n || !ls_converged) {
             if options.print_level >= 5 {
                 eprintln!(
@@ -1425,7 +1412,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 fallback_opts.max_wall_time = remaining;
             }
             let ipm_result = solve_ipm(problem, &fallback_opts);
-            if matches!(ipm_result.status, SolveStatus::Optimal | SolveStatus::Acceptable) {
+            if matches!(ipm_result.status, SolveStatus::Optimal) {
                 return ipm_result;
             }
             // IPM fallback failed too — try AL fallback for square NE systems
@@ -1447,7 +1434,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     al_opts.max_wall_time = remaining;
                 }
                 let al_result = crate::augmented_lagrangian::solve(problem, &al_opts);
-                if matches!(al_result.status, SolveStatus::Optimal | SolveStatus::Acceptable) {
+                if matches!(al_result.status, SolveStatus::Optimal) {
                     if options.print_level >= 5 {
                         eprintln!(
                             "ripopt: NE AL fallback succeeded ({:?}, obj={:.6e})",
@@ -1477,8 +1464,6 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 if theta_lb < theta {
                     let new_status = if theta_lb < options.tol {
                         SolveStatus::Optimal
-                    } else if theta_lb < options.acceptable_tol {
-                        SolveStatus::Acceptable
                     } else {
                         SolveStatus::LocalInfeasibility
                     };
@@ -1522,7 +1507,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     // then fall back to IPM if needed.
     let mut result = if options.enable_lbfgs_fallback && problem.num_constraints() == 0 {
         let lbfgs_result = crate::lbfgs::solve(problem, options);
-        if matches!(lbfgs_result.status, SolveStatus::Optimal | SolveStatus::Acceptable) {
+        if matches!(lbfgs_result.status, SolveStatus::Optimal) {
             if options.print_level >= 5 {
                 eprintln!(
                     "ripopt: L-BFGS solved unconstrained problem ({:?}, obj={:.6e})",
@@ -1538,7 +1523,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 );
             }
             let ipm_result = solve_ipm(problem, options);
-            if matches!(ipm_result.status, SolveStatus::Optimal | SolveStatus::Acceptable) {
+            if matches!(ipm_result.status, SolveStatus::Optimal) {
                 ipm_result
             } else if lbfgs_result.objective < ipm_result.objective {
                 lbfgs_result
@@ -1566,7 +1551,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let has_constraints = problem.num_constraints() > 0;
     let has_inequalities = has_inequality_constraints(problem);
 
-    if options.print_level >= 5 && !matches!(result.status, SolveStatus::Optimal | SolveStatus::Acceptable) {
+    if options.print_level >= 5 && !matches!(result.status, SolveStatus::Optimal) {
         eprintln!("ripopt: Failure diagnosis: {:?}", diagnosis);
     }
 
@@ -1699,7 +1684,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     // changes (TRO3X3, STRATEC, MGH10LS, ACOPR30).
     let n_problem = problem.num_variables();
     if n_problem <= 200
-        && !matches!(result.status, SolveStatus::Optimal | SolveStatus::Acceptable)
+        && !matches!(result.status, SolveStatus::Optimal)
     {
         if let Some(mut opts) = prepare_fallback_opts(options, &solve_start) {
             opts.gondzio_mcc_max = 0;
@@ -1734,7 +1719,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
     // Dispatch based on diagnosis — try targeted strategies rather than
     // a fixed sequence of every possible fallback.
-    if !matches!(result.status, SolveStatus::Optimal | SolveStatus::Acceptable) {
+    if !matches!(result.status, SolveStatus::Optimal) {
         match diagnosis {
             FailureDiagnosis::StallAtInfeasibility => {
                 // Constraint violation stuck high — slack reformulation changes the
@@ -1775,7 +1760,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     }
                 }
                 // If plain IPM didn't help, try L-BFGS Hessian
-                if !matches!(result.status, SolveStatus::Optimal | SolveStatus::Acceptable) {
+                if !matches!(result.status, SolveStatus::Optimal) {
                     try_lbfgs_hessian(&mut result);
                 }
             }
@@ -1792,16 +1777,6 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 // SQP may refine the solution
                 try_sqp(&mut result);
             }
-        }
-    } else if matches!(result.status, SolveStatus::Acceptable) {
-        // Acceptable but not Optimal — try targeted improvement
-        if has_inequalities {
-            if let Some(slack_result) = try_slack(&mut result) {
-                return slack_result;
-            }
-        }
-        if has_constraints {
-            try_sqp(&mut result);
         }
     }
 
@@ -2097,9 +2072,6 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     // Best feasible point tracking: save the best (lowest obj) point that is feasible
     let mut best_x: Option<Vec<f64>> = None;
     let mut best_obj: f64 = f64::INFINITY;
-    let mut best_y: Option<Vec<f64>> = None;
-    let mut best_z_l: Option<Vec<f64>> = None;
-    let mut best_z_u: Option<Vec<f64>> = None;
 
     // Best-du point tracking
     let mut best_du_x: Option<Vec<f64>> = None;
@@ -2284,7 +2256,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             let stall_iters = iteration.saturating_sub(dual_stall_last_good_iter);
             if stall_iters >= 500
                 && !dual_stall_triggered
-                && current_du > options.acceptable_tol
+                && current_du > 100.0 * options.tol
                 && best_x.is_some()
             {
                 // Dual stagnation detected. Restore the best-du point (which had
@@ -2338,15 +2310,17 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     let s_d = if (m + 2 * n) > 0 {
                         (s_max.max(mult_sum / (m + 2 * n) as f64) / s_max).min(1e4)
                     } else { 1.0 };
-                    let du_tol = (options.acceptable_tol * s_d).max(1e-2);
-                    let co_tol = (options.acceptable_tol * s_d).max(1e-2);
-                    let pr_tol = options.acceptable_tol.max(options.acceptable_constr_viol_tol);
+                    let near_tol = 100.0 * options.tol;
+                    let du_tol = (near_tol * s_d).max(1e-2);
+                    let co_tol = (near_tol * s_d).max(1e-2);
+                    let pr_tol = near_tol.max(10.0 * options.constr_viol_tol);
                     if rest_pr <= pr_tol && rest_du <= du_tol && rest_co <= co_tol {
                         log::debug!(
-                            "Restored best-du point passes acceptable (pr={:.2e}, du={:.2e}, co={:.2e})",
+                            "Restored best-du point passes near-tolerance (pr={:.2e}, du={:.2e}, co={:.2e})",
                             rest_pr, rest_du, rest_co
                         );
-                        return make_result(&state, SolveStatus::Acceptable);
+                        // Near-tolerance but promotion strategies unavailable here — return NumericalError
+                        return make_result(&state, SolveStatus::NumericalError);
                     }
 
                     dual_stall_triggered = true;
@@ -2535,9 +2509,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                                 + avg_zu.iter().map(|v| v.abs()).sum::<f64>(),
                             multiplier_count: m + 2 * n,
                         };
-                        if let ConvergenceStatus::Converged = check_convergence(&avg_conv, options, options.acceptable_iter) {
+                        if let ConvergenceStatus::Converged = check_convergence(&avg_conv, options, 0) {
                             if options.print_level >= 3 {
-                                eprintln!("ripopt: Iterate averaging promoted Acceptable -> Optimal (du={:.2e})", avg_du);
+                                eprintln!("ripopt: Iterate averaging promoted near-tolerance -> Optimal (du={:.2e})", avg_du);
                             }
                             return make_result(&state, SolveStatus::Optimal);
                         }
@@ -2575,8 +2549,8 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     };
                     let compl_tol_scaled = options.tol * s_d_now;
                     if compl_inf_now > compl_tol_scaled
-                        && conv_info.primal_inf <= options.acceptable_tol
-                        && conv_info.dual_inf <= options.acceptable_tol * s_d_now
+                        && conv_info.primal_inf <= 100.0 * options.tol
+                        && conv_info.dual_inf <= 100.0 * options.tol * s_d_now
                     {
                         _tried_compl_polish = true;
                         // For variables near bounds, snap multipliers to reduce complementarity:
@@ -2618,10 +2592,10 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             multiplier_sum: snap_mult_sum,
                             multiplier_count: m + 2 * n,
                         };
-                        if let ConvergenceStatus::Converged = check_convergence(&snap_conv, options, options.acceptable_iter) {
+                        if let ConvergenceStatus::Converged = check_convergence(&snap_conv, options, 0) {
                             if options.print_level >= 3 {
                                 eprintln!(
-                                    "ripopt: Complementarity snap promoted Acceptable -> Optimal (compl {:.2e} -> {:.2e}, du {:.2e})",
+                                    "ripopt: Complementarity snap promoted near-tolerance -> Optimal (compl {:.2e} -> {:.2e}, du {:.2e})",
                                     compl_inf_now, snap_compl, snap_du
                                 );
                             }
@@ -2636,7 +2610,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 if options.print_level >= 5 {
                     timings.print_summary(iteration + 1, ipm_start.elapsed());
                 }
-                return make_result(&state, SolveStatus::Acceptable);
+                return make_result(&state, SolveStatus::NumericalError);
             }
             ConvergenceStatus::Diverging => {
                 return make_result(&state, SolveStatus::Unbounded);
@@ -2654,12 +2628,12 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 1.0
             }
         };
-        let meets_acc_scaled = primal_inf <= options.acceptable_tol
-            && dual_inf <= options.acceptable_tol * s_d_for_acc
-            && compl_inf_best <= options.acceptable_tol * s_d_for_acc;
-        let meets_acc_unscaled = primal_inf <= options.acceptable_constr_viol_tol
-            && dual_inf_unscaled <= options.acceptable_dual_inf_tol
-            && compl_inf_best <= options.acceptable_compl_inf_tol;
+        let meets_acc_scaled = primal_inf <= 100.0 * options.tol
+            && dual_inf <= 100.0 * options.tol * s_d_for_acc
+            && compl_inf_best <= 100.0 * options.tol * s_d_for_acc;
+        let meets_acc_unscaled = primal_inf <= 10.0 * options.constr_viol_tol
+            && dual_inf_unscaled <= 10.0 * options.dual_inf_tol
+            && compl_inf_best <= 10.0 * options.compl_inf_tol;
         if meets_acc_scaled && meets_acc_unscaled {
             state.consecutive_acceptable += 1;
         } else {
@@ -2775,23 +2749,21 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 let stall_limit = if tiny_alpha { options.stall_iter_limit / 2 } else { options.stall_iter_limit };
                 if stall_no_progress_count >= stall_limit {
                     // Before declaring NumericalError, check if the current point
-                    // is near-acceptable (10x relaxed acceptable_tol). Problems that
-                    // are essentially solved but can't quite meet the tight acceptable_tol
-                    // should return Acceptable rather than NumericalError.
-                    let stall_acc_tol = options.acceptable_tol * 10.0;
-                    let stall_pr_ok = primal_inf <= stall_acc_tol.max(options.acceptable_constr_viol_tol);
-                    let stall_du_ok = dual_inf <= (stall_acc_tol * s_d_for_acc).max(1e-2);
-                    let stall_co_ok = compl_inf_best <= (stall_acc_tol * s_d_for_acc).max(1e-2);
+                    // is near-tolerance (1000x tol). Such points are close but not optimal.
+                    let stall_near_tol = options.tol * 1000.0;
+                    let stall_pr_ok = primal_inf <= stall_near_tol.max(10.0 * options.constr_viol_tol);
+                    let stall_du_ok = dual_inf <= (stall_near_tol * s_d_for_acc).max(1e-2);
+                    let stall_co_ok = compl_inf_best <= (stall_near_tol * s_d_for_acc).max(1e-2);
                     if stall_pr_ok && stall_du_ok && stall_co_ok {
                         if options.print_level >= 3 {
                             eprintln!(
-                                "ripopt: Stalled but near-acceptable (pr={:.2e}, du={:.2e}, co={:.2e}), returning Acceptable",
+                                "ripopt: Stalled but near-tolerance (pr={:.2e}, du={:.2e}, co={:.2e}), returning NumericalError",
                                 primal_inf, dual_inf, compl_inf_best
                             );
                         }
-                        return make_result(&state, SolveStatus::Acceptable);
+                        return make_result(&state, SolveStatus::NumericalError);
                     }
-                    // Full two-gate acceptable check with optimal dual multipliers.
+                    // Full two-gate near-tolerance check with optimal dual multipliers.
                     // When duals have diverged but the primal point is near-optimal
                     // (e.g., HS116: obj close to optimal, small primal_inf), the simple
                     // check above fails because it uses the current (diverged) duals.
@@ -2835,9 +2807,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         } else {
                             1.0
                         };
-                        let stall_fdu_tol = (stall_acc_tol * fsd).max(1e-2);
-                        let stall_fco_tol = (stall_acc_tol * fsd).max(1e-2);
-                        let stall_fpr_tol = stall_acc_tol.max(options.acceptable_constr_viol_tol);
+                        let stall_fdu_tol = (stall_near_tol * fsd).max(1e-2);
+                        let stall_fco_tol = (stall_near_tol * fsd).max(1e-2);
+                        let stall_fpr_tol = stall_near_tol.max(10.0 * options.constr_viol_tol);
                         // Scaled gate with optimal duals
                         let sc = primal_inf <= stall_fpr_tol
                             && opt_du <= stall_fdu_tol
@@ -2847,17 +2819,17 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
                             &state.y, &state.z_l, &state.z_u, n,
                         );
-                        let usc = primal_inf <= options.acceptable_constr_viol_tol
-                            && du_u <= options.acceptable_dual_inf_tol
-                            && opt_co_best <= options.acceptable_compl_inf_tol;
+                        let usc = primal_inf <= 10.0 * options.constr_viol_tol
+                            && du_u <= 10.0 * options.dual_inf_tol
+                            && opt_co_best <= 10.0 * options.compl_inf_tol;
                         if sc && usc {
                             if options.print_level >= 3 {
                                 eprintln!(
-                                    "ripopt: Stalled but acceptable via optimal duals (pr={:.2e}, du_opt={:.2e}, co={:.2e}), returning Acceptable",
+                                    "ripopt: Stalled but near-tolerance via optimal duals (pr={:.2e}, du_opt={:.2e}, co={:.2e}), returning NumericalError",
                                     primal_inf, opt_du, opt_co_best
                                 );
                             }
-                            return make_result(&state, SolveStatus::Acceptable);
+                            return make_result(&state, SolveStatus::NumericalError);
                         }
                     }
                     if options.print_level >= 3 {
@@ -4337,9 +4309,6 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             if theta_now < options.constr_viol_tol && state.obj < best_obj {
                 best_obj = state.obj;
                 best_x = Some(state.x.clone());
-                best_y = Some(state.y.clone());
-                best_z_l = Some(state.z_l.clone());
-                best_z_u = Some(state.z_u.clone());
             }
         }
 
@@ -4546,13 +4515,13 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             } else {
                 1.0
             };
-            let post_acc_scaled = post_primal <= options.acceptable_tol
-                && post_du <= options.acceptable_tol * post_sd
-                && post_compl_best <= options.acceptable_tol * post_sd;
-            let post_acc_unscaled = post_primal <= options.acceptable_constr_viol_tol
-                && post_du_unsc <= options.acceptable_dual_inf_tol
-                && post_compl_best <= options.acceptable_compl_inf_tol;
-            if post_acc_scaled && post_acc_unscaled {
+            let post_near_scaled = post_primal <= 100.0 * options.tol
+                && post_du <= 100.0 * options.tol * post_sd
+                && post_compl_best <= 100.0 * options.tol * post_sd;
+            let post_near_unscaled = post_primal <= 10.0 * options.constr_viol_tol
+                && post_du_unsc <= 10.0 * options.dual_inf_tol
+                && post_compl_best <= 10.0 * options.compl_inf_tol;
+            if post_near_scaled && post_near_unscaled {
                 state.consecutive_acceptable += 1;
             }
             // Don't reset here — the pre-step check handles resets
@@ -4617,215 +4586,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             final_dual_inf, options.tol * s_d,
             final_dual_inf_unscaled, options.dual_inf_tol,
             final_compl, final_compl_opt, final_compl_best,
-            options.acceptable_tol * s_d, options.acceptable_compl_inf_tol,
+            100.0 * options.tol * s_d, 10.0 * options.compl_inf_tol,
             state.mu, s_d, state.consecutive_acceptable,
         );
-    }
-
-    // At max_iter: final acceptable convergence check.
-    // The counter may have oscillated during the solve, but if the final state
-    // meets all acceptable criteria, the NLP solution is valid.
-    {
-        let final_primal = state.constraint_violation();
-        let (fzl, fzu) = {
-            let mut gj = state.grad_f.clone();
-            for (idx, (&row, &col)) in
-                state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
-            {
-                gj[col] += state.jac_vals[idx] * state.y[row];
-            }
-            let mut zl = vec![0.0; n];
-            let mut zu = vec![0.0; n];
-            let kc = 1e10;
-            for i in 0..n {
-                if gj[i] > 0.0 && state.x_l[i].is_finite() {
-                    let sl = (state.x[i] - state.x_l[i]).max(1e-20);
-                    if gj[i] * sl <= kc * state.mu.max(1e-20) {
-                        zl[i] = gj[i];
-                    }
-                } else if gj[i] < 0.0 && state.x_u[i].is_finite() {
-                    let su = (state.x_u[i] - state.x[i]).max(1e-20);
-                    if (-gj[i]) * su <= kc * state.mu.max(1e-20) {
-                        zu[i] = -gj[i];
-                    }
-                }
-            }
-            (zl, zu)
-        };
-        let fdu = convergence::dual_infeasibility(
-            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-            &state.y, &fzl, &fzu, n,
-        );
-        let fdu_u = convergence::dual_infeasibility_scaled(
-            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-            &state.y, &state.z_l, &state.z_u, n,
-        );
-        let fco = convergence::complementarity_error(
-            &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
-        );
-        let fco_opt = convergence::complementarity_error(
-            &state.x, &state.x_l, &state.x_u, &fzl, &fzu, 0.0,
-        );
-        let fco_best = fco.min(fco_opt);
-        let fmult: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
-            + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
-            + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
-        let fsd = if (m + 2 * n) > 0 {
-            ((100.0f64.max(fmult / (m + 2 * n) as f64)) / 100.0).min(1e4)
-        } else {
-            1.0
-        };
-        // At max_iter exit, use a floor on scaled tolerances to catch solutions
-        // where the gradient is within engineering precision but the
-        // acceptable_tol * s_d threshold is too tight (e.g., unconstrained with s_d=1).
-        // For fully unbounded problems (no finite bounds at all), use a relaxed floor
-        // of 1.0 since the dual variables are unconstrained and gradients can be large
-        // (e.g., MEYER3 with obj=87.946 but gradient > 1e-2).
-        let all_vars_unbounded = (0..n).all(|i| !state.x_l[i].is_finite() && !state.x_u[i].is_finite());
-        // For ill-conditioned unconstrained problems (e.g., MEYER3), the gradient
-        // can be O(|f|) even at the correct solution. Use |obj| as a relative
-        // scale so we don't reject a correct solution just because ||∇f|| > 1.
-        let fdu_floor = if all_vars_unbounded && m == 0 {
-            1.0_f64.max(0.5 * state.obj.abs())
-        } else {
-            1e-2
-        };
-        let fdu_tol = (options.acceptable_tol * fsd).max(fdu_floor);
-        let fco_tol = (options.acceptable_tol * fsd).max(1e-2);
-        let fpr_tol = options.acceptable_tol.max(options.acceptable_constr_viol_tol);
-        let sc = final_primal <= fpr_tol
-            && fdu <= fdu_tol
-            && fco_best <= fco_tol;
-        let usc = final_primal <= options.acceptable_constr_viol_tol
-            && fdu_u <= options.acceptable_dual_inf_tol
-            && fco_best <= options.acceptable_compl_inf_tol;
-        if sc && usc {
-            return make_result(&state, SolveStatus::Acceptable);
-        }
-    }
-
-    // At max_iter: try restoring the best feasible point we saw during the solve.
-    // The current point may have degraded, but an earlier point could pass acceptable.
-    if let Some(ref bx) = best_x {
-        state.x = bx.clone();
-        if let Some(ref by) = best_y { state.y = by.clone(); }
-        if let Some(ref bzl) = best_z_l { state.z_l = bzl.clone(); }
-        if let Some(ref bzu) = best_z_u { state.z_u = bzu.clone(); }
-        state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        if let Some(ref mut lbfgs) = lbfgs_state {
-            let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
-                &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
-            );
-            lbfgs.update(&state.x, &lag_grad);
-            lbfgs.fill_hessian(&mut state.hess_vals);
-        }
-
-        // Re-check acceptable convergence at the best point with relaxed tolerance floor
-        let bp_primal = state.constraint_violation();
-        let (bp_zl, bp_zu) = {
-            let mut gj = state.grad_f.clone();
-            for (idx, (&row, &col)) in
-                state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
-            {
-                gj[col] += state.jac_vals[idx] * state.y[row];
-            }
-            let mut zl = vec![0.0; n];
-            let mut zu = vec![0.0; n];
-            let kc = 1e10;
-            for i in 0..n {
-                if gj[i] > 0.0 && state.x_l[i].is_finite() {
-                    let sl = (state.x[i] - state.x_l[i]).max(1e-20);
-                    if gj[i] * sl <= kc * state.mu.max(1e-20) {
-                        zl[i] = gj[i];
-                    }
-                } else if gj[i] < 0.0 && state.x_u[i].is_finite() {
-                    let su = (state.x_u[i] - state.x[i]).max(1e-20);
-                    if (-gj[i]) * su <= kc * state.mu.max(1e-20) {
-                        zu[i] = -gj[i];
-                    }
-                }
-            }
-            (zl, zu)
-        };
-        let bp_du = convergence::dual_infeasibility(
-            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-            &state.y, &bp_zl, &bp_zu, n,
-        );
-        let bp_du_u = convergence::dual_infeasibility_scaled(
-            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-            &state.y, &state.z_l, &state.z_u, n,
-        );
-        let bp_co = convergence::complementarity_error(
-            &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
-        );
-        let bp_co_opt = convergence::complementarity_error(
-            &state.x, &state.x_l, &state.x_u, &bp_zl, &bp_zu, 0.0,
-        );
-        let bp_co_best = bp_co.min(bp_co_opt);
-        let bp_mult: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
-            + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
-            + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
-        let bp_sd = if (m + 2 * n) > 0 {
-            ((100.0f64.max(bp_mult / (m + 2 * n) as f64)) / 100.0).min(1e4)
-        } else {
-            1.0
-        };
-        // Relaxed tolerances for best-point check at max_iter.
-        // The solver exhausted its iterations, so we use a generous floor:
-        // - du: floor of 1.0 (was 1e-1) to catch near-converged problems
-        // - co: floor of 1.0 (barriers haven't fully resolved but point is good)
-        let bp_du_tol = (options.acceptable_tol * bp_sd).max(1.0);
-        let bp_co_tol = (options.acceptable_tol * bp_sd).max(1.0);
-        let bp_sc = bp_primal <= options.acceptable_tol
-            && bp_du <= bp_du_tol
-            && bp_co_best <= bp_co_tol;
-        // Unscaled check with 10x relaxed complementarity for best-point exit
-        let bp_usc = bp_primal <= options.acceptable_constr_viol_tol
-            && bp_du_u <= options.acceptable_dual_inf_tol
-            && bp_co_best <= options.acceptable_compl_inf_tol * 100.0;
-        if bp_sc && bp_usc {
-            return make_result(&state, SolveStatus::Acceptable);
-        }
-    }
-
-    // At max_iter: if the best du seen during the solve is below the acceptable floor,
-    // restore the best-du point and declare Acceptable. This catches cycling problems
-    // (e.g. HAHN1LS) where du oscillates but periodically reaches good values.
-    let fdu_floor = (options.acceptable_tol * {
-        let s_max = 100.0_f64;
-        let fm: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
-            + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
-            + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
-        if (m + 2 * n) > 0 {
-            (s_max.max(fm / (m + 2 * n) as f64) / s_max).min(1e4)
-        } else { 1.0 }
-    }).max(1e-2);
-    if best_du_val < fdu_floor {
-        if let Some(ref bdx) = best_du_x {
-            state.x.copy_from_slice(bdx);
-            if let Some(ref bdy) = best_du_y { state.y.copy_from_slice(bdy); }
-            if let Some(ref bdzl) = best_du_zl { state.z_l.copy_from_slice(bdzl); }
-            if let Some(ref bdzu) = best_du_zu { state.z_u.copy_from_slice(bdzu); }
-            state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        if let Some(ref mut lbfgs) = lbfgs_state {
-            let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
-                &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
-            );
-            lbfgs.update(&state.x, &lag_grad);
-            lbfgs.fill_hessian(&mut state.hess_vals);
-        }
-            let bd_pr = state.constraint_violation();
-            let bd_pr_tol = options.acceptable_tol.max(options.acceptable_constr_viol_tol);
-            if bd_pr <= bd_pr_tol {
-                if options.print_level >= 5 {
-                    eprintln!(
-                        "ripopt: best-du point passes acceptable (du={:.2e}, pr={:.2e})",
-                        best_du_val, bd_pr
-                    );
-                }
-                return make_result(&state, SolveStatus::Acceptable);
-            }
-        }
     }
 
     // At max_iter: check if the problem is actually infeasible.
@@ -5417,8 +5180,6 @@ fn attempt_nlp_restoration<P: NlpProblem>(
     inner_opts.stall_iter_limit = 0;
     // Relax convergence tolerances — we just need feasibility, not optimality
     inner_opts.tol = 1e-7;
-    inner_opts.acceptable_tol = 1e-3;
-    inner_opts.acceptable_iter = 5;
 
     // Propagate remaining wall time so the inner solve doesn't get a fresh clock.
     // Without this, the inner solve can run for the full max_wall_time, causing
@@ -5468,8 +5229,7 @@ fn attempt_nlp_restoration<P: NlpProblem>(
         );
     }
 
-    let inner_converged =
-        result.status == SolveStatus::Optimal || result.status == SolveStatus::Acceptable;
+    let inner_converged = result.status == SolveStatus::Optimal;
 
     // Check success criteria — require meaningful improvement
     if theta_new < options.constr_viol_tol {
@@ -6046,26 +5806,8 @@ fn make_result(state: &SolverState, status: SolveStatus) -> SolveResult {
         g_out[i] /= state.g_scaling[i];
     }
 
-    // Validate Acceptable results: downgrade to NumericalError if the raw
-    // convergence metrics show the solver didn't genuinely converge.
-    // This prevents claiming "solved" when constraint violation, dual
-    // infeasibility, or complementarity are still large.
-    let validated_status = if status == SolveStatus::Acceptable {
-        let cv_ok = diag.final_primal_inf <= 1e-4;
-        let du_ok = diag.final_dual_inf <= 1e6;
-        let co_ok = diag.final_compl <= 1e6;
-        if cv_ok && du_ok && co_ok {
-            SolveStatus::Acceptable
-        } else {
-            log::debug!(
-                "Acceptable downgraded to NumericalError: cv={:.2e} du={:.2e} co={:.2e}",
-                diag.final_primal_inf, diag.final_dual_inf, diag.final_compl
-            );
-            SolveStatus::NumericalError
-        }
-    } else {
-        status
-    };
+    // No Acceptable status anymore — pass status through directly.
+    let validated_status = status;
 
     SolveResult {
         x: state.x.clone(),

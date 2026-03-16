@@ -40,7 +40,6 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
     let print_level = options.print_level;
     let tol = options.tol;
-    let acceptable_tol = options.acceptable_tol;
     let max_iter = options.max_iter;
 
     if print_level >= 5 {
@@ -80,13 +79,15 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             break;
         }
 
-        if grad_norm < acceptable_tol {
+        let near_tol = 100.0 * tol;
+        if grad_norm < near_tol {
             acceptable_count += 1;
-            if acceptable_count >= options.acceptable_iter {
-                status = SolveStatus::Acceptable;
+            if acceptable_count >= 10 {
+                // Near-tolerance: trigger promotion strategies in caller
+                status = SolveStatus::NumericalError;
                 if print_level >= 5 {
                     eprintln!(
-                        "L-BFGS iter {}: converged (acceptable), f={:.6e}, ||g||={:.6e}",
+                        "L-BFGS iter {}: near-tolerance but not optimal, f={:.6e}, ||g||={:.6e}",
                         k, f, grad_norm
                     );
                 }
@@ -112,9 +113,9 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     // Hessian eigenvalues span many orders of magnitude. Use |f| as a
                     // reference scale: if ||g||/|f| < 0.5 and the solver is stuck, the
                     // point is a practical minimum.
-                    let grad_thresh = (acceptable_tol * 100.0).max(1.0).max(0.5 * f.abs());
+                    let grad_thresh = (options.tol * 10000.0).max(1.0).max(0.5 * f.abs());
                     if grad_norm < grad_thresh {
-                        status = SolveStatus::Acceptable;
+                        status = SolveStatus::NumericalError;
                         if print_level >= 5 {
                             eprintln!(
                                 "L-BFGS iter {}: stalled but near-acceptable (||g||={:.2e}, thresh={:.2e})",
@@ -198,8 +199,8 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             .map(|i| (alpha * d[i]).abs())
             .fold(0.0, |a, b| if b > a || b.is_nan() { b } else { a });
         if step_norm < 1e-15 {
-            if grad_norm < acceptable_tol {
-                status = SolveStatus::Acceptable;
+            if grad_norm < 100.0 * tol {
+                status = SolveStatus::NumericalError;
                 if print_level >= 5 {
                     eprintln!("L-BFGS iter {}: step too small ({:.2e}), acceptable", k, step_norm);
                 }
@@ -543,9 +544,8 @@ mod tests {
         let result = solve(&prob, &options);
 
         assert!(
-            result.status == crate::SolveStatus::Optimal
-                || result.status == crate::SolveStatus::Acceptable,
-            "expected Optimal or Acceptable, got {:?}",
+            result.status == crate::SolveStatus::Optimal,
+            "expected Optimal, got {:?}",
             result.status
         );
         assert!((result.x[0] - 3.0).abs() < 1e-4, "x[0]={}, expected ~3.0", result.x[0]);

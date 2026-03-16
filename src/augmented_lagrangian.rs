@@ -259,24 +259,6 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             };
         }
 
-        if violation < options.acceptable_constr_viol_tol && outer >= 5 {
-            if print_level >= 5 {
-                eprintln!("AL converged (acceptable)");
-            }
-
-            return SolveResult {
-                x: x_current,
-                objective: f_val,
-                constraint_multipliers: lambda,
-                bound_multipliers_lower: vec![0.0; n],
-                bound_multipliers_upper: vec![0.0; n],
-                constraint_values: g,
-                status: SolveStatus::Acceptable,
-                iterations: total_iters,
-                diagnostics: Default::default(),
-            };
-        }
-
         // Update multipliers
         for i in 0..m {
             let is_eq = (g_l[i] - g_u[i]).abs() < 1e-20;

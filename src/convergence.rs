@@ -77,20 +77,22 @@ pub fn check_convergence(
         return ConvergenceStatus::Converged;
     }
 
-    // Check acceptable convergence: BOTH scaled AND unscaled must pass.
-    let acc_primal_tol = options.acceptable_tol;
-    let acc_dual_tol = options.acceptable_tol * s_d;
-    let acc_compl_tol = options.acceptable_tol * s_d;
+    // Internal near-tolerance check: BOTH scaled AND unscaled must pass.
+    // Used to detect "close but not optimal" states that trigger promotion strategies.
+    const NEAR_TOL_ITERS: usize = 10;
+    let near_primal_tol = 100.0 * options.tol;
+    let near_dual_tol = 100.0 * options.tol * s_d;
+    let near_compl_tol = 100.0 * options.tol * s_d;
 
-    let acc_scaled_ok = info.primal_inf <= acc_primal_tol
-        && info.dual_inf <= acc_dual_tol
-        && info.compl_inf <= acc_compl_tol;
-    let acc_unscaled_ok = info.primal_inf <= options.acceptable_constr_viol_tol
-        && info.dual_inf_unscaled <= options.acceptable_dual_inf_tol
-        && info.compl_inf <= options.acceptable_compl_inf_tol;
+    let near_scaled_ok = info.primal_inf <= near_primal_tol
+        && info.dual_inf <= near_dual_tol
+        && info.compl_inf <= near_compl_tol;
+    let near_unscaled_ok = info.primal_inf <= 10.0 * options.constr_viol_tol
+        && info.dual_inf_unscaled <= 10.0 * options.dual_inf_tol
+        && info.compl_inf <= 10.0 * options.compl_inf_tol;
 
-    if acc_scaled_ok && acc_unscaled_ok
-        && consecutive_acceptable >= options.acceptable_iter
+    if near_scaled_ok && near_unscaled_ok
+        && consecutive_acceptable >= NEAR_TOL_ITERS
     {
         return ConvergenceStatus::Acceptable;
     }
@@ -358,9 +360,9 @@ mod tests {
             multiplier_count: 0,
         };
         let opts = SolverOptions::default();
-        // Need enough consecutive acceptable iterations
+        // Need enough consecutive near-tolerance iterations (hardcoded NEAR_TOL_ITERS=10)
         assert_eq!(
-            check_convergence(&info, &opts, opts.acceptable_iter),
+            check_convergence(&info, &opts, 10),
             ConvergenceStatus::Acceptable
         );
     }
@@ -378,9 +380,9 @@ mod tests {
             multiplier_count: 0,
         };
         let opts = SolverOptions::default();
-        // Not enough consecutive iterations
+        // Not enough consecutive iterations (9 < 10)
         assert_eq!(
-            check_convergence(&info, &opts, opts.acceptable_iter - 1),
+            check_convergence(&info, &opts, 9),
             ConvergenceStatus::NotConverged
         );
     }

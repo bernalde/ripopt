@@ -25,10 +25,6 @@ pub struct SolverOptions {
     pub tol: f64,
     /// Maximum number of iterations.
     pub max_iter: usize,
-    /// Acceptable convergence tolerance (less strict).
-    pub acceptable_tol: f64,
-    /// Number of consecutive acceptable iterations before declaring success.
-    pub acceptable_iter: usize,
     /// Initial barrier parameter.
     pub mu_init: f64,
     /// Minimum barrier parameter.
@@ -87,12 +83,6 @@ pub struct SolverOptions {
     pub constraint_slack_barrier: bool,
     /// Maximum wall-clock time in seconds. 0.0 means no limit.
     pub max_wall_time: f64,
-    /// Acceptable constraint violation tolerance (unscaled gate for acceptable convergence).
-    pub acceptable_constr_viol_tol: f64,
-    /// Acceptable dual infeasibility tolerance (unscaled gate for acceptable convergence).
-    pub acceptable_dual_inf_tol: f64,
-    /// Acceptable complementarity tolerance (unscaled gate for acceptable convergence).
-    pub acceptable_compl_inf_tol: f64,
     /// Number of consecutive shortened steps before activating watchdog. Default: 10.
     pub watchdog_shortened_iter_trigger: usize,
     /// Maximum trial iterations during watchdog mode. Default: 5.
@@ -194,8 +184,6 @@ impl Default for SolverOptions {
         Self {
             tol: 1e-8,
             max_iter: 3000,
-            acceptable_tol: 1e-4,
-            acceptable_iter: 10,
             mu_init: 0.1,
             mu_min: 1e-11,
             tau_min: 0.99,
@@ -223,9 +211,6 @@ impl Default for SolverOptions {
             constr_mult_init_max: 1000.0,
             constraint_slack_barrier: false,
             max_wall_time: 0.0,
-            acceptable_constr_viol_tol: 1e-2,
-            acceptable_dual_inf_tol: 1e4,
-            acceptable_compl_inf_tol: 1e-2,
             watchdog_shortened_iter_trigger: 10,
             watchdog_trial_iter_max: 3,
             sparse_threshold: 110,

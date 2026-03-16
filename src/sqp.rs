@@ -131,8 +131,8 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             status = SolveStatus::Optimal;
             break;
         }
-        if grad_l_inf < options.acceptable_tol && c_inf < options.acceptable_constr_viol_tol {
-            status = SolveStatus::Acceptable;
+        if grad_l_inf < 100.0 * options.tol && c_inf < 10.0 * options.constr_viol_tol {
+            status = SolveStatus::NumericalError;
             break;
         }
 
