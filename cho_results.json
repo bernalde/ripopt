@@ -1,0 +1,22 @@
+[
+  {
+    "solver": "ripopt",
+    "name": "CHO parmest",
+    "n": 21672,
+    "m": 21660,
+    "status": "MaxIterations",
+    "objective": 259937.4333847187,
+    "iterations": 50,
+    "solve_time": 310.231932875
+  },
+  {
+    "solver": "ipopt",
+    "name": "CHO parmest",
+    "n": 21672,
+    "m": 21660,
+    "status": "MaxIter",
+    "objective": 65314.141495899035,
+    "iterations": 5000,
+    "solve_time": 3243.718566167
+  }
+]

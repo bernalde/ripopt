@@ -106,7 +106,7 @@ For complementarity, the algorithm takes $\min(C_z, C_{z_{\text{opt}}})$ to hand
 - =ConvergenceInfo= struct: [[../src/convergence.rs::23][src/convergence.rs:23]]
 - Scaled check: [[../src/convergence.rs::70][src/convergence.rs:70]]
 - Unscaled check: [[../src/convergence.rs::73][src/convergence.rs:73]]
-- Acceptable convergence: [[../src/convergence.rs::81][src/convergence.rs:81]]
+- Acceptable tolerance checks (internal, for best-du tracking): [[../src/convergence.rs::81][src/convergence.rs:81]]
 
 * Two-Phase Restoration with Multi-Attempt Recovery
 
@@ -214,7 +214,7 @@ When the primary IPM fails (=RestorationFailed=, =MaxIterations=, or =NumericalE
 
 2. *Augmented Lagrangian (AL)*: For constrained problems. PHR formulation with penalty parameter $\rho$ increasing by $10\times$ when violation fails to decrease. Each AL subproblem is solved by the IPM engine.
 
-3. *Explicit Slack Reformulation*: For inequality-constrained problems. Converts $g_L \le g(x) \le g_U$ to $g(x) - s = 0$, $g_L \le s \le g_U$, solved by IPM with =enable_slack_fallback=false=. Triggered on any non-Optimal result (including Acceptable) for strict objective comparison.
+3. *Explicit Slack Reformulation*: For inequality-constrained problems. Converts $g_L \le g(x) \le g_U$ to $g(x) - s = 0$, $g_L \le s \le g_U$, solved by IPM with =enable_slack_fallback=false=. Triggered on any non-Optimal result for strict objective comparison.
 
 *** Best-Point Tracking
 
@@ -446,7 +446,7 @@ python generate.py   # generates hs_suite/generated/hs_problems.rs
 cargo run --bin hs_suite --release
 #+end_src
 
-This solves all 120 HS problems and outputs JSON results to stdout. The number of timing runs can be controlled via environment variable:
+This solves the HS problems and outputs JSON results to stdout. The number of timing runs can be controlled via environment variable:
 
 #+begin_src bash
 RIPOPT_TIMING_RUNS=10 cargo run --bin hs_suite --release > hs_results_ripopt.json

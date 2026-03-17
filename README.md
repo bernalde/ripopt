@@ -56,31 +56,31 @@ It implements a primal-dual interior point method with a barrier formulation, si
 
 | Metric          | ripopt             | Ipopt (native, MUMPS) |
 |-----------------|--------------------|-----------------------|
-| Problems solved | **119/120 (99.2%)**| 116/120 (96.7%)       |
-| Optimal         | 101                | 116                   |
-| Acceptable      | 18                 | 0                     |
-| ripopt only     | 3                  | 0                     |
+| Problems solved | **113/120 (94.2%)**| 116/120 (96.7%)       |
+| Optimal         | 113                | 116                   |
+| ripopt only     | 2                  | --                    |
+| Ipopt only      | --                 | 5                     |
 
-On 116 commonly-solved problems: **16.5x geometric mean speedup**, ripopt faster on 113/116 (97%).
+On 111 commonly-solved problems: **16.8x geometric mean speedup**, ripopt faster on 110/111 (99%).
 
 ### CUTEst Benchmark Suite (727 problems)
 
 | Metric        | ripopt              | Ipopt (C++ with MUMPS) |
 |---------------|---------------------|------------------------|
-| Total solved  | **596/727 (82.0%)** | 561/727 (77.2%)        |
-| Both solve    | 551                 | 551                    |
-| ripopt only   | **45**              | --                     |
-| Ipopt only    | --                  | **10**                 |
+| Total solved  | **516/727 (71.0%)** | 561/727 (77.2%)        |
+| Both solve    | 487                 | 487                    |
+| ripopt only   | **29**              | --                     |
+| Ipopt only    | --                  | **74**                 |
 
-On 551 commonly-solved problems:
+On 487 commonly-solved problems:
 
 | Metric                          | Value            |
 |---------------------------------|------------------|
-| Geometric mean speedup          | **9.1x**         |
-| Median speedup                  | **26.2x**        |
-| Problems where ripopt is faster | 446/551 (81%)    |
-| ripopt 10x+ faster              | 350/551 (64%)    |
-| Problems where Ipopt is faster  | 105/551 (19%)    |
+| Geometric mean speedup          | **11.2x**        |
+| Median speedup                  | **21.0x**        |
+| Problems where ripopt is faster | 425/487 (87%)    |
+| ripopt 10x+ faster              | 321/487 (66%)    |
+| Problems where Ipopt is faster  | 62/487 (13%)     |
 
 **Interpreting the speed numbers.** Most CUTEst problems are small (n < 10) and solve in microseconds for ripopt, while Ipopt has a ~1-3ms floor from internal initialization. The per-iteration speedup on small problems comes from stack allocation, the absence of C/Fortran interop, and cache-efficient dense linear algebra. On larger problems, ripopt switches to sparse multifrontal LDL^T with SuiteSparse AMD ordering, and Ipopt's Fortran MUMPS has a per-factorization advantage.
 
@@ -103,20 +103,30 @@ Both solvers receive the exact same NlpProblem struct via the Rust trait interfa
 
 | Problem         | n      | m      | ripopt     | time   | Ipopt      | time   | speedup  |
 |-----------------|--------|--------|------------|--------|------------|--------|----------|
-| Rosenbrock 500  | 500    | 0      | Acceptable | 0.001s | Optimal    | 0.189s | **196x** |
-| Bratu 1K        | 1,000  | 998    | Optimal    | 0.002s | Optimal    | 0.003s | 1.7x     |
-| SparseQP 1K     | 500    | 500    | Optimal    | 0.009s | Optimal    | 0.004s | 0.4x     |
-| OptControl 2.5K | 2,499  | 1,250  | Optimal    | 0.006s | Optimal    | 0.003s | 0.4x     |
-| Rosenbrock 5K   | 5,000  | 0      | Acceptable | 0.010s | **Failed** | 3.725s | **375x** |
-| Poisson 2.5K    | 5,000  | 2,500  | Optimal    | 0.026s | Optimal    | 0.010s | 0.4x     |
-| Bratu 10K       | 10,000 | 9,998  | Optimal    | 0.130s | Optimal    | 0.012s | 0.1x     |
-| OptControl 20K  | 19,999 | 10,000 | Optimal    | 0.196s | Optimal    | 0.021s | 0.1x     |
-| Poisson 50K     | 49,928 | 24,964 | Optimal    | 1.710s | Optimal    | 0.138s | 0.1x     |
-| SparseQP 100K   | 50,000 | 50,000 | Optimal    | 4.900s | Optimal    | 0.317s | 0.07x    |
+| Rosenbrock 500  | 500    | 0      | Optimal        | 0.002s | Optimal    | 0.196s | **85.7x** |
+| Bratu 1K        | 1,000  | 998    | Optimal        | 0.002s | Optimal    | 0.002s | 1.1x      |
+| SparseQP 1K     | 500    | 500    | Optimal        | 0.008s | Optimal    | 0.004s | 0.4x      |
+| OptControl 2.5K | 2,499  | 1,250  | Optimal        | 0.006s | Optimal    | 0.002s | 0.4x      |
+| Rosenbrock 5K   | 5,000  | 0      | NumericalError | 17.234s| **Failed** | 3.624s | 0.2x      |
+| Poisson 2.5K    | 5,000  | 2,500  | Optimal        | 0.026s | Optimal    | 0.009s | 0.4x      |
+| Bratu 10K       | 10,000 | 9,998  | Optimal        | 0.125s | Optimal    | 0.012s | 0.1x      |
+| OptControl 20K  | 19,999 | 10,000 | Optimal        | 0.192s | Optimal    | 0.019s | 0.1x      |
+| Poisson 50K     | 49,928 | 24,964 | Optimal        | 1.724s | Optimal    | 0.121s | 0.1x      |
+| SparseQP 100K   | 50,000 | 50,000 | Optimal        | 4.736s | Optimal    | 0.309s | 0.1x      |
 
-ripopt solves **10/10** (Ipopt: 9/10 — fails on Rosenbrock 5K). On large constrained problems, Ipopt's Fortran MUMPS is ~10-15x faster per factorization. ripopt dominates on unconstrained problems via L-BFGS fallback.
+ripopt solves **9/10** (Ipopt: 9/10). Both fail on Rosenbrock 5K. On large constrained problems, Ipopt's Fortran MUMPS is ~10-15x faster per factorization. ripopt dominates on unconstrained problems via L-BFGS fallback.
 
 Run the benchmarks yourself: `make benchmark`
+
+### Domain-Specific Benchmarks
+
+| Suite | Problems | ripopt | Ipopt | Notes |
+|-------|----------|--------|-------|-------|
+| Electrolyte thermodynamics | 13 | **13/13 (100%)** | 12/13 (92.3%) | 23.7x geo mean speedup; ripopt uniquely solves seawater speciation |
+| AC Optimal Power Flow | 4 | **4/4 (100%)** | 4/4 (100%) | Ipopt faster on OPF (0.1x geo mean) |
+| CHO parameter estimation | 1 | 0/1 | 0/1 | Large-scale (n=21,672, m=21,660); both hit iteration limit |
+
+Run all benchmarks: `make benchmark`
 
 ## Installation
 
