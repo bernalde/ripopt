@@ -187,6 +187,18 @@ struct SolveResult {
     time_s: f64,
 }
 
+#[derive(serde::Serialize)]
+struct BenchEntry {
+    solver: String,
+    name: String,
+    n: usize,
+    m: usize,
+    status: String,
+    objective: f64,
+    iterations: i32,
+    solve_time: f64,
+}
+
 fn solve_ripopt<P: NlpProblem>(problem: &P, tol: f64, max_iter: usize) -> SolveResult {
     let options = SolverOptions {
         tol,
@@ -231,6 +243,8 @@ fn main() {
     let width = header.len();
     println!("{}", "-".repeat(width));
 
+    let mut results: Vec<BenchEntry> = Vec::new();
+
     macro_rules! bench {
         ($name:expr, $problem:expr) => {{
             let p = $problem;
@@ -247,6 +261,11 @@ fn main() {
             if rp.status != "Optimal" {
                 notes.push(format!("ripopt={}", rp.status));
             }
+            results.push(BenchEntry {
+                solver: "ripopt".into(), name: $name.into(), n, m,
+                status: rp.status.clone(), objective: rp.objective,
+                iterations: rp.iterations, solve_time: rp.time_s,
+            });
             #[cfg(feature = "ipopt-native")]
             {
                 let ip = ipopt_ffi::solve_ipopt(&p, tol, max_iter as i32);
@@ -257,6 +276,11 @@ fn main() {
                 if ip.status != "Optimal" {
                     notes.push(format!("ipopt={}", ip.status));
                 }
+                results.push(BenchEntry {
+                    solver: "ipopt".into(), name: $name.into(), n, m,
+                    status: ip.status.clone(), objective: ip.objective,
+                    iterations: ip.iterations, solve_time: ip.time_s,
+                });
             }
             println!("{}", line);
             if !notes.is_empty() {
@@ -289,4 +313,11 @@ fn main() {
     bench!("Seawater speciation", SeawaterSpeciation);
 
     println!("{}", "-".repeat(width));
+
+    // Write JSON results
+    let results_path = std::env::var("RESULTS_FILE")
+        .unwrap_or_else(|_| "electrolyte_results.json".to_string());
+    let json = serde_json::to_string_pretty(&results).unwrap();
+    std::fs::write(&results_path, json).unwrap();
+    eprintln!("Results written to {}", results_path);
 }

@@ -1,15 +1,17 @@
-// Benchmark comparing ripopt vs ipopt on AC Optimal Power Flow problems.
+// Benchmark comparing ripopt vs ipopt on the CHO parameter estimation problem.
 //
-// Run with: cargo run --release --features ipopt-native --example opf_benchmark
+// The CHO problem is a large-scale NLP (n=21,672 vars, m=21,660 constraints)
+// from a multi-batch CHO cell culture parameter estimation via orthogonal
+// collocation on finite elements. It is loaded from a pre-exported .nl file.
+//
+// Run with: cargo run --release --features ipopt-native --example cho_benchmark
 
+use ripopt::nl::{parse_nl_file, NlProblem};
 use ripopt::{NlpProblem, SolverOptions};
 use std::time::Instant;
 
-#[path = "../tests/common/opf_problems.rs"]
-mod problems;
-
 // =========================================================================
-// Ipopt C API FFI (same pattern as benchmark_solvers.rs)
+// Ipopt C API FFI (same pattern as other benchmarks)
 // =========================================================================
 
 #[cfg(feature = "ipopt-native")]
@@ -90,12 +92,23 @@ struct BenchEntry {
     solve_time: f64,
 }
 
-fn solve_ripopt<P: NlpProblem>(problem: &P, tol: f64, max_iter: usize) -> SolveResult {
-    let options = SolverOptions { tol, max_iter, max_wall_time: 60.0, print_level: 0, ..SolverOptions::default() };
+fn solve_ripopt(problem: &NlProblem, tol: f64, max_iter: usize) -> SolveResult {
+    let options = SolverOptions {
+        tol,
+        max_iter,
+        max_wall_time: 300.0,
+        print_level: 0,
+        ..SolverOptions::default()
+    };
     let t0 = Instant::now();
     let result = ripopt::solve(problem, &options);
     let elapsed = t0.elapsed().as_secs_f64();
-    SolveResult { status: format!("{:?}", result.status), objective: result.objective, iterations: result.iterations as i32, time_s: elapsed }
+    SolveResult {
+        status: format!("{:?}", result.status),
+        objective: result.objective,
+        iterations: result.iterations as i32,
+        time_s: elapsed,
+    }
 }
 
 // =========================================================================
@@ -104,20 +117,46 @@ fn solve_ripopt<P: NlpProblem>(problem: &P, tol: f64, max_iter: usize) -> SolveR
 
 fn main() {
     let tol = 1e-6;
-    let max_iter: usize = 3000;
+    let max_iter: usize = 5000;
     let have_ipopt = cfg!(feature = "ipopt-native");
 
+    // Load NL file
+    let nl_path = std::env::var("CHO_NL_PATH")
+        .unwrap_or_else(|_| "cho/nl_export_results/cho_parmest.nl".to_string());
+    let content = match std::fs::read_to_string(&nl_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Error reading {}: {}", nl_path, e);
+            eprintln!("Generate it with: cd cho && python parmest_nl_export.py");
+            std::process::exit(1);
+        }
+    };
+    let nl_data = match parse_nl_file(&content) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Error parsing NL file: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let problem = NlProblem::from_nl_data(nl_data);
+    let n = problem.num_variables();
+    let m = problem.num_constraints();
+
     println!();
-    println!("AC Optimal Power Flow Benchmark: ripopt vs ipopt");
-    println!("================================================");
+    println!("CHO Parameter Estimation Benchmark: ripopt vs ipopt");
+    println!("===================================================");
+    println!("Problem: {} variables, {} constraints", n, m);
     println!();
 
     let mut header = format!(
-        "{:<20} {:>4} {:>4} {:>4} | {:>12} {:>5} {:>8}",
-        "Problem", "n", "m", "nnz", "ripopt obj", "iter", "time(s)"
+        "{:<20} {:>6} {:>6} | {:>12} {:>5} {:>8}",
+        "Problem", "n", "m", "objective", "iter", "time(s)"
     );
     if have_ipopt {
-        header += &format!(" | {:>12} {:>5} {:>8}", "ipopt obj", "iter", "time(s)");
+        header = format!(
+            "{:<20} | {:>12} {:>5} {:>8} | {:>12} {:>5} {:>8}",
+            "Problem", "ripopt obj", "iter", "time(s)", "ipopt obj", "iter", "time(s)"
+        );
     }
     println!("{}", header);
     let width = header.len();
@@ -125,65 +164,57 @@ fn main() {
 
     let mut results: Vec<BenchEntry> = Vec::new();
 
-    macro_rules! bench {
-        ($name:expr, $problem:expr, $known_opt:expr) => {{
-            let p = $problem;
-            let n = p.num_variables();
-            let m = p.num_constraints();
-            let (jr, _) = p.jacobian_structure();
-            let nnz = jr.len();
-            let rp = solve_ripopt(&p, tol, max_iter);
-            #[allow(unused_mut)]
-            let mut line = format!(
-                "{:<20} {:>4} {:>4} {:>4} | {:>12.2} {:>5} {:>8.4}",
-                $name, n, m, nnz, rp.objective, rp.iterations, rp.time_s
-            );
-            #[allow(unused_mut)]
-            let mut notes = Vec::new();
-            if rp.status != "Optimal" {
-                notes.push(format!("ripopt={}", rp.status));
-            }
-            results.push(BenchEntry {
-                solver: "ripopt".into(), name: $name.into(), n, m,
-                status: rp.status.clone(), objective: rp.objective,
-                iterations: rp.iterations, solve_time: rp.time_s,
-            });
-            let rp_gap = ((rp.objective - $known_opt) / $known_opt * 100.0).abs();
+    // Solve with ripopt
+    let rp = solve_ripopt(&problem, tol, max_iter);
+    results.push(BenchEntry {
+        solver: "ripopt".into(), name: "CHO parmest".into(), n, m,
+        status: rp.status.clone(), objective: rp.objective,
+        iterations: rp.iterations, solve_time: rp.time_s,
+    });
 
-            #[cfg(feature = "ipopt-native")]
-            {
-                let ip = ipopt_ffi::solve_ipopt(&p, tol, max_iter as i32);
-                line += &format!(" | {:>12.2} {:>5} {:>8.4}", ip.objective, ip.iterations, ip.time_s);
-                if ip.status != "Optimal" { notes.push(format!("ipopt={}", ip.status)); }
-                results.push(BenchEntry {
-                    solver: "ipopt".into(), name: $name.into(), n, m,
-                    status: ip.status.clone(), objective: ip.objective,
-                    iterations: ip.iterations, solve_time: ip.time_s,
-                });
-            }
+    #[allow(unused_mut)]
+    let mut line;
+    #[allow(unused_mut)]
+    let mut notes = Vec::new();
 
-            println!("{}", line);
-            if !notes.is_empty() {
-                println!("  status: {}", notes.join(", "));
-            }
-            if rp_gap > 1.0 {
-                println!("  gap from known optimal: {:.2}%", rp_gap);
-            }
-        }};
+    if rp.status != "Optimal" {
+        notes.push(format!("ripopt={}", rp.status));
     }
 
-    use problems::*;
+    #[cfg(feature = "ipopt-native")]
+    {
+        let ip = ipopt_ffi::solve_ipopt(&problem, tol, max_iter as i32);
+        results.push(BenchEntry {
+            solver: "ipopt".into(), name: "CHO parmest".into(), n, m,
+            status: ip.status.clone(), objective: ip.objective,
+            iterations: ip.iterations, solve_time: ip.time_s,
+        });
+        if ip.status != "Optimal" {
+            notes.push(format!("ipopt={}", ip.status));
+        }
+        line = format!(
+            "{:<20} | {:>12.4e} {:>5} {:>8.2} | {:>12.4e} {:>5} {:>8.2}",
+            "CHO parmest", rp.objective, rp.iterations, rp.time_s,
+            ip.objective, ip.iterations, ip.time_s
+        );
+    }
+    #[cfg(not(feature = "ipopt-native"))]
+    {
+        line = format!(
+            "{:<20} {:>6} {:>6} | {:>12.4e} {:>5} {:>8.2}",
+            "CHO parmest", n, m, rp.objective, rp.iterations, rp.time_s
+        );
+    }
 
-    bench!("case3_lmbd", case3_lmbd(), 5812.64);
-    bench!("case5_pjm", case5_pjm(), 17551.89);
-    bench!("case14_ieee", case14_ieee(), 2178.08);
-    bench!("case30_ieee", case30_ieee(), 8081.52);
-
+    println!("{}", line);
+    if !notes.is_empty() {
+        println!("  status: {}", notes.join(", "));
+    }
     println!("{}", "-".repeat(width));
 
     // Write JSON results
     let results_path = std::env::var("RESULTS_FILE")
-        .unwrap_or_else(|_| "opf_results.json".to_string());
+        .unwrap_or_else(|_| "cho_results.json".to_string());
     let json = serde_json::to_string_pretty(&results).unwrap();
     std::fs::write(&results_path, json).unwrap();
     eprintln!("Results written to {}", results_path);

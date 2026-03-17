@@ -177,6 +177,58 @@ def load_cutest_results(path=None):
     return comparisons
 
 
+def load_domain_results(path, suite_name):
+    """Load domain-specific benchmark results (electrolyte, OPF, CHO).
+
+    These use the same JSON format as CUTEst: [{solver, name, n, m, status, objective, iterations, solve_time}].
+    """
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        return None
+
+    with open(path) as f:
+        data = json.load(f)
+
+    ripopt_by_name = {}
+    ipopt_by_name = {}
+    for r in data:
+        if r['solver'] == 'ripopt':
+            ripopt_by_name[r['name']] = r
+        elif r['solver'] == 'ipopt':
+            ipopt_by_name[r['name']] = r
+
+    comparisons = []
+    for name in sorted(set(ripopt_by_name.keys()) | set(ipopt_by_name.keys())):
+        rr = ripopt_by_name.get(name, {})
+        cr = ipopt_by_name.get(name, {})
+
+        r_solved = is_solved(rr.get('status', ''))
+        c_solved = is_solved(cr.get('status', ''))
+        both = r_solved and c_solved
+        od = obj_diff(rr.get('objective'), cr.get('objective')) if both else float('nan')
+
+        comparisons.append({
+            'name': name,
+            'suite': suite_name,
+            'n': rr.get('n', cr.get('n', 0)),
+            'm': rr.get('m', cr.get('m', 0)),
+            'ripopt_status': rr.get('status', 'N/A'),
+            'ipopt_status': cr.get('status', 'N/A'),
+            'ripopt_obj': rr.get('objective', float('nan')),
+            'ipopt_obj': cr.get('objective', float('nan')),
+            'obj_diff': od,
+            'ripopt_iters': rr.get('iterations', 0),
+            'ipopt_iters': cr.get('iterations', 0),
+            'ripopt_time': rr.get('solve_time', 0),
+            'ipopt_time': cr.get('solve_time', 0),
+            'ripopt_solved': r_solved,
+            'ipopt_solved': c_solved,
+            'both_solved': both,
+            'passed': both and not math.isnan(od) and od < 1e-4,
+        })
+
+    return comparisons if comparisons else None
+
+
 def load_large_scale_results():
     """Parse large_scale_results.txt for BENCH: lines with ripopt vs Ipopt comparison."""
     path = os.path.join(SCRIPT_DIR, 'large_scale_results.txt')
@@ -607,6 +659,30 @@ def main():
         print(f"CUTEst suite: {len(cutest)} problems loaded")
     else:
         print("CUTEst suite: no results found (run `make cutest-run` first)")
+
+    electrolyte = load_domain_results(
+        os.path.join(SCRIPT_DIR, 'electrolyte_results.json'), 'Electrolyte')
+    if electrolyte:
+        suites.append(("Electrolyte", electrolyte))
+        print(f"Electrolyte suite: {len(electrolyte)} problems loaded")
+    else:
+        print("Electrolyte suite: no results found (run `make electrolyte-run` first)")
+
+    opf = load_domain_results(
+        os.path.join(SCRIPT_DIR, 'opf_results.json'), 'OPF')
+    if opf:
+        suites.append(("OPF", opf))
+        print(f"OPF suite: {len(opf)} problems loaded")
+    else:
+        print("OPF suite: no results found (run `make opf-run` first)")
+
+    cho = load_domain_results(
+        os.path.join(SCRIPT_DIR, 'cho_results.json'), 'CHO')
+    if cho:
+        suites.append(("CHO", cho))
+        print(f"CHO suite: {len(cho)} problems loaded")
+    else:
+        print("CHO suite: no results found (run `make cho-run` first)")
 
     if not suites:
         print("No benchmark results found. Run `make benchmark` first.")

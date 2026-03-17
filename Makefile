@@ -1,5 +1,5 @@
 SHELL = /bin/bash
-.PHONY: help test test-c test-iterative install uninstall cutest-prepare cutest-run cutest-full cutest-report cutest cutest-maxiter cutest-smoke cutest-large hs-run large-scale benchmark benchmark-report
+.PHONY: help test test-c test-iterative install uninstall clean cutest-install cutest-prepare cutest-run cutest-full cutest-report cutest cutest-maxiter cutest-smoke cutest-large hs-run large-scale electrolyte-run opf-run cho-run benchmark benchmark-report
 
 # Show available targets
 help:
@@ -8,19 +8,24 @@ help:
 	@echo "Build & Install:"
 	@echo "  install          Build and install ripopt binary, shared library, and Pyomo plugin"
 	@echo "  uninstall        Remove ripopt binary, shared library, and Pyomo plugin"
+	@echo "  clean            Remove build artifacts (cargo clean)"
 	@echo ""
 	@echo "Testing:"
 	@echo "  test             Run unit/integration tests (cargo test)"
 	@echo "  test-iterative   Run iterative/hybrid solver tests (release, large-scale)"
 	@echo ""
 	@echo "Benchmarks:"
-	@echo "  benchmark        Full benchmark: HS + CUTEst + large-scale + report"
+	@echo "  benchmark        Full benchmark: HS + CUTEst + domain + large-scale + report"
 	@echo "  benchmark-report Generate unified report from existing results"
 	@echo "  hs-run           Run HS suite benchmark (ripopt + ipopt)"
+	@echo "  electrolyte-run  Run electrolyte thermodynamics benchmark"
+	@echo "  opf-run          Run AC optimal power flow benchmark"
+	@echo "  cho-run          Run CHO parameter estimation benchmark"
 	@echo "  large-scale      Run synthetic large-scale tests (up to 100K vars)"
 	@echo "  test-c           Build shared library and run C API examples"
 	@echo ""
 	@echo "CUTEst Benchmarks:"
+	@echo "  cutest-install   Install CUTEst framework to ~/.local/cutest"
 	@echo "  cutest           Full pipeline: prepare, run, report"
 	@echo "  cutest-prepare   Compile SIF problems -> .dylib (reads problem_list.txt)"
 	@echo "  cutest-run       Run benchmark on all prepared problems (results.json)"
@@ -85,6 +90,10 @@ uninstall:
 	rm -f ~/.local/lib/libripopt.$(DYLIB_EXT)
 	@echo "Uninstalled ripopt binary and shared library."
 
+# Remove build artifacts
+clean:
+	cargo clean
+
 # Run unit/integration tests (including C API tests via Rust FFI)
 test:
 	cargo test
@@ -110,6 +119,10 @@ test-c:
 		-Wl,-rpath,$(CURDIR)/target/release -o target/release/c_example_with_options -lm
 	target/release/c_example_with_options
 	@echo "=== All C API examples passed ==="
+
+# Install CUTEst framework to ~/.local/cutest
+cutest-install:
+	bash install_cutest.sh
 
 # Prepare CUTEst problems (compile SIF -> .dylib)
 cutest-prepare:
@@ -191,8 +204,29 @@ large-scale:
 		2>&1 | tee large_scale_results.txt
 	@echo "Large-scale benchmark complete. Output: large_scale_results.txt"
 
-# Full benchmark: HS + CUTEst + large-scale + unified report
-benchmark: hs-run cutest-run large-scale benchmark-report
+# Run electrolyte thermodynamics benchmark (ripopt + ipopt)
+electrolyte-run:
+	RESULTS_FILE=electrolyte_results.json \
+	cargo run --release --features ipopt-native --example electrolyte_benchmark \
+		2> >(tee electrolyte_stderr.txt >&2)
+	@echo "Electrolyte benchmark complete."
+
+# Run AC optimal power flow benchmark (ripopt + ipopt)
+opf-run:
+	RESULTS_FILE=opf_results.json \
+	cargo run --release --features ipopt-native --example opf_benchmark \
+		2> >(tee opf_stderr.txt >&2)
+	@echo "OPF benchmark complete."
+
+# Run CHO parameter estimation benchmark (ripopt + ipopt)
+cho-run:
+	RESULTS_FILE=cho_results.json \
+	cargo run --release --features ipopt-native --example cho_benchmark \
+		2> >(tee cho_stderr.txt >&2)
+	@echo "CHO benchmark complete."
+
+# Full benchmark: HS + CUTEst + domain + large-scale + unified report
+benchmark: hs-run cutest-run electrolyte-run opf-run cho-run large-scale benchmark-report
 	@echo "Full benchmark complete. Report: BENCHMARK_REPORT.md"
 
 # Generate unified benchmark report from existing results
