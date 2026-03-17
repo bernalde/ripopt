@@ -44,3 +44,8 @@ install_cutest.sh
 *.egg-info/
 hs_suite/hs_ipopt_native_stderr.txt
 hs_suite/hs_ripopt_stderr.txt
+
+# Domain benchmark stderr
+electrolyte_stderr.txt
+opf_stderr.txt
+cho_stderr.txt

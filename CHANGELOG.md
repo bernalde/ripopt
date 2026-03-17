@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.5.0] - 2026-03-16
+
+### Breaking Changes
+- **Removed `SolveStatus::Acceptable`**: problems that previously returned Acceptable now return either `Optimal` or `NumericalError`. This gives honest reporting — a solve either meets full tolerances or it doesn't. HS suite: 113/120 (was 119/120 with Acceptable); CUTEst: 516/727 (was 596/727).
+
+### Added
+- **Domain-specific benchmarks** integrated into `make benchmark`:
+  - Electrolyte thermodynamics (13 problems): ripopt 13/13 (100%), Ipopt 12/13 (92.3%), 23.7x geo mean speedup
+  - AC Optimal Power Flow (4 problems): ripopt 4/4, Ipopt 4/4
+  - CHO parameter estimation (1 large-scale NLP, n=21,672, m=21,660): benchmark infrastructure for .nl file problems
+- New Makefile targets: `electrolyte-run`, `opf-run`, `cho-run`
+- JSON output from all domain benchmarks for unified reporting
+- Domain benchmark sections in `benchmark_report.py` and BENCHMARK_REPORT.md
+- `cho_benchmark.rs` example: benchmarks ripopt vs Ipopt on the CHO .nl problem
+
+### Changed
+- Convergence polishing: sigma in quality function, delayed mode switch, looser z_opt gate
+- Conservative IPM retry added to diagnostic-driven fallback cascade
+- NLP restoration: alternative sparse solver retry and relaxed timeout
+- Removed overfitting heuristics: adaptive damping, backward-error refinement, scaled dual inf, cost-based fallbacks
+- Tests require `Optimal` status; known solver limitations marked as `#[ignore]`
+- Manuscript, supporting information, and README updated with current benchmark numbers
+
+### Performance
+- HS suite: 113/120 Optimal, geometric mean speedup 16.8x (on 111 commonly-solved)
+- CUTEst suite: 516/727 Optimal, geometric mean speedup 11.2x (on 487 commonly-solved)
+- Electrolyte suite: 13/13 solved, 23.7x geometric mean speedup vs Ipopt
+- Recovered CRESC50 and DISCS via alternative sparse solver fallback
+- Recovered MGH10LS via full iteration budget for unconstrained conservative retry
+
 ## [0.4.0] - 2026-03-15
 
 ### Added
