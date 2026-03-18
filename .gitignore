@@ -49,3 +49,12 @@ hs_suite/hs_ripopt_stderr.txt
 electrolyte_stderr.txt
 opf_stderr.txt
 cho_stderr.txt
+
+# nlp problems
+nlpbench*
+*.lst
+*.sol
+*.dylib
+*.so
+
+.DS_STORE
