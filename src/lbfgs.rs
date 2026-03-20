@@ -4,6 +4,7 @@
 //! gets stuck (wrong basin due to pathological Hessians). L-BFGS builds
 //! a positive-definite curvature approximation from gradients alone.
 
+use crate::logging::rip_log;
 use crate::options::SolverOptions;
 use crate::problem::NlpProblem;
 use crate::result::{SolveResult, SolveStatus};
@@ -43,7 +44,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let max_iter = options.max_iter;
 
     if print_level >= 5 {
-        eprintln!(
+        rip_log!(
             "L-BFGS: start, n={}, f={:.6e}, ||g||={:.6e}",
             n,
             f,
@@ -71,7 +72,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         if grad_norm < tol {
             status = SolveStatus::Optimal;
             if print_level >= 5 {
-                eprintln!(
+                rip_log!(
                     "L-BFGS iter {}: converged (optimal), f={:.6e}, ||g||={:.6e}",
                     k, f, grad_norm
                 );
@@ -86,7 +87,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 // Near-tolerance: trigger promotion strategies in caller
                 status = SolveStatus::NumericalError;
                 if print_level >= 5 {
-                    eprintln!(
+                    rip_log!(
                         "L-BFGS iter {}: near-tolerance but not optimal, f={:.6e}, ||g||={:.6e}",
                         k, f, grad_norm
                     );
@@ -117,7 +118,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     if grad_norm < grad_thresh {
                         status = SolveStatus::NumericalError;
                         if print_level >= 5 {
-                            eprintln!(
+                            rip_log!(
                                 "L-BFGS iter {}: stalled but near-acceptable (||g||={:.2e}, thresh={:.2e})",
                                 k, grad_norm, grad_thresh
                             );
@@ -152,7 +153,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         }
                         None => {
                             if print_level >= 5 {
-                                eprintln!(
+                                rip_log!(
                                     "L-BFGS iter {}: line search failed even with steepest descent",
                                     k
                                 );
@@ -202,14 +203,14 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             if grad_norm < 100.0 * tol {
                 status = SolveStatus::NumericalError;
                 if print_level >= 5 {
-                    eprintln!("L-BFGS iter {}: step too small ({:.2e}), acceptable", k, step_norm);
+                    rip_log!("L-BFGS iter {}: step too small ({:.2e}), acceptable", k, step_norm);
                 }
                 break;
             }
             // Gradient is still large — try steepest descent restart
             if !s_store.is_empty() {
                 if print_level >= 5 {
-                    eprintln!(
+                    rip_log!(
                         "L-BFGS iter {}: step too small ({:.2e}) but ||g||={:.2e}, restarting with steepest descent",
                         k, step_norm, grad_norm
                     );
@@ -233,21 +234,21 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     }
                     None => {
                         if print_level >= 5 {
-                            eprintln!("L-BFGS iter {}: steepest descent restart also failed", k);
+                            rip_log!("L-BFGS iter {}: steepest descent restart also failed", k);
                         }
                         break;
                     }
                 }
             } else {
                 if print_level >= 5 {
-                    eprintln!("L-BFGS iter {}: step too small ({:.2e})", k, step_norm);
+                    rip_log!("L-BFGS iter {}: step too small ({:.2e})", k, step_norm);
                 }
                 break;
             }
         }
 
         if print_level >= 5 && k % 100 == 0 {
-            eprintln!(
+            rip_log!(
                 "L-BFGS iter {}: f={:.6e}, ||g||={:.6e}, alpha={:.2e}",
                 k, f, grad_norm, alpha
             );
@@ -502,6 +503,7 @@ fn inf_norm(v: &[f64]) -> f64 {
 mod tests {
     use super::*;
     use crate::{NlpProblem, SolverOptions};
+
 
     /// min (x-3)^2 + (y-4)^2, unconstrained, start at (0,0)
     struct QuadraticProblem;

@@ -144,9 +144,18 @@ impl Filter {
             let accept = self.armijo_condition(phi_current, phi_trial, grad_phi_step, alpha);
             (accept, true)
         } else {
-            // Use filter acceptance: sufficient decrease in theta or phi
-            let accept = self.sufficient_infeasibility_reduction(theta_current, theta_trial)
-                || phi_trial <= phi_current - self.gamma_phi * theta_current;
+            // Use filter acceptance: sufficient decrease in theta or phi.
+            // Guard: don't accept a step purely via phi decrease when:
+            //   - alpha is tiny (< 1e-5), AND
+            //   - infeasibility is still significant (> 1e-3), AND
+            //   - infeasibility didn't actually decrease.
+            // Without this guard, tiny steps accepted via microscopic phi decrease
+            // (gamma_phi * theta ≈ 1e-8 * 1.36 ≈ 1e-8) block restoration from
+            // firing, causing zigzag-like infinite cycling at stuck infeasibility.
+            let infeasibility_reduced = theta_trial < theta_current * (1.0 - self.gamma_theta);
+            let phi_ok = phi_trial <= phi_current - self.gamma_phi * theta_current;
+            let tiny_useless = alpha < 1e-5 && theta_current > 1e-3 && !infeasibility_reduced;
+            let accept = infeasibility_reduced || (phi_ok && !tiny_useless);
             (accept, false)
         }
     }
@@ -331,11 +340,10 @@ mod tests {
     fn test_armijo_condition() {
         let filter = Filter::new(100.0);
         // phi_trial <= phi_current + eta_phi * alpha * grad_phi_step
-        // eta_phi = 1e-4
+        // eta_phi = 1e-4, threshold: 10.0 + 1e-4 * 1.0 * (-1.0) = 9.9999
         let phi_current = 10.0;
         let grad_phi_step = -1.0;
         let alpha = 1.0;
-        // Threshold: 10.0 + 1e-4 * 1.0 * (-1.0) = 9.9999
         assert!(filter.armijo_condition(phi_current, 9.0, grad_phi_step, alpha));
         assert!(!filter.armijo_condition(phi_current, 10.0, grad_phi_step, alpha));
     }

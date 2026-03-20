@@ -57,6 +57,16 @@ typedef struct {
 } RipoptGamsData;
 
 /* ---------------------------------------------------------------------------
+ * Log callback — routes ripopt output to the GAMS log
+ * --------------------------------------------------------------------------- */
+
+static void gams_log_callback(const char *msg, void *user_data)
+{
+    gevHandle_t gev = (gevHandle_t)user_data;
+    gevLogStat(gev, msg);
+}
+
+/* ---------------------------------------------------------------------------
  * Callback: objective f(x)
  * --------------------------------------------------------------------------- */
 
@@ -583,6 +593,9 @@ DllExport int STDCALL ripCallSolver(void *Cptr)
     /* Default print level */
     ripopt_add_int_option(nlp, "print_level", 5);
 
+    /* Route solver output to GAMS log */
+    ripopt_set_log_callback(nlp, gams_log_callback, (void *)gev);
+
     /* Use L-BFGS if no analytical Hessian */
     if (!data->have_hessian)
         ripopt_add_str_option(nlp, "hessian_approximation", "limited-memory");
@@ -636,6 +649,14 @@ DllExport int STDCALL ripCallSolver(void *Cptr)
         gmoModelStatSet(gmo, model_stat);
         gmoSolveStatSet(gmo, solve_stat);
 
+        /* Report solver time and iteration count to GAMS trace */
+        {
+            int    iters_now = ripopt_get_iter_count(nlp);
+            double wall_now  = ripopt_get_solve_time(nlp);
+            gmoSetHeadnTail(gmo, gmoHresused,  wall_now);
+            gmoSetHeadnTail(gmo, gmoHiterused, (double)iters_now);
+        }
+
         /* Negate constraint multipliers: ripopt lambda -> GAMS pi */
         if (mult_g) {
             for (int i = 0; i < m; i++)
@@ -658,6 +679,42 @@ DllExport int STDCALL ripCallSolver(void *Cptr)
                 gmoSetVarM(gmo, var_marg);
                 free(var_marg);
             }
+        }
+
+        /* Print post-solve summary (mirrors Ipopt's EXIT block) */
+        {
+            int    iters      = ripopt_get_iter_count(nlp);
+            double wall_time  = ripopt_get_solve_time(nlp);
+            double primal_inf = ripopt_get_primal_inf(nlp);
+            double dual_inf   = ripopt_get_dual_inf(nlp);
+            double compl_inf  = ripopt_get_compl_inf(nlp);
+            double gams_obj   = (data->obj_sign < 0.0) ? -obj_val : obj_val;
+
+            gevLogStat(gev, "");
+            snprintf(msg, sizeof(msg),
+                     "Number of Iterations....: %d", iters);
+            gevLogStat(gev, msg);
+            gevLogStat(gev, "");
+            snprintf(msg, sizeof(msg),
+                     "                                   (unscaled)");
+            gevLogStat(gev, msg);
+            snprintf(msg, sizeof(msg),
+                     "Objective..............: %24.16e", gams_obj);
+            gevLogStat(gev, msg);
+            snprintf(msg, sizeof(msg),
+                     "Dual infeasibility.....: %24.16e", dual_inf);
+            gevLogStat(gev, msg);
+            snprintf(msg, sizeof(msg),
+                     "Constraint violation...: %24.16e", primal_inf);
+            gevLogStat(gev, msg);
+            snprintf(msg, sizeof(msg),
+                     "Complementarity........: %24.16e", compl_inf);
+            gevLogStat(gev, msg);
+            gevLogStat(gev, "");
+            snprintf(msg, sizeof(msg),
+                     "Total seconds in RIPOPT: %.3f", wall_time);
+            gevLogStat(gev, msg);
+            gevLogStat(gev, "");
         }
 
         snprintf(msg, sizeof(msg),

@@ -1,3 +1,5 @@
+use crate::logging::rip_log;
+
 /// Status of the solve.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SolveStatus {
@@ -62,24 +64,24 @@ pub struct SolverDiagnostics {
 impl SolverDiagnostics {
     /// Print a structured diagnostic summary to stderr.
     pub fn print_summary(&self, status: SolveStatus, iterations: usize) {
-        eprintln!("\n--- ripopt diagnostics ---");
-        eprintln!("status: {:?}", status);
-        eprintln!("iterations: {}", iterations);
-        eprintln!("wall_time: {:.3}s", self.wall_time_secs);
-        eprintln!("final_mu: {:.2e}", self.final_mu);
-        eprintln!("final_primal_inf: {:.2e}", self.final_primal_inf);
-        eprintln!("final_dual_inf: {:.2e}", self.final_dual_inf);
-        eprintln!("final_compl: {:.2e}", self.final_compl);
-        eprintln!("restoration_count: {}", self.restoration_count);
-        eprintln!("nlp_restoration_count: {}", self.nlp_restoration_count);
-        eprintln!("mu_mode_switches: {}", self.mu_mode_switches);
-        eprintln!("filter_rejects: {}", self.filter_rejects);
-        eprintln!("watchdog_activations: {}", self.watchdog_activations);
-        eprintln!("soc_corrections: {}", self.soc_corrections);
+        rip_log!("\n--- ripopt diagnostics ---");
+        rip_log!("status: {:?}", status);
+        rip_log!("iterations: {}", iterations);
+        rip_log!("wall_time: {:.3}s", self.wall_time_secs);
+        rip_log!("final_mu: {:.2e}", self.final_mu);
+        rip_log!("final_primal_inf: {:.2e}", self.final_primal_inf);
+        rip_log!("final_dual_inf: {:.2e}", self.final_dual_inf);
+        rip_log!("final_compl: {:.2e}", self.final_compl);
+        rip_log!("restoration_count: {}", self.restoration_count);
+        rip_log!("nlp_restoration_count: {}", self.nlp_restoration_count);
+        rip_log!("mu_mode_switches: {}", self.mu_mode_switches);
+        rip_log!("filter_rejects: {}", self.filter_rejects);
+        rip_log!("watchdog_activations: {}", self.watchdog_activations);
+        rip_log!("soc_corrections: {}", self.soc_corrections);
         if let Some(ref fb) = self.fallback_used {
-            eprintln!("fallback_used: {}", fb);
+            rip_log!("fallback_used: {}", fb);
         }
-        eprintln!("--- end diagnostics ---");
+        rip_log!("--- end diagnostics ---");
     }
 }
 

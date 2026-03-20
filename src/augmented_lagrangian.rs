@@ -12,6 +12,7 @@ use crate::lbfgs;
 use crate::options::SolverOptions;
 use crate::problem::NlpProblem;
 use crate::result::{SolveResult, SolveStatus};
+use crate::logging::rip_log;
 
 /// Maximum outer iterations for the augmented Lagrangian loop.
 const MAX_OUTER_ITER: usize = 50;
@@ -197,7 +198,10 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     problem.initial_point(&mut x_current);
 
     let print_level = options.print_level;
-    let tol = options.tol;
+    // Use constr_viol_tol for the outer violation check, not tol.
+    // tol (1e-8) is too tight: the AL stabilizes at ~1e-6 violation which is
+    // practically feasible but never beats 1e-8, wasting all 50 outer iterations.
+    let tol = options.constr_viol_tol.max(options.tol);
 
     let mut total_iters = 0;
     let mut prev_violation = f64::INFINITY;
@@ -232,7 +236,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         let f_val = problem.objective(&x_current);
 
         if print_level >= 5 {
-            eprintln!(
+            rip_log!(
                 "AL outer {}: f={:.6e}, violation={:.6e}, rho={:.2e}",
                 outer, f_val, violation, rho
             );
@@ -243,7 +247,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             let status = SolveStatus::Optimal;
 
             if print_level >= 5 {
-                eprintln!("AL converged: {:?}", status);
+                rip_log!("AL converged: {:?}", status);
             }
 
             return SolveResult {

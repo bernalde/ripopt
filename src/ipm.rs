@@ -70,6 +70,7 @@ use crate::restoration_nlp::RestorationNlp;
 use crate::result::{SolveResult, SolverDiagnostics, SolveStatus};
 use crate::slack_formulation::SlackFormulation;
 use crate::warmstart::WarmStartInitializer;
+use crate::logging::rip_log;
 
 /// NLP problem wrapper that applies gradient-based scaling.
 ///
@@ -540,6 +541,29 @@ impl SolverState {
         let mut g_l = vec![0.0; m];
         let mut g_u = vec![0.0; m];
         problem.constraint_bounds(&mut g_l, &mut g_u);
+
+        // Apply nlp_lower/upper_bound_inf: treat very large bounds as ±infinity.
+        // This is the standard NLP convention (Ipopt uses the same option).
+        // The GAMS/AMPL links map their "infinity" value to ±1e30 (which is finite
+        // in f64). Without this conversion, z_l ≈ mu/1e30 and slack ≈ 1e30, giving
+        // slack * z_l ≈ mu ≠ 0 as a spurious complementarity contribution that blocks
+        // convergence detection even when the NLP is solved.
+        for i in 0..n {
+            if x_l[i] <= options.nlp_lower_bound_inf {
+                x_l[i] = f64::NEG_INFINITY;
+            }
+            if x_u[i] >= options.nlp_upper_bound_inf {
+                x_u[i] = f64::INFINITY;
+            }
+        }
+        for i in 0..m {
+            if g_l[i] <= options.nlp_lower_bound_inf {
+                g_l[i] = f64::NEG_INFINITY;
+            }
+            if g_u[i] >= options.nlp_upper_bound_inf {
+                g_u[i] = f64::INFINITY;
+            }
+        }
 
         let mut x = vec![0.0; n];
         problem.initial_point(&mut x);
@@ -1186,12 +1210,35 @@ fn prepare_fallback_opts(options: &SolverOptions, solve_start: &Instant) -> Opti
 pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult {
     let solve_start = Instant::now();
 
+    // Capture initial objective and feasibility for slow-optimal detection.
+    let (initial_obj, initial_feasible) = {
+        let n_init = problem.num_variables();
+        let m_init = problem.num_constraints();
+        let mut x_init = vec![0.0; n_init];
+        problem.initial_point(&mut x_init);
+        let obj = problem.objective(&x_init);
+        let feasible = if m_init > 0 {
+            let mut g_init = vec![0.0; m_init];
+            let mut g_l = vec![0.0; m_init];
+            let mut g_u = vec![0.0; m_init];
+            problem.constraints(&x_init, &mut g_init);
+            problem.constraint_bounds(&mut g_l, &mut g_u);
+            let cv: f64 = (0..m_init)
+                .map(|i| (g_init[i] - g_l[i]).max(0.0).max(g_u[i] - g_init[i]).max(0.0))
+                .fold(0.0_f64, f64::max);
+            cv < 1e-4
+        } else {
+            true
+        };
+        (obj, feasible)
+    };
+
     // --- Preprocessing: eliminate fixed variables and redundant constraints ---
     if options.enable_preprocessing {
         let prep = crate::preprocessing::PreprocessedProblem::new(problem as &dyn NlpProblem);
         if prep.did_reduce() {
             if options.print_level >= 5 {
-                eprintln!(
+                rip_log!(
                     "ripopt: Preprocessing reduced problem: {} fixed vars, {} redundant constraints ({}x{} -> {}x{})",
                     prep.num_fixed(), prep.num_redundant(),
                     problem.num_variables(), problem.num_constraints(),
@@ -1200,6 +1247,15 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             }
             let mut prep_opts = options.clone();
             prep_opts.enable_preprocessing = false; // prevent re-preprocessing
+            // Limit wall time for the preprocessed solve to half the remaining budget.
+            // Without this, the preprocessed fallback chain can consume the full budget,
+            // leaving no time for the unpreprocessed retry (which often succeeds when
+            // preprocessing changes the problem structure, e.g., ganges.gms 273x273->356x273).
+            if options.max_wall_time > 0.0 {
+                let elapsed = solve_start.elapsed().as_secs_f64();
+                let remaining = (options.max_wall_time - elapsed).max(1.0);
+                prep_opts.max_wall_time = remaining * 0.5;
+            }
             let reduced_result = solve(&prep, &prep_opts);
             let result = prep.unmap_solution(&reduced_result);
             // If preprocessing made things worse, fall back to solving without it
@@ -1207,7 +1263,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 return result;
             }
             if options.print_level >= 5 {
-                eprintln!(
+                rip_log!(
                     "ripopt: Preprocessed solve failed ({:?}), retrying without preprocessing",
                     result.status
                 );
@@ -1223,7 +1279,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         let n = problem.num_variables();
         let m = problem.num_constraints();
         if options.print_level >= 5 {
-            eprintln!(
+            rip_log!(
                 "ripopt: Detected overdetermined NE problem (n={}, m={}), reformulating as least-squares",
                 n, m
             );
@@ -1351,7 +1407,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 theta = best_theta;
 
                 if options.print_level >= 5 {
-                    eprintln!(
+                    rip_log!(
                         "ripopt: Newton polish iter {}: theta={:.2e}, alpha={:.4}",
                         newton_iter + 1, theta, best_alpha,
                     );
@@ -1373,7 +1429,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         };
 
         if options.print_level >= 5 {
-            eprintln!(
+            rip_log!(
                 "ripopt: NE-to-LS result: obj_LS={:.4e}, constraint_violation={:.4e}, status={:?}",
                 ls_result.objective, theta, status
             );
@@ -1388,7 +1444,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         let ls_converged = matches!(ls_result.status, SolveStatus::Optimal);
         if status == SolveStatus::LocalInfeasibility && (m == n || !ls_converged) {
             if options.print_level >= 5 {
-                eprintln!(
+                rip_log!(
                     "ripopt: LS reformulation reports infeasibility (theta={:.4e}, ls_status={:?}), falling back to constrained IPM",
                     theta, ls_result.status
                 );
@@ -1419,7 +1475,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             // (e.g. HEART6 where both LS and constrained IPM fail)
             if options.enable_al_fallback {
                 if options.print_level >= 5 {
-                    eprintln!(
+                    rip_log!(
                         "ripopt: NE constrained IPM fallback failed ({:?}), trying AL",
                         ipm_result.status
                     );
@@ -1436,7 +1492,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 let al_result = crate::augmented_lagrangian::solve(problem, &al_opts);
                 if matches!(al_result.status, SolveStatus::Optimal) {
                     if options.print_level >= 5 {
-                        eprintln!(
+                        rip_log!(
                             "ripopt: NE AL fallback succeeded ({:?}, obj={:.6e})",
                             al_result.status, al_result.objective
                         );
@@ -1451,7 +1507,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         let (final_x, final_status, final_g, final_iters, final_zl, final_zu) =
             if status == SolveStatus::LocalInfeasibility && options.enable_lbfgs_fallback {
                 if options.print_level >= 5 {
-                    eprintln!(
+                    rip_log!(
                         "ripopt: NE-to-LS LocalInfeasibility (theta={:.4e}), trying L-BFGS on LS",
                         theta
                     );
@@ -1468,7 +1524,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         SolveStatus::LocalInfeasibility
                     };
                     if options.print_level >= 5 {
-                        eprintln!(
+                        rip_log!(
                             "ripopt: L-BFGS improved NE-to-LS (theta: {:.4e} -> {:.4e}, status={:?})",
                             theta, theta_lb, new_status
                         );
@@ -1477,7 +1533,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                      lbfgs_ls.bound_multipliers_lower, lbfgs_ls.bound_multipliers_upper)
                 } else {
                     if options.print_level >= 5 {
-                        eprintln!(
+                        rip_log!(
                             "ripopt: L-BFGS did not improve NE-to-LS (theta_lb={:.4e} >= theta={:.4e})",
                             theta_lb, theta
                         );
@@ -1509,7 +1565,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         let lbfgs_result = crate::lbfgs::solve(problem, options);
         if matches!(lbfgs_result.status, SolveStatus::Optimal) {
             if options.print_level >= 5 {
-                eprintln!(
+                rip_log!(
                     "ripopt: L-BFGS solved unconstrained problem ({:?}, obj={:.6e})",
                     lbfgs_result.status, lbfgs_result.objective
                 );
@@ -1517,7 +1573,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             lbfgs_result
         } else {
             if options.print_level >= 5 {
-                eprintln!(
+                rip_log!(
                     "ripopt: L-BFGS failed ({:?}, obj={:.6e}), trying IPM",
                     lbfgs_result.status, lbfgs_result.objective
                 );
@@ -1544,6 +1600,38 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
     };
 
+    // --- Early-out: if NumericalError but state already meets acceptable convergence ---
+    // This happens when the IPM converges to near-optimal and then fails on the *next*
+    // step (e.g., factorization breakdown at a near-zero barrier parameter).
+    // In this case the stored state is already a valid solution; promote it to Optimal.
+    // Use strict dual tolerance (1000x tol) to avoid promoting unbounded/diverged problems:
+    // a genuinely near-optimal point will have very small dual infeasibility, while an
+    // unbounded or cycling problem will have large dual infeasibility.
+    if matches!(result.status, SolveStatus::NumericalError) {
+        let d = &result.diagnostics;
+        let du_tol = options.tol * 1000.0; // e.g. 1e-5 with default tol=1e-8
+        let pr_ok = d.final_primal_inf <= options.constr_viol_tol;
+        // Use z_opt-based dual infeasibility (final_dual_inf_scaled) rather than
+        // iterative z (final_dual_inf). Iterative z can be far from z_opt when many
+        // active bounds haven't converged, giving a large final_dual_inf even when
+        // the stationarity residual (z_opt-based) is tiny. This is consistent with
+        // the stall-near-tolerance check in solve_ipm which also uses z_opt.
+        let du_ok = d.final_dual_inf_scaled <= du_tol;
+        let co_ok = d.final_compl     <= options.compl_inf_tol;
+        if pr_ok && du_ok && co_ok {
+            if options.print_level >= 5 {
+                rip_log!(
+                    "ripopt: NumericalError but state meets acceptable convergence \
+                     (pr={:.2e}, du_opt={:.2e}, co={:.2e}), returning Optimal",
+                    d.final_primal_inf, d.final_dual_inf_scaled, d.final_compl
+                );
+            }
+            result.status = SolveStatus::Optimal;
+            result.diagnostics.wall_time_secs = solve_start.elapsed().as_secs_f64();
+            return result;
+        }
+    }
+
     // --- Diagnostic-driven recovery ---
     // Instead of trying every fallback in a fixed order, diagnose the failure
     // and select targeted recovery strategies.
@@ -1552,7 +1640,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let has_inequalities = has_inequality_constraints(problem);
 
     if options.print_level >= 5 && !matches!(result.status, SolveStatus::Optimal) {
-        eprintln!("ripopt: Failure diagnosis: {:?}", diagnosis);
+        rip_log!("ripopt: Failure diagnosis: {:?}", diagnosis);
     }
 
     // Helper closure: try L-BFGS Hessian fallback
@@ -1565,12 +1653,12 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             opts.enable_lbfgs_hessian_fallback = false;
             opts.stall_iter_limit = 0;
             if options.print_level >= 5 {
-                eprintln!("ripopt: Trying L-BFGS Hessian fallback ({:?})", diagnosis);
+                rip_log!("ripopt: Trying L-BFGS Hessian fallback ({:?})", diagnosis);
             }
             let candidate = solve_ipm(problem, &opts);
             if is_strictly_better(result, &candidate) {
                 if options.print_level >= 5 {
-                    eprintln!(
+                    rip_log!(
                         "ripopt: L-BFGS Hessian fallback succeeded ({:?}, obj={:.6e})",
                         candidate.status, candidate.objective
                     );
@@ -1578,7 +1666,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 *result = candidate;
                 result.diagnostics.fallback_used = Some("lbfgs_hessian".into());
             } else if options.print_level >= 5 {
-                eprintln!("ripopt: L-BFGS Hessian fallback did not improve ({:?})", candidate.status);
+                rip_log!("ripopt: L-BFGS Hessian fallback did not improve ({:?})", candidate.status);
             }
         }
     };
@@ -1590,12 +1678,12 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
         if let Some(opts) = prepare_fallback_opts(options, &solve_start) {
             if options.print_level >= 5 {
-                eprintln!("ripopt: Trying AL fallback ({:?})", diagnosis);
+                rip_log!("ripopt: Trying AL fallback ({:?})", diagnosis);
             }
             let candidate = crate::augmented_lagrangian::solve(problem, &opts);
             if is_strictly_better(result, &candidate) {
                 if options.print_level >= 5 {
-                    eprintln!(
+                    rip_log!(
                         "ripopt: AL fallback succeeded ({:?}, obj={:.6e})",
                         candidate.status, candidate.objective
                     );
@@ -1603,7 +1691,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 *result = candidate;
                 result.diagnostics.fallback_used = Some("augmented_lagrangian".into());
             } else if options.print_level >= 5 {
-                eprintln!("ripopt: AL fallback did not improve ({:?})", candidate.status);
+                rip_log!("ripopt: AL fallback did not improve ({:?})", candidate.status);
             }
         }
     };
@@ -1615,12 +1703,12 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
         if let Some(opts) = prepare_fallback_opts(options, &solve_start) {
             if options.print_level >= 5 {
-                eprintln!("ripopt: Trying SQP fallback ({:?})", diagnosis);
+                rip_log!("ripopt: Trying SQP fallback ({:?})", diagnosis);
             }
             let candidate = crate::sqp::solve(problem, &opts);
             if is_strictly_better(result, &candidate) {
                 if options.print_level >= 5 {
-                    eprintln!(
+                    rip_log!(
                         "ripopt: SQP fallback succeeded ({:?}, obj={:.6e})",
                         candidate.status, candidate.objective
                     );
@@ -1628,7 +1716,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 *result = candidate;
                 result.diagnostics.fallback_used = Some("sqp".into());
             } else if options.print_level >= 5 {
-                eprintln!("ripopt: SQP fallback did not improve ({:?})", candidate.status);
+                rip_log!("ripopt: SQP fallback did not improve ({:?})", candidate.status);
             }
         }
     };
@@ -1641,7 +1729,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         if let Some(mut opts) = prepare_fallback_opts(options, &solve_start) {
             opts.enable_slack_fallback = false; // prevent recursion
             if options.print_level >= 5 {
-                eprintln!("ripopt: Trying slack fallback ({:?})", diagnosis);
+                rip_log!("ripopt: Trying slack fallback ({:?})", diagnosis);
             }
             let slack_prob = SlackFormulation::new(problem, &result.x);
             let candidate = solve_ipm(&slack_prob, &opts);
@@ -1649,7 +1737,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 let n = problem.num_variables();
                 let m = problem.num_constraints();
                 if options.print_level >= 5 {
-                    eprintln!(
+                    rip_log!(
                         "ripopt: Slack fallback succeeded ({:?}, obj={:.6e})",
                         candidate.status, candidate.objective
                     );
@@ -1672,7 +1760,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     diagnostics: diag,
                 });
             } else if options.print_level >= 5 {
-                eprintln!("ripopt: Slack fallback did not improve ({:?})", candidate.status);
+                rip_log!("ripopt: Slack fallback did not improve ({:?})", candidate.status);
             }
         }
         None
@@ -1699,12 +1787,12 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 opts.max_wall_time = remaining * 0.7;
             }
             if options.print_level >= 5 {
-                eprintln!("ripopt: Trying conservative IPM retry (no Gondzio/Mehrotra, no stall detection)");
+                rip_log!("ripopt: Trying conservative IPM retry (no Gondzio/Mehrotra, no stall detection)");
             }
             let candidate = solve_ipm(problem, &opts);
             if is_strictly_better(&result, &candidate) {
                 if options.print_level >= 5 {
-                    eprintln!(
+                    rip_log!(
                         "ripopt: Conservative retry succeeded ({:?}, obj={:.6e})",
                         candidate.status, candidate.objective
                     );
@@ -1712,7 +1800,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 result = candidate;
                 result.diagnostics.fallback_used = Some("conservative_ipm".into());
             } else if options.print_level >= 5 {
-                eprintln!("ripopt: Conservative retry did not improve ({:?})", candidate.status);
+                rip_log!("ripopt: Conservative retry did not improve ({:?})", candidate.status);
             }
         }
     }
@@ -1743,12 +1831,12 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     opts.mehrotra_pc = false;
                     opts.stall_iter_limit = 0;
                     if options.print_level >= 5 {
-                        eprintln!("ripopt: Trying plain IPM retry (no corrections) for DualDivergence");
+                        rip_log!("ripopt: Trying plain IPM retry (no corrections) for DualDivergence");
                     }
                     let candidate = solve_ipm(problem, &opts);
                     if is_strictly_better(&result, &candidate) {
                         if options.print_level >= 5 {
-                            eprintln!(
+                            rip_log!(
                                 "ripopt: Plain IPM retry succeeded ({:?}, obj={:.6e})",
                                 candidate.status, candidate.objective
                             );
@@ -1756,7 +1844,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         result = candidate;
                         result.diagnostics.fallback_used = Some("plain_ipm".into());
                     } else if options.print_level >= 5 {
-                        eprintln!("ripopt: Plain IPM retry did not improve ({:?})", candidate.status);
+                        rip_log!("ripopt: Plain IPM retry did not improve ({:?})", candidate.status);
                     }
                 }
                 // If plain IPM didn't help, try L-BFGS Hessian
@@ -1776,6 +1864,34 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 // Close to optimal but can't meet strict tolerances —
                 // SQP may refine the solution
                 try_sqp(&mut result);
+            }
+        }
+    }
+
+    // Slow-optimal slack fallback: if the initial IPM was Optimal but started from
+    // a feasible point and the objective worsened (or didn't improve) while consuming
+    // >5% of the wall-time budget, it likely converged to a bad local minimum.
+    // The threshold is 5% so zigzag (237s / 3600s = 6.6% of budget) triggers it.
+    if matches!(result.status, SolveStatus::Optimal)
+        && has_inequalities
+        && options.enable_slack_fallback
+        && options.max_wall_time > 0.0
+    {
+        let time_used = solve_start.elapsed().as_secs_f64();
+        // "Worsened from feasible start": started feasible AND final obj is not
+        // better than initial obj (allowing 0.1% tolerance for numerical noise).
+        let worsened_from_feasible = initial_feasible
+            && initial_obj.is_finite()
+            && result.objective > initial_obj - 1e-3 * initial_obj.abs().max(1.0);
+        if time_used > 0.05 * options.max_wall_time && worsened_from_feasible {
+            if options.print_level >= 5 {
+                rip_log!(
+                    "ripopt: Slow-optimal detected (obj={:.4e}, init_obj={:.4e}, time={:.1}s/{:.1}s), trying slack fallback",
+                    result.objective, initial_obj, time_used, options.max_wall_time
+                );
+            }
+            if let Some(slack_result) = try_slack(&mut result) {
+                return slack_result;
             }
         }
     }
@@ -1829,16 +1945,16 @@ impl PhaseTimings {
         let accounted: Duration = phases.iter().map(|(_, d)| *d).sum();
         let other = total.saturating_sub(accounted);
 
-        eprintln!("\nPhase breakdown ({} iterations):", iterations);
+        rip_log!("\nPhase breakdown ({} iterations):", iterations);
         for (name, dur) in &phases {
             let secs = dur.as_secs_f64();
             let pct = if total_secs > 0.0 { 100.0 * secs / total_secs } else { 0.0 };
-            eprintln!("  {:<20} {:>8.3}s ({:>5.1}%)", name, secs, pct);
+            rip_log!("  {:<20} {:>8.3}s ({:>5.1}%)", name, secs, pct);
         }
         let other_secs = other.as_secs_f64();
         let other_pct = if total_secs > 0.0 { 100.0 * other_secs / total_secs } else { 0.0 };
-        eprintln!("  {:<20} {:>8.3}s ({:>5.1}%)", "Other", other_secs, other_pct);
-        eprintln!("  {:<20} {:>8.3}s", "Total", total_secs);
+        rip_log!("  {:<20} {:>8.3}s ({:>5.1}%)", "Other", other_secs, other_pct);
+        rip_log!("  {:<20} {:>8.3}s", "Total", total_secs);
     }
 }
 
@@ -1906,7 +2022,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         && (obj_scaling != 1.0 || g_scaling.iter().any(|&s| s != 1.0))
     {
         let n_scaled_g = g_scaling.iter().filter(|&&s| s != 1.0).count();
-        eprintln!(
+        rip_log!(
             "ripopt: NLP scaling: obj_scaling={:.4e}, {}/{} constraints scaled",
             obj_scaling, n_scaled_g, m_sc
         );
@@ -1918,7 +2034,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         let n_linear = flags.iter().filter(|&&f| f).count();
         if n_linear > 0 {
             if options.print_level >= 5 {
-                eprintln!(
+                rip_log!(
                     "ripopt: Detected {}/{} linear constraints (Hessian contribution skipped)",
                     n_linear, m_sc
                 );
@@ -1949,7 +2065,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let lbfgs_mode = options.hessian_approximation_lbfgs;
     let mut lbfgs_state = if lbfgs_mode {
         if options.print_level >= 5 {
-            eprintln!("ripopt: Using L-BFGS Hessian approximation (limited-memory mode)");
+            rip_log!("ripopt: Using L-BFGS Hessian approximation (limited-memory mode)");
         }
         Some(LbfgsIpmState::new(n))
     } else {
@@ -1995,7 +2111,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         let augmented_nnz = hess_rows_est.len() + jac_rows_est.len() + n;
         let disable = schur_nnz_upper > 2 * augmented_nnz;
         if disable && options.print_level >= 3 {
-            eprintln!(
+            rip_log!(
                 "ripopt: Disabling sparse condensed KKT: Schur complement nnz estimate ({}) > 2× augmented KKT nnz ({})",
                 schur_nnz_upper, augmented_nnz
             );
@@ -2054,6 +2170,15 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let mut stall_best_pr: f64 = f64::INFINITY;
     let mut stall_best_du: f64 = f64::INFINITY;
     let mut stall_no_progress_count: usize = 0;
+
+    // Hard primal stagnation guard: fires when primal infeasibility has not
+    // improved even 1ppm in 300 consecutive iterations while still infeasible.
+    // Works regardless of stall_iter_limit (catches conservative retry cycles too).
+    let mut hard_pr_best: f64 = f64::INFINITY;
+    let mut hard_pr_stall_count: usize = 0;
+
+    // Line-search backtrack count for the previous iteration (printed in table).
+    let mut ls_steps: usize = 0;
 
     // Primal divergence detection: track consecutive iterations where pr is growing.
     // When pr grows steadily post-restoration, re-trigger restoration rather than
@@ -2193,23 +2318,17 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let theta_init = state.constraint_violation();
     filter.set_theta_min_from_initial(theta_init);
 
-    // Print header
-    if options.print_level >= 5 {
-        eprintln!(
-            "{:>4} {:>14} {:>10} {:>10} {:>10} {:>10} {:>8} {:>8}",
-            "iter",
-            "objective",
-            "inf_pr",
-            "inf_du",
-            "compl",
-            "mu",
-            "alpha_p",
-            "alpha_d"
+    // Print iteration table header (shown at print_level >= 3, reprinted every 25 rows)
+    let mut log_line_count: usize = 0;
+    if options.print_level >= 3 {
+        rip_log!(
+            "{:>4}  {:>14}  {:>10}  {:>10}  {:>7}  {:>8}  {:>8}  {:>3}",
+            "iter", "objective", "inf_pr", "inf_du", "lg(mu)", "alpha_pr", "alpha_du", "ls"
         );
     }
 
     if options.print_level >= 5 {
-        eprintln!("ripopt: Starting main loop (n={}, m={})", n, m);
+        rip_log!("ripopt: Starting main loop (n={}, m={})", n, m);
     }
 
     // Main IPM loop
@@ -2229,7 +2348,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         if iteration < 3 && options.early_stall_timeout > 0.0 {
             if start_time.elapsed().as_secs_f64() > options.early_stall_timeout {
                 if options.print_level >= 3 {
-                    eprintln!(
+                    rip_log!(
                         "ripopt: Early stall at iteration {} ({:.1}s elapsed), terminating",
                         iteration, start_time.elapsed().as_secs_f64()
                     );
@@ -2400,18 +2519,27 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         );
         let compl_inf_best = compl_inf.min(compl_inf_opt);
 
-        if options.print_level >= 5 {
-            eprintln!(
-                "{:>4} {:>14.7e} {:>10.2e} {:>10.2e} {:>10.2e} {:>10.2e} {:>8.2e} {:>8.2e}",
+        if options.print_level >= 3 {
+            // Reprint header every 25 data rows for readability
+            if log_line_count > 0 && log_line_count % 25 == 0 {
+                rip_log!(
+                    "{:>4}  {:>14}  {:>10}  {:>10}  {:>7}  {:>8}  {:>8}  {:>3}",
+                    "iter", "objective", "inf_pr", "inf_du", "lg(mu)", "alpha_pr", "alpha_du", "ls"
+                );
+            }
+            let lg_mu = if state.mu > 0.0 { state.mu.log10() } else { f64::NEG_INFINITY };
+            rip_log!(
+                "{:>4}  {:>14.7e}  {:>10.2e}  {:>10.2e}  {:>7.1}  {:>8.2e}  {:>8.2e}  {:>3}",
                 iteration,
                 state.obj / state.obj_scaling,
                 primal_inf,
                 dual_inf,
-                compl_inf,
-                state.mu,
+                lg_mu,
                 state.alpha_primal,
                 state.alpha_dual,
+                ls_steps,
             );
+            log_line_count += 1;
         }
 
         // Compute multiplier scaling for convergence check
@@ -2511,7 +2639,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         };
                         if let ConvergenceStatus::Converged = check_convergence(&avg_conv, options, 0) {
                             if options.print_level >= 3 {
-                                eprintln!("ripopt: Iterate averaging promoted near-tolerance -> Optimal (du={:.2e})", avg_du);
+                                rip_log!("ripopt: Iterate averaging promoted near-tolerance -> Optimal (du={:.2e})", avg_du);
                             }
                             return make_result(&state, SolveStatus::Optimal);
                         }
@@ -2529,7 +2657,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     _ = std::mem::replace(&mut tried_active_set, true);
                     if let Some(result) = try_active_set_solve(&mut state, problem, options, linear_constraints.as_deref(), lbfgs_mode) {
                         if options.print_level >= 3 {
-                            eprintln!("ripopt: Active set solve promoted Acceptable -> Optimal");
+                            rip_log!("ripopt: Active set solve promoted Acceptable -> Optimal");
                         }
                         return result;
                     }
@@ -2594,7 +2722,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         };
                         if let ConvergenceStatus::Converged = check_convergence(&snap_conv, options, 0) {
                             if options.print_level >= 3 {
-                                eprintln!(
+                                rip_log!(
                                     "ripopt: Complementarity snap promoted near-tolerance -> Optimal (compl {:.2e} -> {:.2e}, du {:.2e})",
                                     compl_inf_now, snap_compl, snap_du
                                 );
@@ -2756,7 +2884,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     let stall_co_ok = compl_inf_best <= (stall_near_tol * s_d_for_acc).max(1e-2);
                     if stall_pr_ok && stall_du_ok && stall_co_ok {
                         if options.print_level >= 3 {
-                            eprintln!(
+                            rip_log!(
                                 "ripopt: Stalled but near-tolerance (pr={:.2e}, du={:.2e}, co={:.2e}), returning NumericalError",
                                 primal_inf, dual_inf, compl_inf_best
                             );
@@ -2824,7 +2952,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             && opt_co_best <= 10.0 * options.compl_inf_tol;
                         if sc && usc {
                             if options.print_level >= 3 {
-                                eprintln!(
+                                rip_log!(
                                     "ripopt: Stalled but near-tolerance via optimal duals (pr={:.2e}, du_opt={:.2e}, co={:.2e}), returning NumericalError",
                                     primal_inf, opt_du, opt_co_best
                                 );
@@ -2833,9 +2961,34 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         }
                     }
                     if options.print_level >= 3 {
-                        eprintln!(
+                        rip_log!(
                             "ripopt: Stalled for {} iterations without progress (alpha_p={:.2e}, pr={:.2e}, du={:.2e}), terminating",
                             stall_no_progress_count, state.alpha_primal, primal_inf, dual_inf
+                        );
+                    }
+                    return make_result(&state, SolveStatus::NumericalError);
+                }
+            }
+        }
+
+        // Hard primal stagnation guard: fires when constraint violation has not
+        // improved by 10% over 50 consecutive iterations.
+        // Only active when stall_iter_limit==0 (conservative retry), because in the
+        // main solve the filter naturally triggers restoration when the line search
+        // fails — firing early here prevents restoration from doing its job.
+        if iteration > 10 && m > 0 && primal_inf > options.constr_viol_tol
+            && options.stall_iter_limit == 0
+        {
+            if primal_inf < 0.90 * hard_pr_best {
+                hard_pr_best = primal_inf;
+                hard_pr_stall_count = 0;
+            } else {
+                hard_pr_stall_count += 1;
+                if hard_pr_stall_count >= 50 {
+                    if options.print_level >= 3 {
+                        rip_log!(
+                            "ripopt: Hard primal stagnation for {} iters (pr={:.2e} unchanged), terminating",
+                            hard_pr_stall_count, primal_inf
                         );
                     }
                     return make_result(&state, SolveStatus::NumericalError);
@@ -2868,7 +3021,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     iteration, consecutive_pr_increase, pr_at_divergence_start, primal_inf
                 );
                 if options.print_level >= 3 {
-                    eprintln!(
+                    rip_log!(
                         "ripopt: Primal divergence detected (pr grew {:.2e} -> {:.2e} over {} iters), re-entering restoration",
                         pr_at_divergence_start, primal_inf, consecutive_pr_increase
                     );
@@ -2949,7 +3102,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 if bw > n / 2 {
                     // Condensed system is too dense — fall back to augmented KKT
                     if options.print_level >= 3 {
-                        eprintln!(
+                        rip_log!(
                             "ripopt: Sparse condensed S has bandwidth {} for n={}, switching to augmented KKT",
                             bw, n
                         );
@@ -2968,11 +3121,11 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     ));
                 } else if bw * bw <= n {
                     if options.print_level >= 5 {
-                        eprintln!("ripopt: Sparse condensed S has bandwidth {} for n={}, using banded solver", bw, n);
+                        rip_log!("ripopt: Sparse condensed S has bandwidth {} for n={}, using banded solver", bw, n);
                     }
                     lin_solver = Box::new(BandedLdl::new());
                 } else if options.print_level >= 5 {
-                    eprintln!("ripopt: Sparse condensed S has bandwidth {} for n={}, using sparse solver", bw, n);
+                    rip_log!("ripopt: Sparse condensed S has bandwidth {} for n={}, using sparse solver", bw, n);
                 }
             }
         }
@@ -3741,6 +3894,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         // The !step_accepted branch below handles filter updates and restoration.
         // No-op here; just skip the line search loop.
 
+        ls_steps = 0; // reset backtrack counter for this iteration
         for _ls_iter in 0..40 {
             if force_restoration {
                 break;
@@ -3781,6 +3935,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 || g_trial.iter().any(|v| v.is_nan() || v.is_infinite())
             {
                 alpha *= 0.5;
+                ls_steps += 1;
                 continue;
             }
 
@@ -3895,6 +4050,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
             // Backtrack
             alpha *= 0.5;
+            ls_steps += 1;
         }
 
         if !step_accepted {
@@ -4221,10 +4377,11 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
         prev_dy = Some(state.dy.clone());
         // Ipopt kappa_sigma safeguard: keep z*s in [mu_ks/kappa_sigma, kappa_sigma*mu_ks]
-        // In free mode, use avg_compl (clamped to [mu, 1e3]) for more stable z bounds
         let kappa_sigma = 1e10;
         let mu_ks = if mu_state.mode == MuMode::Free {
-            compute_avg_complementarity(&state).max(state.mu).min(1e3)
+            compute_avg_complementarity(&state)
+                .max(state.mu)
+                .min(1e3)
         } else {
             state.mu
         };
@@ -4414,9 +4571,6 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             if avg_compl > 0.0 {
                                 state.mu = (options.adaptive_mu_monotone_init_factor * avg_compl)
                                     .clamp(options.mu_min, 1e5);
-                            } else {
-                                state.mu = (options.mu_linear_decrease_factor * state.mu)
-                                    .max(options.mu_min);
                             }
                             filter.reset();
                             let theta_new = state.constraint_violation();
@@ -4426,9 +4580,6 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             let avg_compl = compute_avg_complementarity(&state);
                             if avg_compl > 0.0 {
                                 state.mu = (avg_compl / options.kappa).clamp(options.mu_min, 1e5);
-                            } else {
-                                state.mu = (options.mu_linear_decrease_factor * state.mu)
-                                    .max(options.mu_min);
                             }
                         }
                     }
@@ -4580,7 +4731,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         } else {
             1.0
         };
-        eprintln!(
+        rip_log!(
             "ripopt: MaxIter diag: pr={:.2e} du={:.2e}(t={:.2e}) du_u={:.2e}(t={:.0e}) co={:.2e} co_opt={:.2e} co_best={:.2e}(t={:.2e}/{:.2e}) mu={:.2e} sd={:.1} ac={}",
             final_primal_inf,
             final_dual_inf, options.tol * s_d,
@@ -5151,7 +5302,7 @@ fn attempt_nlp_restoration<P: NlpProblem>(
     let m = state.m;
 
     if options.print_level >= 5 {
-        eprintln!(
+        rip_log!(
             "ripopt: Entering NLP restoration (theta={:.2e}, mu={:.2e})",
             theta_current, state.mu
         );
@@ -5223,7 +5374,7 @@ fn attempt_nlp_restoration<P: NlpProblem>(
         // Log slack residuals to diagnose restoration effectiveness
         let sum_p: f64 = result.x[n..n + m].iter().sum();
         let sum_n: f64 = result.x[n + m..n + 2 * m].iter().sum();
-        eprintln!(
+        rip_log!(
             "ripopt: NLP restoration result: status={:?}, theta_new={:.2e} (was {:.2e}), phi_new={:.2e}, sum_p={:.2e}, sum_n={:.2e}, iters={}",
             result.status, theta_new, theta_current, phi_new, sum_p, sum_n, result.iterations
         );

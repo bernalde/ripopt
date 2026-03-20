@@ -6,6 +6,7 @@
 //!
 //! Used as a fallback when IPM/AL/slack fail.
 
+use crate::logging::rip_log;
 use crate::linear_solver::dense::DenseLdl;
 use crate::linear_solver::{KktMatrix, LinearSolver};
 use crate::options::SolverOptions;
@@ -121,7 +122,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         let c_inf = c.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
 
         if options.print_level >= 7 {
-            eprintln!(
+            rip_log!(
                 "  SQP iter {}: f={:.6e}, ||grad_L||={:.2e}, ||c||={:.2e}",
                 k, f, grad_l_inf, c_inf
             );
@@ -295,6 +296,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 #[cfg(test)]
 mod tests {
     use super::*;
+
 
     /// HS071: min x0*x3*(x0+x1+x2) + x2
     /// s.t. x0*x1*x2*x3 >= 25, x0^2+x1^2+x2^2+x3^2 = 40

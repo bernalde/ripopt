@@ -97,6 +97,16 @@ pub struct CApiProblem {
     /// Initial point supplied by the caller via `ripopt_solve`.
     initial_x: Vec<f64>,
     user_data: *mut std::ffi::c_void,
+    /// Optional log callback (set via `ripopt_set_log_callback`).
+    log_cb: Option<crate::logging::LogCb>,
+    log_cb_user_data: *mut std::ffi::c_void,
+    /// Diagnostics from the most recent solve.
+    last_iterations: usize,
+    last_obj: f64,
+    last_primal_inf: f64,
+    last_dual_inf: f64,
+    last_compl: f64,
+    last_wall_time: f64,
 }
 
 // SAFETY: The user is responsible for ensuring `user_data` is valid across
@@ -344,6 +354,14 @@ pub unsafe extern "C" fn ripopt_create(
         options: SolverOptions::default(),
         initial_x: vec![0.0; n],
         user_data: std::ptr::null_mut(),
+        log_cb: None,
+        log_cb_user_data: std::ptr::null_mut(),
+        last_iterations: 0,
+        last_obj: 0.0,
+        last_primal_inf: 0.0,
+        last_dual_inf: 0.0,
+        last_compl: 0.0,
+        last_wall_time: 0.0,
     });
     Box::into_raw(problem)
 }
@@ -542,8 +560,24 @@ pub unsafe extern "C" fn ripopt_solve(
     p.initial_x
         .copy_from_slice(std::slice::from_raw_parts(x, p.n));
 
+    // Install log callback for this thread (if one was registered)
+    if let Some(cb) = p.log_cb {
+        crate::logging::set_log_callback(Some((cb, p.log_cb_user_data)));
+    }
+
     // Solve
     let result: SolveResult = crate::solve(p, &p.options.clone());
+
+    // Clear log callback
+    crate::logging::set_log_callback(None);
+
+    // Store diagnostics for getter functions
+    p.last_iterations = result.iterations;
+    p.last_obj = result.objective;
+    p.last_primal_inf = result.diagnostics.final_primal_inf;
+    p.last_dual_inf = result.diagnostics.final_dual_inf;
+    p.last_compl = result.diagnostics.final_compl;
+    p.last_wall_time = result.diagnostics.wall_time_secs;
 
     // Copy primal solution back
     std::slice::from_raw_parts_mut(x, p.n).copy_from_slice(&result.x);
@@ -573,4 +607,72 @@ pub unsafe extern "C" fn ripopt_solve(
     }
 
     map_status(result.status) as c_int
+}
+
+/// Register a log callback for this problem.
+///
+/// When set, all solver output (iteration table, diagnostics, warnings) is
+/// forwarded to `callback(msg, user_data)` instead of being written to stderr.
+/// Call with `callback = NULL` to revert to stderr.
+///
+/// The callback is thread-local: it only applies to the thread that calls
+/// `ripopt_solve`, and is cleared automatically after each solve.
+///
+/// # Safety
+/// `problem` must be valid. `callback` and `user_data` must remain valid
+/// for the duration of the next `ripopt_solve` call.
+#[no_mangle]
+pub unsafe extern "C" fn ripopt_set_log_callback(
+    problem: *mut CApiProblem,
+    callback: Option<crate::logging::LogCb>,
+    user_data: *mut std::ffi::c_void,
+) {
+    let p = &mut *problem;
+    p.log_cb = callback;
+    p.log_cb_user_data = user_data;
+}
+
+/// Return the number of iterations from the most recent solve.
+///
+/// # Safety
+/// `problem` must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn ripopt_get_iter_count(problem: *const CApiProblem) -> c_int {
+    (*problem).last_iterations as c_int
+}
+
+/// Return the wall-clock solve time (seconds) from the most recent solve.
+///
+/// # Safety
+/// `problem` must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn ripopt_get_solve_time(problem: *const CApiProblem) -> c_double {
+    (*problem).last_wall_time
+}
+
+/// Return the final primal infeasibility from the most recent solve.
+///
+/// # Safety
+/// `problem` must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn ripopt_get_primal_inf(problem: *const CApiProblem) -> c_double {
+    (*problem).last_primal_inf
+}
+
+/// Return the final dual infeasibility from the most recent solve.
+///
+/// # Safety
+/// `problem` must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn ripopt_get_dual_inf(problem: *const CApiProblem) -> c_double {
+    (*problem).last_dual_inf
+}
+
+/// Return the final complementarity error from the most recent solve.
+///
+/// # Safety
+/// `problem` must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn ripopt_get_compl_inf(problem: *const CApiProblem) -> c_double {
+    (*problem).last_compl
 }

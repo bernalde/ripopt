@@ -120,6 +120,48 @@ RipoptProblem ripopt_create(
 void ripopt_free(RipoptProblem problem);
 
 /* -------------------------------------------------------------------------
+ * Log callback
+ *
+ * When installed, all solver output (iteration table, warnings, diagnostics)
+ * is forwarded to the callback instead of being written to stderr.
+ * The callback receives a NUL-terminated message string and the user_data
+ * pointer provided at registration.
+ *
+ * The callback is thread-local and is cleared automatically after each
+ * ripopt_solve() call.  Pass callback = NULL to revert to stderr output.
+ * ------------------------------------------------------------------------- */
+
+typedef void (*RipoptLogCB)(const char *msg, void *user_data);
+
+/** Register a log callback for solver output.
+ *
+ * Must be called before ripopt_solve().  The callback and user_data pointers
+ * must remain valid for the duration of the solve.
+ */
+void ripopt_set_log_callback(RipoptProblem problem,
+                              RipoptLogCB callback,
+                              void *user_data);
+
+/* -------------------------------------------------------------------------
+ * Post-solve statistics (valid after ripopt_solve() returns)
+ * ------------------------------------------------------------------------- */
+
+/** Number of IPM iterations in the most recent solve. */
+int    ripopt_get_iter_count(RipoptProblem problem);
+
+/** Wall-clock solve time in seconds from the most recent solve. */
+double ripopt_get_solve_time(RipoptProblem problem);
+
+/** Final primal infeasibility from the most recent solve. */
+double ripopt_get_primal_inf(RipoptProblem problem);
+
+/** Final dual infeasibility from the most recent solve. */
+double ripopt_get_dual_inf(RipoptProblem problem);
+
+/** Final complementarity error from the most recent solve. */
+double ripopt_get_compl_inf(RipoptProblem problem);
+
+/* -------------------------------------------------------------------------
  * Options (key/value, mirrors Ipopt option names)
  * All functions return 1 on success, 0 if the keyword is unknown.
  * ------------------------------------------------------------------------- */
