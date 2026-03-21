@@ -120,11 +120,11 @@ Run the benchmarks yourself: `make benchmark`
 
 ### Domain-Specific Benchmarks
 
-| Suite | Problems | ripopt | Ipopt | Notes |
-|-------|----------|--------|-------|-------|
-| Electrolyte thermodynamics | 13 | **13/13 (100%)** | 12/13 (92.3%) | 23.7x geo mean speedup; ripopt uniquely solves seawater speciation |
-| AC Optimal Power Flow | 4 | **4/4 (100%)** | 4/4 (100%) | Ipopt faster on OPF (0.1x geo mean) |
-| CHO parameter estimation | 1 | 0/1 | 0/1 | Large-scale (n=21,672, m=21,660); both hit iteration limit |
+| Suite                      | Problems | ripopt           | Ipopt         | Notes                                                              |
+|----------------------------|----------|------------------|---------------|--------------------------------------------------------------------|
+| Electrolyte thermodynamics | 13       | **13/13 (100%)** | 12/13 (92.3%) | 23.7x geo mean speedup; ripopt uniquely solves seawater speciation |
+| AC Optimal Power Flow      | 4        | **4/4 (100%)**   | 4/4 (100%)    | Ipopt faster on OPF (0.1x geo mean)                                |
+| CHO parameter estimation   | 1        | 0/1              | 0/1           | Large-scale (n=21,672, m=21,660); both hit iteration limit         |
 
 Run all benchmarks: `make benchmark`
 
@@ -354,29 +354,29 @@ println!("Iterations: {}", result.iterations);
 
 Key options (all have Ipopt-matching defaults):
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `tol` | 1e-8 | Convergence tolerance |
-| `max_iter` | 3000 | Maximum iterations |
-| `acceptable_tol` | 1e-4 | Acceptable (less strict) tolerance |
-| `acceptable_iter` | 10 | Consecutive acceptable iterations needed |
-| `mu_init` | 0.1 | Initial barrier parameter |
-| `print_level` | 5 | Output verbosity (0=silent, 5=verbose) |
-| `mu_strategy_adaptive` | true | Adaptive vs monotone barrier update |
-| `max_soc` | 4 | Maximum second-order correction steps |
-| `max_wall_time` | 0.0 | Wall-clock time limit in seconds (0=no limit) |
-| `warm_start` | false | Enable warm-start initialization |
-| `constr_viol_tol` | 1e-4 | Constraint violation tolerance |
-| `dual_inf_tol` | 1.0 | Dual infeasibility tolerance |
-| `enable_preprocessing` | true | Eliminate fixed variables and redundant constraints |
-| `detect_linear_constraints` | true | Skip Hessian for linear constraints |
-| `enable_sqp_fallback` | true | SQP fallback for constrained problems |
-| `hessian_approximation_lbfgs` | false | Use L-BFGS Hessian approximation (no exact Hessian needed) |
-| `enable_lbfgs_hessian_fallback` | true | Auto-retry with L-BFGS Hessian when exact Hessian fails |
-| `mehrotra_pc` | true | Mehrotra predictor-corrector for better centering |
-| `gondzio_mcc_max` | 3 | Maximum Gondzio centrality corrections per iteration |
-| `early_stall_timeout` | 10.0 | Max seconds for first 3 iterations (0=off) |
-| `linear_solver` | direct | KKT solver: direct, iterative (MINRES), or hybrid |
+| Option                          | Default | Description                                                |
+|---------------------------------|---------|------------------------------------------------------------|
+| `tol`                           | 1e-8    | Convergence tolerance                                      |
+| `max_iter`                      | 3000    | Maximum iterations                                         |
+| `acceptable_tol`                | 1e-4    | Acceptable (less strict) tolerance                         |
+| `acceptable_iter`               | 10      | Consecutive acceptable iterations needed                   |
+| `mu_init`                       | 0.1     | Initial barrier parameter                                  |
+| `print_level`                   | 5       | Output verbosity (0=silent, 5=verbose)                     |
+| `mu_strategy_adaptive`          | true    | Adaptive vs monotone barrier update                        |
+| `max_soc`                       | 4       | Maximum second-order correction steps                      |
+| `max_wall_time`                 | 0.0     | Wall-clock time limit in seconds (0=no limit)              |
+| `warm_start`                    | false   | Enable warm-start initialization                           |
+| `constr_viol_tol`               | 1e-4    | Constraint violation tolerance                             |
+| `dual_inf_tol`                  | 1.0     | Dual infeasibility tolerance                               |
+| `enable_preprocessing`          | true    | Eliminate fixed variables and redundant constraints        |
+| `detect_linear_constraints`     | true    | Skip Hessian for linear constraints                        |
+| `enable_sqp_fallback`           | true    | SQP fallback for constrained problems                      |
+| `hessian_approximation_lbfgs`   | false   | Use L-BFGS Hessian approximation (no exact Hessian needed) |
+| `enable_lbfgs_hessian_fallback` | true    | Auto-retry with L-BFGS Hessian when exact Hessian fails    |
+| `mehrotra_pc`                   | true    | Mehrotra predictor-corrector for better centering          |
+| `gondzio_mcc_max`               | 3       | Maximum Gondzio centrality corrections per iteration       |
+| `early_stall_timeout`           | 10.0    | Max seconds for first 3 iterations (0=off)                 |
+| `linear_solver`                 | direct  | KKT solver: direct, iterative (MINRES), or hybrid          |
 
 ### Result
 
@@ -500,17 +500,17 @@ The `user_data` pointer is forwarded to every callback unchanged — use it to p
 
 ### Return status
 
-| Code | Enum constant | Meaning |
-|------|---------------|---------|
-| 0  | `RIPOPT_SOLVE_SUCCEEDED` | Converged to optimal solution |
-| 1  | `RIPOPT_ACCEPTABLE_LEVEL` | Converged to acceptable (less strict) tolerance |
-| 2  | `RIPOPT_INFEASIBLE_PROBLEM` | Problem is locally infeasible |
-| 5  | `RIPOPT_MAXITER_EXCEEDED` | Reached iteration limit |
-| 6  | `RIPOPT_RESTORATION_FAILED` | Feasibility restoration failed |
-| 7  | `RIPOPT_ERROR_IN_STEP_COMPUTATION` | Numerical difficulties |
-| 10 | `RIPOPT_NOT_ENOUGH_DEGREES_OF_FREEDOM` | Problem has too few free variables |
-| 11 | `RIPOPT_INVALID_PROBLEM_DEFINITION` | Problem appears unbounded |
-| -1 | `RIPOPT_INTERNAL_ERROR` | Internal error |
+| Code | Enum constant                          | Meaning                                         |
+|------|----------------------------------------|-------------------------------------------------|
+| 0    | `RIPOPT_SOLVE_SUCCEEDED`               | Converged to optimal solution                   |
+| 1    | `RIPOPT_ACCEPTABLE_LEVEL`              | Converged to acceptable (less strict) tolerance |
+| 2    | `RIPOPT_INFEASIBLE_PROBLEM`            | Problem is locally infeasible                   |
+| 5    | `RIPOPT_MAXITER_EXCEEDED`              | Reached iteration limit                         |
+| 6    | `RIPOPT_RESTORATION_FAILED`            | Feasibility restoration failed                  |
+| 7    | `RIPOPT_ERROR_IN_STEP_COMPUTATION`     | Numerical difficulties                          |
+| 10   | `RIPOPT_NOT_ENOUGH_DEGREES_OF_FREEDOM` | Problem has too few free variables              |
+| 11   | `RIPOPT_INVALID_PROBLEM_DEFINITION`    | Problem appears unbounded                       |
+| -1   | `RIPOPT_INTERNAL_ERROR`                | Internal error                                  |
 
 Status 0 and 1 indicate a successful solve. All others indicate failure — check your problem formulation, initial point, or try adjusting options.
 

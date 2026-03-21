@@ -7,7 +7,7 @@
     "status": "MaxIterations",
     "objective": 259937.4333847187,
     "iterations": 50,
-    "solve_time": 310.231932875
+    "solve_time": 308.062952916
   },
   {
     "solver": "ipopt",
@@ -17,6 +17,6 @@
     "status": "MaxIter",
     "objective": 65314.141495899035,
     "iterations": 5000,
-    "solve_time": 3243.718566167
+    "solve_time": 3261.393377083
   }
 ]

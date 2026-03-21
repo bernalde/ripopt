@@ -1211,27 +1211,8 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let solve_start = Instant::now();
 
     // Capture initial objective and feasibility for slow-optimal detection.
-    let (initial_obj, initial_feasible) = {
-        let n_init = problem.num_variables();
-        let m_init = problem.num_constraints();
-        let mut x_init = vec![0.0; n_init];
-        problem.initial_point(&mut x_init);
-        let obj = problem.objective(&x_init);
-        let feasible = if m_init > 0 {
-            let mut g_init = vec![0.0; m_init];
-            let mut g_l = vec![0.0; m_init];
-            let mut g_u = vec![0.0; m_init];
-            problem.constraints(&x_init, &mut g_init);
-            problem.constraint_bounds(&mut g_l, &mut g_u);
-            let cv: f64 = (0..m_init)
-                .map(|i| (g_init[i] - g_l[i]).max(0.0).max(g_u[i] - g_init[i]).max(0.0))
-                .fold(0.0_f64, f64::max);
-            cv < 1e-4
-        } else {
-            true
-        };
-        (obj, feasible)
-    };
+    // NOTE: disabled -- extra problem evaluations here change CUTEst FP state and cause regressions.
+    let (initial_obj, initial_feasible) = (f64::INFINITY, false);
 
     // --- Preprocessing: eliminate fixed variables and redundant constraints ---
     if options.enable_preprocessing {
@@ -1600,38 +1581,6 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
     };
 
-    // --- Early-out: if NumericalError but state already meets acceptable convergence ---
-    // This happens when the IPM converges to near-optimal and then fails on the *next*
-    // step (e.g., factorization breakdown at a near-zero barrier parameter).
-    // In this case the stored state is already a valid solution; promote it to Optimal.
-    // Use strict dual tolerance (1000x tol) to avoid promoting unbounded/diverged problems:
-    // a genuinely near-optimal point will have very small dual infeasibility, while an
-    // unbounded or cycling problem will have large dual infeasibility.
-    if matches!(result.status, SolveStatus::NumericalError) {
-        let d = &result.diagnostics;
-        let du_tol = options.tol * 1000.0; // e.g. 1e-5 with default tol=1e-8
-        let pr_ok = d.final_primal_inf <= options.constr_viol_tol;
-        // Use z_opt-based dual infeasibility (final_dual_inf_scaled) rather than
-        // iterative z (final_dual_inf). Iterative z can be far from z_opt when many
-        // active bounds haven't converged, giving a large final_dual_inf even when
-        // the stationarity residual (z_opt-based) is tiny. This is consistent with
-        // the stall-near-tolerance check in solve_ipm which also uses z_opt.
-        let du_ok = d.final_dual_inf_scaled <= du_tol;
-        let co_ok = d.final_compl     <= options.compl_inf_tol;
-        if pr_ok && du_ok && co_ok {
-            if options.print_level >= 5 {
-                rip_log!(
-                    "ripopt: NumericalError but state meets acceptable convergence \
-                     (pr={:.2e}, du_opt={:.2e}, co={:.2e}), returning Optimal",
-                    d.final_primal_inf, d.final_dual_inf_scaled, d.final_compl
-                );
-            }
-            result.status = SolveStatus::Optimal;
-            result.diagnostics.wall_time_secs = solve_start.elapsed().as_secs_f64();
-            return result;
-        }
-    }
-
     // --- Diagnostic-driven recovery ---
     // Instead of trying every fallback in a fixed order, diagnose the failure
     // and select targeted recovery strategies.
@@ -1893,6 +1842,30 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             if let Some(slack_result) = try_slack(&mut result) {
                 return slack_result;
             }
+        }
+    }
+
+    // --- Late early-out: NumericalError but state meets acceptable convergence ---
+    // Applied AFTER all fallbacks so the conservative retry has a chance to fix
+    // wrong local minima before we promote them.  This handles GAMS-style problems
+    // where the IPM converges near-optimal and then fails (e.g., factorization
+    // breakdown at near-zero barrier parameter), and all fallbacks time out quickly.
+    // Use z_opt-based dual infeasibility (final_dual_inf_scaled) rather than iterative z.
+    if matches!(result.status, SolveStatus::NumericalError) {
+        let d = &result.diagnostics;
+        let du_tol = options.tol * 1000.0; // e.g. 1e-5 with default tol=1e-8
+        let pr_ok = d.final_primal_inf <= options.constr_viol_tol;
+        let du_ok = d.final_dual_inf_scaled <= du_tol;
+        let co_ok = d.final_compl <= options.compl_inf_tol;
+        if pr_ok && du_ok && co_ok {
+            if options.print_level >= 5 {
+                rip_log!(
+                    "ripopt: NumericalError but state meets acceptable convergence \
+                     (pr={:.2e}, du_opt={:.2e}, co={:.2e}), returning Optimal",
+                    d.final_primal_inf, d.final_dual_inf_scaled, d.final_compl
+                );
+            }
+            result.status = SolveStatus::Optimal;
         }
     }
 
@@ -2171,12 +2144,6 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let mut stall_best_du: f64 = f64::INFINITY;
     let mut stall_no_progress_count: usize = 0;
 
-    // Hard primal stagnation guard: fires when primal infeasibility has not
-    // improved even 1ppm in 300 consecutive iterations while still infeasible.
-    // Works regardless of stall_iter_limit (catches conservative retry cycles too).
-    let mut hard_pr_best: f64 = f64::INFINITY;
-    let mut hard_pr_stall_count: usize = 0;
-
     // Line-search backtrack count for the previous iteration (printed in table).
     let mut ls_steps: usize = 0;
 
@@ -2322,8 +2289,8 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let mut log_line_count: usize = 0;
     if options.print_level >= 3 {
         rip_log!(
-            "{:>4}  {:>14}  {:>10}  {:>10}  {:>7}  {:>8}  {:>8}  {:>3}",
-            "iter", "objective", "inf_pr", "inf_du", "lg(mu)", "alpha_pr", "alpha_du", "ls"
+            "{:>4}  {:>14}  {:>10}  {:>10}  {:>10}  {:>8}  {:>8}  {:>3}",
+            "iter", "objective", "inf_pr", "inf_du", "mu", "alpha_pr", "alpha_du", "ls"
         );
     }
 
@@ -2527,14 +2494,13 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     "iter", "objective", "inf_pr", "inf_du", "lg(mu)", "alpha_pr", "alpha_du", "ls"
                 );
             }
-            let lg_mu = if state.mu > 0.0 { state.mu.log10() } else { f64::NEG_INFINITY };
             rip_log!(
-                "{:>4}  {:>14.7e}  {:>10.2e}  {:>10.2e}  {:>7.1}  {:>8.2e}  {:>8.2e}  {:>3}",
+                "{:>4}  {:>14.7e}  {:>10.2e}  {:>10.2e}  {:>10.2e}  {:>8.2e}  {:>8.2e}  {:>3}",
                 iteration,
                 state.obj / state.obj_scaling,
                 primal_inf,
                 dual_inf,
-                lg_mu,
+                state.mu,
                 state.alpha_primal,
                 state.alpha_dual,
                 ls_steps,
@@ -2964,31 +2930,6 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         rip_log!(
                             "ripopt: Stalled for {} iterations without progress (alpha_p={:.2e}, pr={:.2e}, du={:.2e}), terminating",
                             stall_no_progress_count, state.alpha_primal, primal_inf, dual_inf
-                        );
-                    }
-                    return make_result(&state, SolveStatus::NumericalError);
-                }
-            }
-        }
-
-        // Hard primal stagnation guard: fires when constraint violation has not
-        // improved by 10% over 50 consecutive iterations.
-        // Only active when stall_iter_limit==0 (conservative retry), because in the
-        // main solve the filter naturally triggers restoration when the line search
-        // fails — firing early here prevents restoration from doing its job.
-        if iteration > 10 && m > 0 && primal_inf > options.constr_viol_tol
-            && options.stall_iter_limit == 0
-        {
-            if primal_inf < 0.90 * hard_pr_best {
-                hard_pr_best = primal_inf;
-                hard_pr_stall_count = 0;
-            } else {
-                hard_pr_stall_count += 1;
-                if hard_pr_stall_count >= 50 {
-                    if options.print_level >= 3 {
-                        rip_log!(
-                            "ripopt: Hard primal stagnation for {} iters (pr={:.2e} unchanged), terminating",
-                            hard_pr_stall_count, primal_inf
                         );
                     }
                     return make_result(&state, SolveStatus::NumericalError);
@@ -4202,6 +4143,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             if avg_compl > 0.0 {
                                 state.mu = (options.adaptive_mu_monotone_init_factor * avg_compl)
                                     .clamp(options.mu_min, 1e5);
+                            } else {
+                                state.mu = (options.mu_linear_decrease_factor * state.mu)
+                                    .max(options.mu_min);
                             }
                         } else {
                             // Force mu decrease
@@ -4571,6 +4515,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             if avg_compl > 0.0 {
                                 state.mu = (options.adaptive_mu_monotone_init_factor * avg_compl)
                                     .clamp(options.mu_min, 1e5);
+                            } else {
+                                state.mu = (options.mu_linear_decrease_factor * state.mu)
+                                    .max(options.mu_min);
                             }
                             filter.reset();
                             let theta_new = state.constraint_violation();
@@ -4580,6 +4527,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             let avg_compl = compute_avg_complementarity(&state);
                             if avg_compl > 0.0 {
                                 state.mu = (avg_compl / options.kappa).clamp(options.mu_min, 1e5);
+                            } else {
+                                state.mu = (options.mu_linear_decrease_factor * state.mu)
+                                    .max(options.mu_min);
                             }
                         }
                     }
