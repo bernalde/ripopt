@@ -200,7 +200,7 @@ fn factor_supernode_incomplete(
 
     // Partial factorization with threshold pivoting
     let mut result = if opts.pivot_threshold > 0.0 {
-        front.partial_factor_threshold(opts.pivot_threshold)
+        front.partial_factor_threshold(opts.pivot_threshold, None)
     } else {
         front.partial_factor()
     };
@@ -289,7 +289,7 @@ mod tests {
         let (csc, sym) = make_csc_and_sym(3, &triplets);
 
         // Exact factorization
-        let exact = multifrontal_factor_threshold(&csc, &sym, 0.01);
+        let exact = multifrontal_factor_threshold(&csc, &sym, 0.01, None);
         let mut x_exact = vec![0.0; 3];
         let b = [1.0, 2.0, 3.0];
         multifrontal_solve(&exact, &sym, &b, &mut x_exact).unwrap();
@@ -317,7 +317,7 @@ mod tests {
         ];
         let (csc, sym) = make_csc_and_sym(4, &triplets);
 
-        let exact = multifrontal_factor_threshold(&csc, &sym, 0.01);
+        let exact = multifrontal_factor_threshold(&csc, &sym, 0.01, None);
         let mut x_exact = vec![0.0; 4];
         let b = [1.0, 2.0, 3.0, 4.0];
         multifrontal_solve(&exact, &sym, &b, &mut x_exact).unwrap();

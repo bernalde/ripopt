@@ -20,6 +20,10 @@ pub struct SolverOptions {
     /// A value of 0.0 disables threshold pivoting (classic Bunch-Kaufman).
     /// Default: 0.01 (matches MA57/MUMPS CNTL(1)).
     pub pivot_threshold: f64,
+    /// Number of primal variables for KKT-aware ordering.
+    /// When set and ordering is KktMatchingAmd, the solver pairs primal-dual
+    /// variables for numerically stable 2×2 pivots.
+    pub n_primal: Option<usize>,
 }
 
 impl Default for SolverOptions {
@@ -29,6 +33,7 @@ impl Default for SolverOptions {
             refine_steps: 10,
             scaling: Scaling::Ruiz { max_iter: 10 },
             pivot_threshold: crate::pivot::DEFAULT_PIVOT_THRESHOLD,
+            n_primal: None,
         }
     }
 }
@@ -75,7 +80,9 @@ impl Solver {
     /// Call once per sparsity pattern.
     pub fn analyze(&mut self, matrix: &CooMatrix) -> Result<(), SolverError> {
         let csc = CscMatrix::from_coo(matrix);
-        let (perm, perm_inv) = ordering::compute_ordering(&csc, self.options.ordering);
+        let (perm, perm_inv) = ordering::compute_ordering_with_kkt(
+            &csc, self.options.ordering, self.options.n_primal,
+        );
         let permuted_csc = ordering::permute_symmetric_csc(&csc, &perm, &perm_inv);
         let symbolic = SymbolicFactorization::from_csc(&permuted_csc);
 
@@ -98,7 +105,12 @@ impl Solver {
         let csc = CscMatrix::from_coo(matrix);
 
         // Compute and apply scaling if enabled
-        let sf = scaling::compute_scaling(&csc, self.options.scaling);
+        // Use MC64 matching-based scaling for KKT systems (n_primal is set)
+        let sf = if self.options.n_primal.is_some() {
+            scaling::compute_scaling_kkt(&csc, self.options.scaling)
+        } else {
+            scaling::compute_scaling(&csc, self.options.scaling)
+        };
         let mut permuted_csc = ordering::permute_symmetric_csc(&csc, &self.perm, &self.perm_inv);
         if let Some(ref sf) = sf {
             // Apply scaling in the permuted space: need to permute the scaling vector too
@@ -111,7 +123,7 @@ impl Solver {
         }
         self.scaling_factors = sf;
 
-        let numeric = multifrontal_factor_threshold(&permuted_csc, sym, self.options.pivot_threshold);
+        let numeric = multifrontal_factor_threshold(&permuted_csc, sym, self.options.pivot_threshold, self.options.n_primal);
         let inertia = numeric.inertia;
         self.numeric = Some(numeric);
         self.permuted_csc = Some(permuted_csc);
@@ -232,8 +244,12 @@ impl Solver {
             SolverError::InvalidState("must call analyze() before factor_csc()".into())
         })?;
 
-        // Compute and apply scaling if enabled
-        let sf = scaling::compute_scaling(csc, self.options.scaling);
+        // Compute and apply scaling — use MC64 for KKT systems
+        let sf = if self.options.n_primal.is_some() {
+            scaling::compute_scaling_kkt(csc, self.options.scaling)
+        } else {
+            scaling::compute_scaling(csc, self.options.scaling)
+        };
         let mut permuted_csc = ordering::permute_symmetric_csc(csc, &self.perm, &self.perm_inv);
         if let Some(ref sf) = sf {
             let mut perm_d = vec![0.0; csc.n];
@@ -245,7 +261,7 @@ impl Solver {
         }
         self.scaling_factors = sf;
 
-        let numeric = multifrontal_factor(&permuted_csc, sym);
+        let numeric = multifrontal_factor_threshold(&permuted_csc, sym, self.options.pivot_threshold, self.options.n_primal);
         let inertia = numeric.inertia;
         self.numeric = Some(numeric);
         self.permuted_csc = Some(permuted_csc);
