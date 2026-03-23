@@ -105,12 +105,7 @@ impl Solver {
         let csc = CscMatrix::from_coo(matrix);
 
         // Compute and apply scaling if enabled
-        // Use MC64 matching-based scaling for KKT systems (n_primal is set)
-        let sf = if self.options.n_primal.is_some() {
-            scaling::compute_scaling_kkt(&csc, self.options.scaling)
-        } else {
-            scaling::compute_scaling(&csc, self.options.scaling)
-        };
+        let sf = scaling::compute_scaling(&csc, self.options.scaling);
         let mut permuted_csc = ordering::permute_symmetric_csc(&csc, &self.perm, &self.perm_inv);
         if let Some(ref sf) = sf {
             // Apply scaling in the permuted space: need to permute the scaling vector too

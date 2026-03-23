@@ -38,8 +38,10 @@ impl MultifrontalLdl {
     /// Create a new solver configured for KKT systems with n_primal primal variables.
     /// Enables CB pivot search for numerically stable primal-dual 2×2 pivots.
     pub fn new_kkt(n_primal: usize) -> Self {
+        // Use standard AMD ordering (not KKT matching) — the CB pivot search
+        // provides the numerical benefit regardless of ordering, and matching
+        // ordering can produce poor fill-reduction on some problem structures.
         let options = rmumps::solver::SolverOptions {
-            ordering: rmumps::ordering::Ordering::KktMatchingAmd,
             n_primal: Some(n_primal),
             ..rmumps::solver::SolverOptions::default()
         };
