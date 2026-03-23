@@ -147,6 +147,22 @@ impl SymmetricMatrix {
         }
     }
 
+    /// Scale row k and column k by alpha (symmetric scaling: A' = D*A*D where D[k]=alpha).
+    /// Diagonal (k,k) is scaled by alpha^2, off-diagonals by alpha.
+    pub fn scale_row_col(&mut self, k: usize, alpha: f64) {
+        let n = self.n;
+        let alpha2 = alpha * alpha;
+        // Diagonal
+        self.data[Self::packed_index(n, k, k)] *= alpha2;
+        // Column k: entries (i, k) for i > k
+        for i in (k + 1)..n {
+            self.data[Self::packed_index(n, i, k)] *= alpha;
+        }
+        // Row k: entries (k, j) for j < k, stored as (k, j) in column j
+        for j in 0..k {
+            self.data[Self::packed_index(n, k, j)] *= alpha;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -340,6 +356,21 @@ impl SparseSymmetricMatrix {
         }
     }
 
+    /// Scale row k and column k by alpha (symmetric scaling).
+    /// For triplet (i, j, v): if i==k or j==k, multiply v by alpha.
+    /// If both i==k and j==k (diagonal), multiply by alpha^2.
+    pub fn scale_row_col(&mut self, k: usize, alpha: f64) {
+        for idx in 0..self.triplet_rows.len() {
+            let i = self.triplet_rows[idx];
+            let j = self.triplet_cols[idx];
+            if i == k && j == k {
+                self.triplet_vals[idx] *= alpha * alpha;
+            } else if i == k || j == k {
+                self.triplet_vals[idx] *= alpha;
+            }
+        }
+    }
+
     /// Convert to faer SparseColMat (upper triangle, duplicates summed).
     #[cfg(feature = "faer")]
     pub fn to_upper_csc(&self) -> faer::sparse::SparseColMat<usize, f64> {
@@ -436,6 +467,14 @@ impl KktMatrix {
         match self {
             KktMatrix::Dense(d) => d.matvec(x, y),
             KktMatrix::Sparse(s) => s.matvec(x, y),
+        }
+    }
+
+    /// Scale row k and column k by alpha (symmetric scaling).
+    pub fn scale_row_col(&mut self, k: usize, alpha: f64) {
+        match self {
+            KktMatrix::Dense(d) => d.scale_row_col(k, alpha),
+            KktMatrix::Sparse(s) => s.scale_row_col(k, alpha),
         }
     }
 }

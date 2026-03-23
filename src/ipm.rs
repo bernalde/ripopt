@@ -2060,7 +2060,20 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     // Initialize linear solver — use sparse for large KKT systems
     let use_sparse = (n + m) >= options.sparse_threshold;
     let mut lin_solver: Box<dyn LinearSolver> = if use_sparse {
-        new_sparse_solver_with_choice(options.linear_solver)
+        // For constrained problems, enable KKT-aware CB pivot search
+        // for numerically stable primal-dual 2×2 pivots
+        #[cfg(feature = "rmumps")]
+        {
+            if m > 0 {
+                Box::new(MultifrontalLdl::new_kkt(n))
+            } else {
+                new_sparse_solver_with_choice(options.linear_solver)
+            }
+        }
+        #[cfg(not(feature = "rmumps"))]
+        {
+            new_sparse_solver_with_choice(options.linear_solver)
+        }
     } else {
         Box::new(DenseLdl::new())
     };
@@ -2310,10 +2323,11 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
 
         // Early stall detection: bail out if stuck in early iterations.
-        // Some problems cause the solver to spend excessive time in the first
-        // few iterations (typically in factorization, restoration, or line search).
-        if iteration < 3 && options.early_stall_timeout > 0.0 {
-            if start_time.elapsed().as_secs_f64() > options.early_stall_timeout {
+        // Scale timeout by problem size: medium-scale problems (n+m > 1000) can
+        // legitimately spend 30-60s on restoration or line search in early iterations.
+        let early_timeout = options.early_stall_timeout * ((n + m) as f64 / 200.0).max(1.0);
+        if iteration < 5 && options.early_stall_timeout > 0.0 {
+            if start_time.elapsed().as_secs_f64() > early_timeout {
                 if options.print_level >= 3 {
                     rip_log!(
                         "ripopt: Early stall at iteration {} ({:.1}s elapsed), terminating",
@@ -3041,25 +3055,13 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             if let Some(ref sc) = sparse_condensed_system {
                 let bw = BandedLdl::compute_bandwidth(&sc.matrix.triplet_rows, &sc.matrix.triplet_cols);
                 if bw > n / 2 {
-                    // Condensed system is too dense — fall back to augmented KKT
+                    // Condensed system has high bandwidth — use sparse solver
                     if options.print_level >= 3 {
                         rip_log!(
-                            "ripopt: Sparse condensed S has bandwidth {} for n={}, switching to augmented KKT",
+                            "ripopt: Sparse condensed S has bandwidth {} for n={}, using sparse solver",
                             bw, n
                         );
                     }
-                    disable_sparse_condensed = true;
-                    // Build the full augmented KKT for this iteration
-                    sparse_condensed_system = None;
-                    kkt_system_opt = Some(kkt::assemble_kkt(
-                        n, m,
-                        &state.hess_rows, &state.hess_cols, &state.hess_vals,
-                        &state.jac_rows, &state.jac_cols, &state.jac_vals,
-                        &sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
-                        &state.y, &state.z_l, &state.z_u,
-                        &state.x, &state.x_l, &state.x_u, state.mu,
-                        use_sparse, &state.v_l, &state.v_u,
-                    ));
                 } else if bw * bw <= n {
                     if options.print_level >= 5 {
                         rip_log!("ripopt: Sparse condensed S has bandwidth {} for n={}, using banded solver", bw, n);
@@ -3072,11 +3074,19 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
 
         // Factor with inertia correction (only for non-condensed path)
+        // Track regularization values for iterative refinement against original system
+        let mut ic_delta_w = 0.0f64;
+        let mut ic_delta_c = 0.0f64;
         if let Some(ref mut kkt_system) = kkt_system_opt {
         let t_fact = Instant::now();
         let inertia_result =
             kkt::factor_with_inertia_correction(kkt_system, lin_solver.as_mut(), &mut inertia_params);
         timings.factorization += t_fact.elapsed();
+
+        match &inertia_result {
+            Ok((dw, dc)) => { ic_delta_w = *dw; ic_delta_c = *dc; }
+            _ => {}
+        }
 
         if let Err(e) = inertia_result {
             log::warn!("KKT factorization failed: {}", e);
@@ -3291,9 +3301,10 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     &state.x, &state.x_l, &state.x_u, state.mu,
                     use_sparse, &state.v_l, &state.v_u,
                 );
-                if kkt::factor_with_inertia_correction(
+                let fb_ic = kkt::factor_with_inertia_correction(
                     &mut kkt, lin_solver.as_mut(), &mut inertia_params,
-                ).is_err() {
+                );
+                if fb_ic.is_err() {
                     let (x_rest, success) = restoration.restore(
                         &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
                         &state.jac_rows, &state.jac_cols, n, m, options,
@@ -3318,8 +3329,11 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     }
                     return make_result(&state, SolveStatus::NumericalError);
                 }
-                match kkt::solve_for_direction(&kkt, lin_solver.as_mut()) {
+                let (fb_dw, fb_dc) = fb_ic.unwrap();
+                match kkt::solve_for_direction(&kkt, lin_solver.as_mut(), fb_dw, fb_dc) {
                     Ok(d) => {
+                        ic_delta_w = fb_dw;
+                        ic_delta_c = fb_dc;
                         kkt_system_opt = Some(kkt);
                         d
                     },
@@ -3370,10 +3384,10 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             use_sparse, &state.v_l, &state.v_u,
                         );
                         let mut fallback_solver = new_fallback_solver(use_sparse);
-                        if kkt::factor_with_inertia_correction(
+                        if let Ok((fb_dw, fb_dc)) = kkt::factor_with_inertia_correction(
                             &mut kkt, fallback_solver.as_mut(), &mut inertia_params,
-                        ).is_ok() {
-                            kkt::solve_for_direction(&kkt, fallback_solver.as_mut())
+                        ) {
+                            kkt::solve_for_direction(&kkt, fallback_solver.as_mut(), fb_dw, fb_dc)
                                 .unwrap_or_else(|_| gradient_descent_fallback(&state)
                                     .unwrap_or_else(|| (vec![0.0; n], vec![0.0; m])))
                         } else {
@@ -3394,10 +3408,10 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     use_sparse, &state.v_l, &state.v_u,
                 );
                 let mut fallback_solver = new_fallback_solver(use_sparse);
-                if kkt::factor_with_inertia_correction(
+                if let Ok((fb_dw, fb_dc)) = kkt::factor_with_inertia_correction(
                     &mut kkt, fallback_solver.as_mut(), &mut inertia_params,
-                ).is_ok() {
-                    kkt::solve_for_direction(&kkt, fallback_solver.as_mut())
+                ) {
+                    kkt::solve_for_direction(&kkt, fallback_solver.as_mut(), fb_dw, fb_dc)
                         .unwrap_or_else(|_| gradient_descent_fallback(&state)
                             .unwrap_or_else(|| (vec![0.0; n], vec![0.0; m])))
                 } else {
@@ -3520,7 +3534,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 }
             }
 
-            let dir_result = kkt::solve_for_direction(kkt_system_opt.as_ref().unwrap(), lin_solver.as_mut());
+            let dir_result = kkt::solve_for_direction(kkt_system_opt.as_ref().unwrap(), lin_solver.as_mut(), ic_delta_w, ic_delta_c);
             let (mut dx_dir, mut dy_dir) = match dir_result {
                 Ok(d) => d,
                 Err(e) => {
@@ -3840,9 +3854,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             if force_restoration {
                 break;
             }
-            // Intra-iteration early stall check
+            // Intra-iteration early stall check (scaled by problem size)
             if iteration < 3 && options.early_stall_timeout > 0.0 {
-                if start_time.elapsed().as_secs_f64() > options.early_stall_timeout {
+                if start_time.elapsed().as_secs_f64() > early_timeout {
                     return make_result(&state, SolveStatus::NumericalError);
                 }
             }
@@ -4056,7 +4070,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 // Early stall: skip expensive NLP restoration if we've already exceeded timeout
                 let skip_nlp_restoration = iteration < 3
                     && options.early_stall_timeout > 0.0
-                    && start_time.elapsed().as_secs_f64() > options.early_stall_timeout * 0.5;
+                    && start_time.elapsed().as_secs_f64() > early_timeout * 0.5;
                 if (fail_count == 2 || fail_count == 4) && !options.disable_nlp_restoration && kkt_dim <= 50000 && !skip_nlp_restoration {
                     state.diagnostics.nlp_restoration_count += 1;
                     let (x_nlp, outcome) = attempt_nlp_restoration(
