@@ -7,6 +7,72 @@ mod hs_problems;
 use hs_problems::solve_all;
 use ripopt::SolverOptions;
 
+/// Collect system information for benchmark reproducibility.
+fn print_system_info() {
+    eprintln!("=== System Information ===");
+    eprintln!("  OS:           {}", std::env::consts::OS);
+    eprintln!("  Arch:         {}", std::env::consts::ARCH);
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = std::process::Command::new("sysctl")
+            .args(["-n", "machdep.cpu.brand_string"])
+            .output()
+        {
+            let cpu = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !cpu.is_empty() {
+                eprintln!("  CPU:          {}", cpu);
+            }
+        }
+        if let Ok(output) = std::process::Command::new("sysctl")
+            .args(["-n", "hw.memsize"])
+            .output()
+        {
+            if let Ok(bytes) = String::from_utf8_lossy(&output.stdout).trim().parse::<u64>() {
+                eprintln!("  RAM:          {} GB", bytes / (1024 * 1024 * 1024));
+            }
+        }
+        if let Ok(output) = std::process::Command::new("sysctl")
+            .args(["-n", "hw.physicalcpu"])
+            .output()
+        {
+            let cores = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !cores.is_empty() {
+                eprintln!("  Cores:        {}", cores);
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(cpuinfo) = std::fs::read_to_string("/proc/cpuinfo") {
+            for line in cpuinfo.lines() {
+                if line.starts_with("model name") {
+                    if let Some(name) = line.split(':').nth(1) {
+                        eprintln!("  CPU:          {}", name.trim());
+                        break;
+                    }
+                }
+            }
+        }
+        if let Ok(meminfo) = std::fs::read_to_string("/proc/meminfo") {
+            for line in meminfo.lines() {
+                if line.starts_with("MemTotal") {
+                    if let Some(val) = line.split_whitespace().nth(1) {
+                        if let Ok(kb) = val.parse::<u64>() {
+                            eprintln!("  RAM:          {} GB", kb / (1024 * 1024));
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    eprintln!("  Rust version: {}", env!("CARGO_PKG_VERSION"));
+    eprintln!("  Profile:      {}", if cfg!(debug_assertions) { "debug" } else { "release" });
+    eprintln!("=========================");
+}
+
 fn main() {
     let n_timing_runs: usize = std::env::var("RIPOPT_TIMING_RUNS")
         .ok()
@@ -23,6 +89,7 @@ fn main() {
         ..SolverOptions::default()
     };
 
+    print_system_info();
     eprintln!("Solving all HS problems with ripopt ({} timing runs)...", n_timing_runs);
 
     // First run: get correctness results

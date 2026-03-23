@@ -368,6 +368,73 @@ fn compute_constraint_violation(c: &[f64], g_l: &[f64], g_u: &[f64]) -> f64 {
 
 // ---- Main ----
 
+/// Collect system information for benchmark reproducibility.
+fn print_system_info() {
+    eprintln!("=== System Information ===");
+    eprintln!("  OS:           {}", std::env::consts::OS);
+    eprintln!("  Arch:         {}", std::env::consts::ARCH);
+
+    // CPU model
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = std::process::Command::new("sysctl")
+            .args(["-n", "machdep.cpu.brand_string"])
+            .output()
+        {
+            let cpu = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !cpu.is_empty() {
+                eprintln!("  CPU:          {}", cpu);
+            }
+        }
+        if let Ok(output) = std::process::Command::new("sysctl")
+            .args(["-n", "hw.memsize"])
+            .output()
+        {
+            if let Ok(bytes) = String::from_utf8_lossy(&output.stdout).trim().parse::<u64>() {
+                eprintln!("  RAM:          {} GB", bytes / (1024 * 1024 * 1024));
+            }
+        }
+        if let Ok(output) = std::process::Command::new("sysctl")
+            .args(["-n", "hw.physicalcpu"])
+            .output()
+        {
+            let cores = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !cores.is_empty() {
+                eprintln!("  Cores:        {}", cores);
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(cpuinfo) = std::fs::read_to_string("/proc/cpuinfo") {
+            for line in cpuinfo.lines() {
+                if line.starts_with("model name") {
+                    if let Some(name) = line.split(':').nth(1) {
+                        eprintln!("  CPU:          {}", name.trim());
+                        break;
+                    }
+                }
+            }
+        }
+        if let Ok(meminfo) = std::fs::read_to_string("/proc/meminfo") {
+            for line in meminfo.lines() {
+                if line.starts_with("MemTotal") {
+                    if let Some(val) = line.split_whitespace().nth(1) {
+                        if let Ok(kb) = val.parse::<u64>() {
+                            eprintln!("  RAM:          {} GB", kb / (1024 * 1024));
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    eprintln!("  Rust version: {}", env!("CARGO_PKG_VERSION"));
+    eprintln!("  Profile:      {}", if cfg!(debug_assertions) { "debug" } else { "release" });
+    eprintln!("=========================");
+}
+
 fn get_problem_list_from_args_or_file(suite_dir: &Path) -> Vec<String> {
     // Skip args[0] (binary), args[1..] are problem names (unless --single mode handled above)
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -568,6 +635,8 @@ fn main() {
     let problems_dir = suite_dir.join("problems");
 
     let problem_names = get_problem_list_from_args_or_file(&suite_dir);
+
+    print_system_info();
     eprintln!(
         "CUTEst benchmark: {} problems, {} timing runs, max_n={}, timeout={}s",
         problem_names.len(),
