@@ -1,6 +1,6 @@
 use crate::coo::CooMatrix;
 use crate::csc::CscMatrix;
-use crate::numeric::{multifrontal_factor, multifrontal_factor_threshold, NumericFactorization};
+use crate::numeric::{multifrontal_factor_threshold, NumericFactorization};
 use crate::ordering::{self, Ordering};
 use crate::scaling::{self, Scaling, ScalingFactors};
 use crate::solve::multifrontal_solve;

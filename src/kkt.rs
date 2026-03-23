@@ -1,6 +1,5 @@
 use crate::convergence::is_equality_constraint;
 use crate::linear_solver::{KktMatrix, LinearSolver, SolverError, SparseSymmetricMatrix, SymmetricMatrix};
-use crate::logging::rip_log;
 
 /// Information about the KKT system structure.
 pub struct KktSystem {

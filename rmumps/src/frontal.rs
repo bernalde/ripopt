@@ -416,7 +416,7 @@ impl FrontalMatrix {
     /// Unlike `partial_factor`, this can reject pivots that fail the threshold test.
     /// Rejected FS columns are moved to the contribution block (delayed to parent).
     /// This is the key mechanism that makes MA57/MUMPS reliable on KKT systems.
-    pub fn partial_factor_threshold(self, threshold: f64, n_primal: Option<usize>) -> PartialFactorResult {
+    pub fn partial_factor_threshold(self, threshold: f64, _n_primal: Option<usize>) -> PartialFactorResult {
         let mut orig_nfs = self.nfs;
         let orig_size = self.size();
 
@@ -455,11 +455,6 @@ impl FrontalMatrix {
         let mut l_data = vec![0.0; n * orig_nfs];
         let mut work = vec![0.0; 2 * n];
 
-        let mut n_1x1 = 0usize;
-        let mut n_2x2 = 0usize;
-        let mut n_delayed = 0usize;
-        let mut n_cb_2x2 = 0usize;
-
         let mut k = 0;
         while k < orig_nfs {
             // Only look for pivots among the remaining FS columns [k..orig_nfs]
@@ -482,7 +477,6 @@ impl FrontalMatrix {
 
             match pivot {
                 PivotResult::OneByOne(p) => {
-                    n_1x1 += 1;
                     // Swap p to position active_start
                     if p != active_start {
                         swap_full(&mut a, n, active_start, p);
@@ -516,7 +510,6 @@ impl FrontalMatrix {
                     k += 1;
                 }
                 PivotResult::TwoByTwo(p1, p2) => {
-                    n_2x2 += 1;
                     // Need to bring p2 to active_start+1, p1 to active_start
                     if p2 != active_start + 1 {
                         swap_full(&mut a, n, active_start + 1, p2);
@@ -580,17 +573,11 @@ impl FrontalMatrix {
                     // No FS-only pivot passed threshold. Before genuinely delaying,
                     // search CB columns for a 2×2 partner (MA57-style).
                     // This pairs primal-dual variables across the FS-CB boundary.
-                    let cb_partner = if let Some(np) = n_primal {
-                        find_cb_pivot_partner(
-                            &a, n, active_start, orig_nfs - k, orig_nfs,
-                            threshold, np, &perm, &self.indices,
-                        )
-                    } else {
-                        None
-                    };
+                    let cb_partner = find_cb_pivot_partner(
+                        &a, n, active_start, orig_nfs - k, orig_nfs, threshold,
+                    );
 
                     if let Some((fs_pos, cb_pos)) = cb_partner {
-                        n_cb_2x2 += 1;
                         // Found a good FS-CB 2×2 pivot. Promote the CB column
                         // into the FS range by swapping it to orig_nfs position
                         // (right after the last FS column).
@@ -603,18 +590,15 @@ impl FrontalMatrix {
                                 l_data.swap(j * n + cb_pos, j * n + orig_nfs);
                             }
                         }
-                        // Expand d_diag/d_offdiag if needed
-                        if nfs_elim + 1 >= d_diag.len() {
-                            d_diag.resize(nfs_elim + 2, 0.0);
-                            d_offdiag.resize(nfs_elim + 2, 0.0);
-                        }
                         // Increase FS range to include the promoted column
                         orig_nfs += 1;
-                        // Also expand l_data columns if needed
-                        // (l_data was allocated for orig_nfs columns, now we need one more)
-                        let old_l_len = l_data.len();
-                        if nfs_elim + 2 > old_l_len / n {
-                            l_data.resize((nfs_elim + 2) * n, 0.0);
+                        // Expand d_diag/d_offdiag/l_data to accommodate all FS columns
+                        if orig_nfs > d_diag.len() {
+                            d_diag.resize(orig_nfs, 0.0);
+                            d_offdiag.resize(orig_nfs, 0.0);
+                        }
+                        if orig_nfs > l_data.len() / n {
+                            l_data.resize(orig_nfs * n, 0.0);
                         }
 
                         // Now swap fs_pos to active_start, and orig_nfs-1 to active_start+1
@@ -674,7 +658,6 @@ impl FrontalMatrix {
                         nfs_elim += 2;
                         k += 2; // consumed 1 original FS + 1 promoted CB
                     } else {
-                        n_delayed += 1;
                         // No CB partner found — genuinely delay this column.
                         let last_fs = active_start + (orig_nfs - k) - 1;
                         if active_start != last_fs {
@@ -842,9 +825,6 @@ fn find_cb_pivot_partner(
     fs_remaining: usize,
     orig_nfs: usize,
     threshold: f64,
-    n_primal: usize,
-    perm: &[usize],
-    front_indices: &[usize],
 ) -> Option<(usize, usize)> {
     let fs_end = active_start + fs_remaining;
     let mut best: Option<(usize, usize, f64)> = None; // (fs_pos, cb_pos, |det|)

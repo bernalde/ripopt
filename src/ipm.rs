@@ -2083,7 +2083,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     // Estimate Schur complement density from Jacobian structure.
     // If J^T·D·J would be denser than the full augmented KKT system,
     // disable sparse condensed and use the full (n+m)×(n+m) system instead.
-    let mut disable_sparse_condensed = if use_sparse && m > 0 {
+    let disable_sparse_condensed = if use_sparse && m > 0 {
         let (jac_rows_est, _) = problem.jacobian_structure();
         // Build row counts
         let mut row_nnz = vec![0usize; m];
@@ -3017,7 +3017,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             None
         };
 
-        let mut sparse_condensed_system = if use_sparse_condensed {
+        let sparse_condensed_system = if use_sparse_condensed {
             Some(kkt::assemble_sparse_condensed_kkt(
                 n, m,
                 &state.hess_rows, &state.hess_cols, &state.hess_vals,
@@ -3332,8 +3332,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 let (fb_dw, fb_dc) = fb_ic.unwrap();
                 match kkt::solve_for_direction(&kkt, lin_solver.as_mut(), fb_dw, fb_dc) {
                     Ok(d) => {
-                        ic_delta_w = fb_dw;
-                        ic_delta_c = fb_dc;
+                        let _ = (fb_dw, fb_dc); // used by main path's solve_for_direction
                         kkt_system_opt = Some(kkt);
                         d
                     },
