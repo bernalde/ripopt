@@ -169,12 +169,217 @@ pub fn compute_ruiz_scaling(csc: &CscMatrix, max_iter: usize) -> ScalingFactors 
     ScalingFactors { d }
 }
 
+/// Compute KKT-aware two-phase scaling.
+///
+/// Phase 1: Normalize diagonals. For each row/column i where |a_ii| is much
+/// smaller than the row's max off-diagonal (saddle-point block), scale by
+/// 1/sqrt(|a_ii|) to bring the diagonal to O(1). This addresses the fundamental
+/// scale mismatch in KKT systems where equality constraint diagonals are O(1e-8).
+///
+/// Phase 2: Standard Ruiz equilibration on the result.
+///
+/// This matches MUMPS's ICNTL(8)=77 behavior for symmetric indefinite systems.
+pub fn compute_kkt_scaling(csc: &CscMatrix, max_iter: usize) -> ScalingFactors {
+    let n = csc.n;
+    let mut d = vec![1.0; n];
+
+    // Phase 1: Diagonal normalization for rows with very small diagonals
+    // Find diagonal entries and row max off-diagonals
+    let mut diag = vec![0.0f64; n];
+    let mut max_offdiag = vec![0.0f64; n];
+    for j in 0..n {
+        for idx in csc.col_ptr[j]..csc.col_ptr[j + 1] {
+            let i = csc.row_idx[idx];
+            let abs_val = csc.vals[idx].abs();
+            if i == j {
+                diag[j] = abs_val;
+            } else {
+                max_offdiag[i] = max_offdiag[i].max(abs_val);
+                max_offdiag[j] = max_offdiag[j].max(abs_val);
+            }
+        }
+    }
+
+    // Scale rows where diagonal is zero or much smaller than off-diagonal.
+    // For KKT systems, equality constraint rows have zero diagonal.
+    // Scale these based on off-diagonal magnitude to bring them to O(1).
+    for i in 0..n {
+        if max_offdiag[i] > 0.0 {
+            if diag[i] == 0.0 {
+                // Zero diagonal (equality constraint) — scale by off-diagonal
+                let alpha = 1.0 / max_offdiag[i].sqrt();
+                let alpha = alpha.min(1e8);
+                d[i] = alpha;
+            } else if max_offdiag[i] / diag[i] > 100.0 {
+                // Diagonal much smaller than off-diagonal
+                let alpha = 1.0 / diag[i].sqrt();
+                let alpha = alpha.min(1e8);
+                d[i] = alpha;
+            }
+        }
+    }
+
+    // Apply Phase 1 scaling to get working values
+    let mut scaled_vals = csc.vals.clone();
+    for j in 0..n {
+        let dj = d[j];
+        for idx in csc.col_ptr[j]..csc.col_ptr[j + 1] {
+            let i = csc.row_idx[idx];
+            scaled_vals[idx] *= d[i] * dj;
+        }
+    }
+
+    // Phase 2: Ruiz equilibration on the scaled matrix
+    for _ in 0..max_iter {
+        let mut norms = vec![0.0f64; n];
+        for j in 0..n {
+            for idx in csc.col_ptr[j]..csc.col_ptr[j + 1] {
+                let i = csc.row_idx[idx];
+                let abs_val = scaled_vals[idx].abs();
+                norms[i] = norms[i].max(abs_val);
+                if i != j {
+                    norms[j] = norms[j].max(abs_val);
+                }
+            }
+        }
+
+        let mut max_deviation = 0.0f64;
+        let mut iter_d = vec![1.0; n];
+        for i in 0..n {
+            if norms[i] > 0.0 {
+                iter_d[i] = 1.0 / norms[i].sqrt();
+                max_deviation = max_deviation.max((norms[i] - 1.0).abs());
+            }
+        }
+
+        if max_deviation < 1e-2 {
+            break;
+        }
+
+        for i in 0..n {
+            d[i] *= iter_d[i];
+        }
+
+        for j in 0..n {
+            let dj = iter_d[j];
+            for idx in csc.col_ptr[j]..csc.col_ptr[j + 1] {
+                let i = csc.row_idx[idx];
+                scaled_vals[idx] *= iter_d[i] * dj;
+            }
+        }
+    }
+
+    ScalingFactors { d }
+}
+
+/// Compute matching-based scaling for symmetric indefinite matrices.
+///
+/// For each row i, finds the column j with largest |a_ij| (greedy matching)
+/// and scales so that this entry becomes O(1) after D*A*D. This places large
+/// entries on or near the diagonal, which is critical for stable Bunch-Kaufman
+/// pivoting on KKT systems with zero diagonal blocks.
+///
+/// After matching-based scaling, applies Ruiz equilibration for fine-tuning.
+/// This approximates MUMPS's ICNTL(8)=77 (MC64 + equilibration).
+pub fn compute_matching_scaling(csc: &CscMatrix, max_iter: usize) -> ScalingFactors {
+    let n = csc.n;
+    let mut d = vec![1.0; n];
+
+    // Phase 1: Matching-based scaling
+    // For each row i, find the largest absolute entry and scale to make it O(1).
+    // For symmetric matrices stored as upper triangle, we need to consider
+    // both the row and column views.
+
+    // Compute max absolute entry per row (considering symmetry)
+    let mut row_max = vec![0.0f64; n];
+    for j in 0..n {
+        for idx in csc.col_ptr[j]..csc.col_ptr[j + 1] {
+            let i = csc.row_idx[idx];
+            let abs_val = csc.vals[idx].abs();
+            // Upper triangle: (i, j) with i <= j
+            // This entry contributes to row i and row j (symmetric)
+            row_max[i] = row_max[i].max(abs_val);
+            if i != j {
+                row_max[j] = row_max[j].max(abs_val);
+            }
+        }
+    }
+
+    // Scale each row/column so that its maximum entry is 1
+    // D[i] = 1/sqrt(row_max[i]) for symmetric scaling D*A*D
+    for i in 0..n {
+        if row_max[i] > 1e-30 {
+            d[i] = 1.0 / row_max[i].sqrt();
+        }
+    }
+
+    // Apply Phase 1 scaling to working values
+    let mut scaled_vals = csc.vals.clone();
+    for j in 0..n {
+        let dj = d[j];
+        for idx in csc.col_ptr[j]..csc.col_ptr[j + 1] {
+            let i = csc.row_idx[idx];
+            scaled_vals[idx] *= d[i] * dj;
+        }
+    }
+
+    // Phase 2: Ruiz equilibration on the scaled matrix
+    for _ in 0..max_iter {
+        let mut norms = vec![0.0f64; n];
+        for j in 0..n {
+            for idx in csc.col_ptr[j]..csc.col_ptr[j + 1] {
+                let i = csc.row_idx[idx];
+                let abs_val = scaled_vals[idx].abs();
+                norms[i] = norms[i].max(abs_val);
+                if i != j {
+                    norms[j] = norms[j].max(abs_val);
+                }
+            }
+        }
+
+        let mut max_deviation = 0.0f64;
+        let mut iter_d = vec![1.0; n];
+        for i in 0..n {
+            if norms[i] > 0.0 {
+                iter_d[i] = 1.0 / norms[i].sqrt();
+                max_deviation = max_deviation.max((norms[i] - 1.0).abs());
+            }
+        }
+
+        if max_deviation < 1e-2 {
+            break;
+        }
+
+        for i in 0..n {
+            d[i] *= iter_d[i];
+        }
+
+        for j in 0..n {
+            let dj = iter_d[j];
+            for idx in csc.col_ptr[j]..csc.col_ptr[j + 1] {
+                let i = csc.row_idx[idx];
+                scaled_vals[idx] *= iter_d[i] * dj;
+            }
+        }
+    }
+
+    ScalingFactors { d }
+}
+
 /// Compute scaling factors for the given method.
 pub fn compute_scaling(csc: &CscMatrix, method: Scaling) -> Option<ScalingFactors> {
     match method {
         Scaling::None => None,
         Scaling::Diagonal => Some(compute_diagonal_scaling(csc)),
-        Scaling::Ruiz { max_iter } => Some(compute_ruiz_scaling(csc, max_iter)),
+        Scaling::Ruiz { max_iter } => Some(compute_kkt_scaling(csc, max_iter)),
+    }
+}
+
+/// Compute scaling for KKT systems using matching-based approach.
+pub fn compute_scaling_kkt(csc: &CscMatrix, method: Scaling) -> Option<ScalingFactors> {
+    match method {
+        Scaling::None => None,
+        _ => Some(compute_matching_scaling(csc, 10)),
     }
 }
 

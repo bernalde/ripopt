@@ -1,5 +1,7 @@
 /// Approximate minimum degree ordering.
 pub mod amd;
+/// KKT-aware matching ordering for saddle-point systems.
+pub mod kkt_matching;
 /// Nested dissection ordering.
 pub mod nested_dissection;
 /// Identity (no reordering) permutation.
@@ -16,15 +18,36 @@ pub enum Ordering {
     Natural,
     /// Nested dissection ordering (good for 2D/3D mesh problems).
     NestedDissection,
+    /// KKT matching + AMD: pairs primal-dual variables for 2×2 pivots,
+    /// then applies AMD. Requires `n_primal` to be set in SolverOptions.
+    KktMatchingAmd,
 }
 
 /// Compute a fill-reducing permutation for the given symmetric CSC matrix.
 /// Returns `(perm, perm_inv)` where `perm[new] = old` and `perm_inv[old] = new`.
 pub fn compute_ordering(csc: &CscMatrix, ordering: Ordering) -> (Vec<usize>, Vec<usize>) {
+    compute_ordering_with_kkt(csc, ordering, None)
+}
+
+/// Compute ordering with optional KKT structure info.
+/// `n_primal` is required for `KktMatchingAmd` ordering.
+pub fn compute_ordering_with_kkt(
+    csc: &CscMatrix,
+    ordering: Ordering,
+    n_primal: Option<usize>,
+) -> (Vec<usize>, Vec<usize>) {
     match ordering {
         Ordering::Amd => amd::amd_ordering(csc),
         Ordering::Natural => natural::natural_ordering(csc.n),
         Ordering::NestedDissection => nested_dissection::nd_ordering(csc),
+        Ordering::KktMatchingAmd => {
+            let np = n_primal.unwrap_or(0);
+            if np > 0 && np < csc.n {
+                kkt_matching::kkt_matching_ordering(csc, np)
+            } else {
+                amd::amd_ordering(csc)
+            }
+        }
     }
 }
 
