@@ -56,31 +56,31 @@ It implements a primal-dual interior point method with a barrier formulation, si
 
 | Metric          | ripopt             | Ipopt (native, MUMPS) |
 |-----------------|--------------------|-----------------------|
-| Problems solved | **113/120 (94.2%)**| 116/120 (96.7%)       |
-| Optimal         | 113                | 116                   |
+| Problems solved | **118/120 (98.3%)**| 116/120 (96.7%)       |
+| Optimal         | 118                | 116                   |
 | ripopt only     | 2                  | --                    |
-| Ipopt only      | --                 | 5                     |
+| Ipopt only      | --                 | 0                     |
 
-On 111 commonly-solved problems: **16.8x geometric mean speedup**, ripopt faster on 110/111 (99%).
+On 116 commonly-solved problems: **12.9x geometric mean speedup**, ripopt faster on 114/116 (98%).
 
 ### CUTEst Benchmark Suite (727 problems)
 
 | Metric        | ripopt              | Ipopt (C++ with MUMPS) |
 |---------------|---------------------|------------------------|
-| Total solved  | **516/727 (71.0%)** | 561/727 (77.2%)        |
-| Both solve    | 487                 | 487                    |
-| ripopt only   | **29**              | --                     |
-| Ipopt only    | --                  | **74**                 |
+| Total solved  | **569/727 (78.3%)** | 556/727 (76.5%)        |
+| Both solve    | 524                 | 524                    |
+| ripopt only   | **45**              | --                     |
+| Ipopt only    | --                  | **32**                 |
 
-On 487 commonly-solved problems:
+On 524 commonly-solved problems:
 
 | Metric                          | Value            |
 |---------------------------------|------------------|
-| Geometric mean speedup          | **11.2x**        |
-| Median speedup                  | **21.0x**        |
-| Problems where ripopt is faster | 425/487 (87%)    |
-| ripopt 10x+ faster              | 321/487 (66%)    |
-| Problems where Ipopt is faster  | 62/487 (13%)     |
+| Geometric mean speedup          | **10.2x**        |
+| Median speedup                  | **23.9x**        |
+| Problems where ripopt is faster | 439/524 (84%)    |
+| ripopt 10x+ faster              | 336/524 (64%)    |
+| Problems where Ipopt is faster  | 85/524 (16%)     |
 
 **Interpreting the speed numbers.** Most CUTEst problems are small (n < 10) and solve in microseconds for ripopt, while Ipopt has a ~1-3ms floor from internal initialization. The per-iteration speedup on small problems comes from stack allocation, the absence of C/Fortran interop, and cache-efficient dense linear algebra. On larger problems, ripopt switches to sparse multifrontal LDL^T with SuiteSparse AMD ordering, and Ipopt's Fortran MUMPS has a per-factorization advantage.
 
@@ -101,18 +101,18 @@ Where Ipopt is faster:
 
 Both solvers receive the exact same NlpProblem struct via the Rust trait interface, ensuring a fair comparison. ripopt uses rmumps (pure Rust multifrontal LDL^T with SuiteSparse AMD ordering); Ipopt uses MUMPS (Fortran).
 
-| Problem         | n      | m      | ripopt     | time   | Ipopt      | time   | speedup  |
-|-----------------|--------|--------|------------|--------|------------|--------|----------|
-| Rosenbrock 500  | 500    | 0      | Optimal        | 0.002s | Optimal    | 0.196s | **85.7x** |
-| Bratu 1K        | 1,000  | 998    | Optimal        | 0.002s | Optimal    | 0.002s | 1.1x      |
-| SparseQP 1K     | 500    | 500    | Optimal        | 0.008s | Optimal    | 0.004s | 0.4x      |
-| OptControl 2.5K | 2,499  | 1,250  | Optimal        | 0.006s | Optimal    | 0.002s | 0.4x      |
-| Rosenbrock 5K   | 5,000  | 0      | NumericalError | 17.234s| **Failed** | 3.624s | 0.2x      |
-| Poisson 2.5K    | 5,000  | 2,500  | Optimal        | 0.026s | Optimal    | 0.009s | 0.4x      |
-| Bratu 10K       | 10,000 | 9,998  | Optimal        | 0.125s | Optimal    | 0.012s | 0.1x      |
-| OptControl 20K  | 19,999 | 10,000 | Optimal        | 0.192s | Optimal    | 0.019s | 0.1x      |
-| Poisson 50K     | 49,928 | 24,964 | Optimal        | 1.724s | Optimal    | 0.121s | 0.1x      |
-| SparseQP 100K   | 50,000 | 50,000 | Optimal        | 4.736s | Optimal    | 0.309s | 0.1x      |
+| Problem         | n      | m      | ripopt         | time    | Ipopt      | time   | speedup   |
+|-----------------|--------|--------|----------------|---------|------------|--------|-----------|
+| Rosenbrock 500  | 500    | 0      | Optimal        | 0.002s  | Optimal    | 0.196s | **85.7x** |
+| Bratu 1K        | 1,000  | 998    | Optimal        | 0.002s  | Optimal    | 0.002s | 1.1x      |
+| SparseQP 1K     | 500    | 500    | Optimal        | 0.008s  | Optimal    | 0.004s | 0.4x      |
+| OptControl 2.5K | 2,499  | 1,250  | Optimal        | 0.006s  | Optimal    | 0.002s | 0.4x      |
+| Rosenbrock 5K   | 5,000  | 0      | NumericalError | 17.234s | **Failed** | 3.624s | 0.2x      |
+| Poisson 2.5K    | 5,000  | 2,500  | Optimal        | 0.026s  | Optimal    | 0.009s | 0.4x      |
+| Bratu 10K       | 10,000 | 9,998  | Optimal        | 0.125s  | Optimal    | 0.012s | 0.1x      |
+| OptControl 20K  | 19,999 | 10,000 | Optimal        | 0.192s  | Optimal    | 0.019s | 0.1x      |
+| Poisson 50K     | 49,928 | 24,964 | Optimal        | 1.724s  | Optimal    | 0.121s | 0.1x      |
+| SparseQP 100K   | 50,000 | 50,000 | Optimal        | 4.736s  | Optimal    | 0.309s | 0.1x      |
 
 ripopt solves **9/10** (Ipopt: 9/10). Both fail on Rosenbrock 5K. On large constrained problems, Ipopt's Fortran MUMPS is ~10-15x faster per factorization. ripopt dominates on unconstrained problems via L-BFGS fallback.
 
