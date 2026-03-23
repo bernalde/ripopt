@@ -62,10 +62,73 @@ impl FrontalMatrix {
         self.indices.len() - self.nfs
     }
 
+    /// Promote delayed child FS columns from the CB portion to the FS portion.
+    /// This moves the specified columns (by global index) from the CB set to the FS set,
+    /// rearranging the front matrix accordingly. The promoted columns are appended
+    /// after the current FS columns.
+    pub fn promote_cb_to_fs(&mut self, delayed_cols: &[usize]) {
+        if delayed_cols.is_empty() {
+            return;
+        }
+
+        let n = self.size();
+        let old_nfs = self.nfs;
+
+        // Find local indices (in CB portion) of the delayed columns
+        let mut cb_local_positions: Vec<usize> = Vec::new();
+        for &gc in delayed_cols {
+            if let Ok(pos) = self.indices[old_nfs..].binary_search(&gc) {
+                cb_local_positions.push(old_nfs + pos);
+            }
+        }
+
+        if cb_local_positions.is_empty() {
+            return;
+        }
+
+        // Build new ordering: [old FS cols] [promoted cols] [remaining CB cols]
+        let mut new_order: Vec<usize> = (0..old_nfs).collect();
+        let cb_promote_set: std::collections::HashSet<usize> = cb_local_positions.iter().copied().collect();
+        for &pos in &cb_local_positions {
+            new_order.push(pos);
+        }
+        for i in old_nfs..n {
+            if !cb_promote_set.contains(&i) {
+                new_order.push(i);
+            }
+        }
+
+        // Apply the permutation to indices and matrix
+        let new_indices: Vec<usize> = new_order.iter().map(|&i| self.indices[i]).collect();
+
+        // Permute the dense matrix: new[i,j] = old[new_order[i], new_order[j]]
+        let mut new_data = vec![0.0; n * n];
+        for new_j in 0..n {
+            let old_j = new_order[new_j];
+            for new_i in 0..n {
+                let old_i = new_order[new_i];
+                new_data[new_j * n + new_i] = self.mat.data[old_j * n + old_i];
+            }
+        }
+
+        self.indices = new_indices;
+        self.mat.data = new_data;
+        self.nfs = old_nfs + cb_local_positions.len();
+    }
+
     /// Find the local index for a global index, or None.
     pub fn local_index(&self, global: usize) -> Option<usize> {
-        // Indices are sorted, so use binary search
-        self.indices.binary_search(&global).ok()
+        // Front indices have structure [FS cols (sorted) | CB cols (sorted)].
+        // FS cols may have higher values than CB cols (due to delayed pivoting
+        // expansion), so the full list is NOT globally sorted.
+        // Search FS and CB portions separately.
+        if let Ok(pos) = self.indices[..self.nfs].binary_search(&global) {
+            return Some(pos);
+        }
+        if let Ok(pos) = self.indices[self.nfs..].binary_search(&global) {
+            return Some(self.nfs + pos);
+        }
+        None
     }
 
     /// Assemble an original matrix entry (global_row, global_col, val) into this front.
@@ -81,12 +144,28 @@ impl FrontalMatrix {
     }
 
     /// Extend-add: merge a child's contribution block into this front.
+    /// If the contribution contains delayed child FS columns not in this front,
+    /// the front is dynamically expanded to accommodate them.
     pub fn extend_add(&mut self, contrib: &DenseMat, contrib_indices: &[usize]) {
         let ncb = contrib_indices.len();
-        // Precompute local indices for the contribution
+
+        // Check if any contrib indices are missing from the front
+        let mut missing: Vec<usize> = Vec::new();
+        for &gi in contrib_indices {
+            if self.local_index(gi).is_none() {
+                missing.push(gi);
+            }
+        }
+
+        // Dynamically expand the front if needed (for delayed pivoting)
+        if !missing.is_empty() {
+            self.expand_for_delayed(&missing);
+        }
+
+        // Now all indices should be present
         let local_map: Vec<usize> = contrib_indices
             .iter()
-            .map(|&gi| self.local_index(gi).expect("extend_add: index not found in parent"))
+            .map(|&gi| self.local_index(gi).expect("extend_add: index not found after expansion"))
             .collect();
 
         let size = self.mat.nrows;
@@ -98,6 +177,36 @@ impl FrontalMatrix {
                 self.mat.data[dst_base + local_map[ci]] += contrib.data[src_base + ci];
             }
         }
+    }
+
+    /// Expand the front to include additional indices in the CB portion.
+    /// This is used for delayed pivoting when a child's delayed columns
+    /// weren't predicted by the symbolic phase.
+    fn expand_for_delayed(&mut self, new_indices: &[usize]) {
+        let old_size = self.size();
+        let new_size = old_size + new_indices.len();
+
+        // Add new indices to the CB portion (after existing CB)
+        let mut new_front_indices = self.indices.clone();
+        new_front_indices.extend_from_slice(new_indices);
+        // Sort the CB portion only (preserve FS at front)
+        let nfs = self.nfs;
+        new_front_indices[nfs..].sort_unstable();
+
+        // Expand the dense matrix: copy old data into new larger matrix
+        let mut new_data = vec![0.0; new_size * new_size];
+        for j in 0..old_size {
+            for i in 0..old_size {
+                new_data[j * new_size + i] = self.mat.data[j * old_size + i];
+            }
+        }
+
+        self.indices = new_front_indices;
+        self.mat = crate::dense::DenseMat {
+            nrows: new_size,
+            ncols: new_size,
+            data: new_data,
+        };
     }
 
     /// Partial factorization: factor the fully-summed block, compute L21 and Schur complement.
@@ -307,8 +416,8 @@ impl FrontalMatrix {
     /// Unlike `partial_factor`, this can reject pivots that fail the threshold test.
     /// Rejected FS columns are moved to the contribution block (delayed to parent).
     /// This is the key mechanism that makes MA57/MUMPS reliable on KKT systems.
-    pub fn partial_factor_threshold(self, threshold: f64) -> PartialFactorResult {
-        let orig_nfs = self.nfs;
+    pub fn partial_factor_threshold(self, threshold: f64, n_primal: Option<usize>) -> PartialFactorResult {
+        let mut orig_nfs = self.nfs;
         let orig_size = self.size();
 
         if orig_nfs == 0 {
@@ -346,6 +455,11 @@ impl FrontalMatrix {
         let mut l_data = vec![0.0; n * orig_nfs];
         let mut work = vec![0.0; 2 * n];
 
+        let mut n_1x1 = 0usize;
+        let mut n_2x2 = 0usize;
+        let mut n_delayed = 0usize;
+        let mut n_cb_2x2 = 0usize;
+
         let mut k = 0;
         while k < orig_nfs {
             // Only look for pivots among the remaining FS columns [k..orig_nfs]
@@ -368,6 +482,7 @@ impl FrontalMatrix {
 
             match pivot {
                 PivotResult::OneByOne(p) => {
+                    n_1x1 += 1;
                     // Swap p to position active_start
                     if p != active_start {
                         swap_full(&mut a, n, active_start, p);
@@ -401,6 +516,7 @@ impl FrontalMatrix {
                     k += 1;
                 }
                 PivotResult::TwoByTwo(p1, p2) => {
+                    n_2x2 += 1;
                     // Need to bring p2 to active_start+1, p1 to active_start
                     if p2 != active_start + 1 {
                         swap_full(&mut a, n, active_start + 1, p2);
@@ -461,47 +577,115 @@ impl FrontalMatrix {
                     k += 2;
                 }
                 PivotResult::Delayed => {
-                    // No pivot passed the threshold test. Delaying pivots would
-                    // push FS indices into the contribution block, breaking the
-                    // symbolic structure (parent fronts don't include delayed indices).
-                    // Instead, use the best available 1x1 pivot regardless of threshold.
-                    let mut best_col = active_start;
-                    let mut best_diag = a[active_start * n + active_start].abs();
-                    let fs_end_local = active_start + (orig_nfs - k);
-                    for col in (active_start + 1)..fs_end_local {
-                        let d = a[col * n + col].abs();
-                        if d > best_diag {
-                            best_diag = d;
-                            best_col = col;
-                        }
-                    }
-                    // Swap best_col to active_start and eliminate as 1x1
-                    if best_col != active_start {
-                        swap_full(&mut a, n, active_start, best_col);
-                        perm.swap(active_start, best_col);
-                        for j in 0..nfs_elim {
-                            l_data.swap(j * n + active_start, j * n + best_col);
-                        }
-                    }
-                    let akk = a[active_start * n + active_start];
-                    d_diag[nfs_elim] = akk;
-                    if akk.abs() > 1e-30 {
-                        let m = n - active_start - 1;
-                        for i in 0..m {
-                            work[i] = a[(active_start + 1 + i) * n + active_start] / akk;
-                            l_data[nfs_elim * n + (active_start + 1 + i)] = work[i];
-                        }
-                        for i in 0..m {
-                            let si = work[i] * akk;
-                            let base = (active_start + 1 + i) * n + (active_start + 1);
-                            for j in 0..m {
-                                a[base + j] -= si * work[j];
+                    // No FS-only pivot passed threshold. Before genuinely delaying,
+                    // search CB columns for a 2×2 partner (MA57-style).
+                    // This pairs primal-dual variables across the FS-CB boundary.
+                    let cb_partner = if let Some(np) = n_primal {
+                        find_cb_pivot_partner(
+                            &a, n, active_start, orig_nfs - k, orig_nfs,
+                            threshold, np, &perm, &self.indices,
+                        )
+                    } else {
+                        None
+                    };
+
+                    if let Some((fs_pos, cb_pos)) = cb_partner {
+                        n_cb_2x2 += 1;
+                        // Found a good FS-CB 2×2 pivot. Promote the CB column
+                        // into the FS range by swapping it to orig_nfs position
+                        // (right after the last FS column).
+                        //
+                        // First, swap the CB column to position orig_nfs (end of FS range)
+                        if cb_pos != orig_nfs {
+                            swap_full(&mut a, n, cb_pos, orig_nfs);
+                            perm.swap(cb_pos, orig_nfs);
+                            for j in 0..nfs_elim {
+                                l_data.swap(j * n + cb_pos, j * n + orig_nfs);
                             }
                         }
+                        // Expand d_diag/d_offdiag if needed
+                        if nfs_elim + 1 >= d_diag.len() {
+                            d_diag.resize(nfs_elim + 2, 0.0);
+                            d_offdiag.resize(nfs_elim + 2, 0.0);
+                        }
+                        // Increase FS range to include the promoted column
+                        orig_nfs += 1;
+                        // Also expand l_data columns if needed
+                        // (l_data was allocated for orig_nfs columns, now we need one more)
+                        let old_l_len = l_data.len();
+                        if nfs_elim + 2 > old_l_len / n {
+                            l_data.resize((nfs_elim + 2) * n, 0.0);
+                        }
+
+                        // Now swap fs_pos to active_start, and orig_nfs-1 to active_start+1
+                        // (the promoted column is now at orig_nfs - 1)
+                        let promoted_pos = orig_nfs - 1;
+                        if promoted_pos != active_start + 1 {
+                            swap_full(&mut a, n, active_start + 1, promoted_pos);
+                            perm.swap(active_start + 1, promoted_pos);
+                            for j in 0..nfs_elim {
+                                l_data.swap(j * n + (active_start + 1), j * n + promoted_pos);
+                            }
+                        }
+                        if fs_pos != active_start {
+                            swap_full(&mut a, n, active_start, fs_pos);
+                            perm.swap(active_start, fs_pos);
+                            for j in 0..nfs_elim {
+                                l_data.swap(j * n + active_start, j * n + fs_pos);
+                            }
+                        }
+
+                        // Now eliminate as 2×2 pivot (same code as TwoByTwo handler)
+                        let akk = a[active_start * n + active_start];
+                        let ak1k = a[(active_start + 1) * n + active_start];
+                        let ak1k1 = a[(active_start + 1) * n + (active_start + 1)];
+
+                        d_diag[nfs_elim] = akk;
+                        d_diag[nfs_elim + 1] = ak1k1;
+                        d_offdiag[nfs_elim] = ak1k;
+
+                        let det = akk * ak1k1 - ak1k * ak1k;
+                        if det.abs() > 1e-30 {
+                            let d_inv_00 = ak1k1 / det;
+                            let d_inv_01 = -ak1k / det;
+                            let d_inv_11 = akk / det;
+                            let m = n - active_start - 2;
+                            for i in 0..m {
+                                let aik = a[(active_start + 2 + i) * n + active_start];
+                                let aik1 = a[(active_start + 2 + i) * n + (active_start + 1)];
+                                work[i] = aik * d_inv_00 + aik1 * d_inv_01;
+                                work[m + i] = aik * d_inv_01 + aik1 * d_inv_11;
+                                l_data[nfs_elim * n + (active_start + 2 + i)] = work[i];
+                                l_data[(nfs_elim + 1) * n + (active_start + 2 + i)] = work[m + i];
+                            }
+                            for i in 0..m {
+                                let li0 = work[i];
+                                let li1 = work[m + i];
+                                let si0 = li0 * akk + li1 * ak1k;
+                                let si1 = li0 * ak1k + li1 * ak1k1;
+                                let base = (active_start + 2 + i) * n + (active_start + 2);
+                                for j in 0..m {
+                                    a[base + j] -= si0 * work[j] + si1 * work[m + j];
+                                }
+                            }
+                        }
+                        l_data[nfs_elim * n + active_start] = 1.0;
+                        l_data[(nfs_elim + 1) * n + (active_start + 1)] = 1.0;
+                        nfs_elim += 2;
+                        k += 2; // consumed 1 original FS + 1 promoted CB
+                    } else {
+                        n_delayed += 1;
+                        // No CB partner found — genuinely delay this column.
+                        let last_fs = active_start + (orig_nfs - k) - 1;
+                        if active_start != last_fs {
+                            swap_full(&mut a, n, active_start, last_fs);
+                            perm.swap(active_start, last_fs);
+                            for j in 0..nfs_elim {
+                                l_data.swap(j * n + active_start, j * n + last_fs);
+                            }
+                        }
+                        k += 1;
                     }
-                    l_data[nfs_elim * n + active_start] = 1.0;
-                    nfs_elim += 1;
-                    k += 1;
                 }
             }
         }
@@ -509,6 +693,7 @@ impl FrontalMatrix {
         // Now nfs_elim columns have been eliminated. The remaining columns
         // [nfs_elim..n] form the contribution block (including delayed FS columns).
         let ncb_new = n - nfs_elim;
+
 
         // Build the BK result from what we've computed
         let d_diag = d_diag[..nfs_elim].to_vec();
@@ -645,6 +830,62 @@ fn find_pivot_in_fs(
     }
 
     PivotResult::Delayed
+}
+
+/// Search CB columns for a 2×2 pivot partner for an FS column.
+/// For KKT systems, pairs primal variables with dual variables across the FS-CB boundary.
+/// Returns Some((fs_pos, cb_pos)) if a good pair is found.
+fn find_cb_pivot_partner(
+    a: &[f64],
+    n: usize,
+    active_start: usize,
+    fs_remaining: usize,
+    orig_nfs: usize,
+    threshold: f64,
+    n_primal: usize,
+    perm: &[usize],
+    front_indices: &[usize],
+) -> Option<(usize, usize)> {
+    let fs_end = active_start + fs_remaining;
+    let mut best: Option<(usize, usize, f64)> = None; // (fs_pos, cb_pos, |det|)
+
+    for fs_pos in active_start..fs_end {
+        let diag_fs = a[fs_pos * n + fs_pos].abs();
+        let is_zero_diag_fs = diag_fs < 1e-12;
+
+        // Search CB columns for a partner with complementary diagonal
+        // (pair zero-diagonal with non-zero-diagonal for good 2×2 pivots)
+        for cb_pos in orig_nfs..n {
+            let diag_cb = a[cb_pos * n + cb_pos].abs();
+            let is_zero_diag_cb = diag_cb < 1e-12;
+
+            // Only pair zero-diagonal with non-zero-diagonal
+            if is_zero_diag_fs == is_zero_diag_cb {
+                continue;
+            }
+
+            let akk = a[fs_pos * n + fs_pos];
+            let akj = a[cb_pos * n + fs_pos]; // off-diagonal coupling
+            let ajj = a[cb_pos * n + cb_pos];
+
+            // Skip if no coupling
+            if akj.abs() < 1e-30 {
+                continue;
+            }
+
+            let det = (akk * ajj - akj * akj).abs();
+            let max_elem = akk.abs().max(ajj.abs()).max(akj.abs());
+
+            if max_elem > 1e-30 && det >= threshold * max_elem * max_elem {
+                // Valid 2×2 pivot — track the best (largest determinant)
+                if best.map_or(true, |(_, _, d)| det > d) {
+                    best = Some((fs_pos, cb_pos, det));
+                }
+            }
+        }
+    }
+
+    best.map(|(fs, cb, _)| (fs, cb))
 }
 
 /// Swap rows and columns p and q in the full n x n matrix stored in `a`.

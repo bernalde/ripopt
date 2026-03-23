@@ -92,14 +92,16 @@ pub fn multifrontal_factor(
     csc: &CscMatrix,
     sym: &SymbolicFactorization,
 ) -> NumericFactorization {
-    multifrontal_factor_threshold(csc, sym, 0.0)
+    multifrontal_factor_threshold(csc, sym, 0.0, None)
 }
 
 /// Perform the numeric multifrontal factorization with threshold pivoting.
+/// `n_primal` enables KKT-aware 2×2 pivot search across FS-CB boundary.
 pub fn multifrontal_factor_threshold(
     csc: &CscMatrix,
     sym: &SymbolicFactorization,
     pivot_threshold: f64,
+    n_primal: Option<usize>,
 ) -> NumericFactorization {
     let num_snodes = sym.supernodes.len();
     if num_snodes == 0 {
@@ -150,13 +152,13 @@ pub fn multifrontal_factor_threshold(
                 // SAFETY: within a level, each thread writes to a unique s.
                 // Children are at lower levels (already completed), so reads are safe.
                 unsafe {
-                    factor_supernode(s, csc, sym, &node_factors, &contributions, pivot_threshold);
+                    factor_supernode(s, csc, sym, &node_factors, &contributions, pivot_threshold, n_primal);
                 }
             });
         } else {
             for &s in level_nodes {
                 unsafe {
-                    factor_supernode(s, csc, sym, &node_factors, &contributions, pivot_threshold);
+                    factor_supernode(s, csc, sym, &node_factors, &contributions, pivot_threshold, n_primal);
                 }
             }
         }
@@ -195,6 +197,7 @@ unsafe fn factor_supernode(
     node_factors: &[SyncCell<Option<NodeFactor>>],
     contributions: &[SyncCell<Option<(crate::dense::DenseMat, Vec<usize>)>>],
     pivot_threshold: f64,
+    n_primal: Option<usize>,
 ) {
     let snode = &sym.supernodes[s];
     let nfs = snode.nfs;
@@ -264,15 +267,35 @@ unsafe fn factor_supernode(
     });
 
     // Extend-add contributions from children (already computed at a lower level)
+    // Track which child FS columns were delayed (they appear as contrib indices
+    // that fall within a child's original FS range).
+    let mut delayed_cols: Vec<usize> = Vec::new();
     for &child_s in &sym.snode_children[s] {
         if let Some((contrib, contrib_indices)) = contributions[child_s].get_mut().take() {
+            // Check for delayed FS columns: child FS range is [child.start, child.start + child.nfs)
+            let child_snode = &sym.supernodes[child_s];
+            let child_fs_start = child_snode.start;
+            let child_fs_end = child_fs_start + child_snode.nfs;
+            for &ci in &contrib_indices {
+                if ci >= child_fs_start && ci < child_fs_end {
+                    delayed_cols.push(ci);
+                }
+            }
             front.extend_add(&contrib, &contrib_indices);
         }
     }
 
+    // Promote delayed child FS columns from CB to FS in the parent front.
+    // These columns were not eliminated by their child and need to be eliminated
+    // by this (parent) supernode. We increase nfs to include them.
+    if !delayed_cols.is_empty() && pivot_threshold > 0.0 {
+        delayed_cols.sort_unstable();
+        front.promote_cb_to_fs(&delayed_cols);
+    }
+
     // Partial factorization — use threshold pivoting if enabled
     let result = if pivot_threshold > 0.0 {
-        front.partial_factor_threshold(pivot_threshold)
+        front.partial_factor_threshold(pivot_threshold, n_primal)
     } else {
         front.partial_factor()
     };

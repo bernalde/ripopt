@@ -246,16 +246,17 @@ impl SymbolicFactorization {
                 let parent_front = &supernodes[parent_idx].front_indices;
                 let union = sorted_union(child_cb, parent_front);
 
-                // Only merge when child's CB is a subset of parent's front.
-                // Extra CB indices would appear in the merged node's contribution
-                // but ancestor supernodes won't have them, causing incorrect
-                // extend_add assembly or panics during numeric factorization.
+                // Allow some fill-in from extra CB indices. The dynamic front
+                // expansion in extend_add handles unexpected indices at ancestors.
+                // Limit fill to avoid excessive front growth: allow up to 50% extra rows
+                // relative to the merged front size, and cap absolute extra at 32.
                 let extra_rows = union.len() - parent_front.len();
-                if extra_rows > 0 {
+                let merged_nfs = supernodes[s].nfs + supernodes[parent_idx].nfs;
+                let merged_front_size = merged_nfs + union.len();
+                let fill_ratio = extra_rows as f64 / merged_front_size.max(1) as f64;
+                if extra_rows > 32 || fill_ratio > 0.5 {
                     continue;
                 }
-
-                let merged_nfs = supernodes[s].nfs + supernodes[parent_idx].nfs;
 
                 // Merge: child absorbs parent's columns
                 supernodes[s].nfs = merged_nfs;
@@ -315,6 +316,84 @@ impl SymbolicFactorization {
             supernodes = new_supernodes;
         }
 
+        // Phase 2c: NEMIN-based amalgamation (MA57/MUMPS style)
+        //
+        // Merge consecutive small supernodes to create larger fronts.
+        // MA57 uses NEMIN=16: any supernode with nfs < NEMIN gets merged with its
+        // neighbor. Larger fronts give Bunch-Kaufman more pivot candidates, which
+        // is critical for KKT systems with near-zero diagonal blocks.
+        //
+        // Strategy: scan supernodes in order. When a consecutive sequence of small
+        // supernodes is found (each with nfs < NEMIN, forming a contiguous column
+        // range), merge them into one supernode. This is simpler than tree-based
+        // merging and catches the most common case (chains of size-1 supernodes).
+        {
+            const NEMIN: usize = 4;
+
+            let num_snodes_now = supernodes.len();
+            let mut merged_supernodes: Vec<Supernode> = Vec::new();
+            let mut i = 0;
+
+            while i < num_snodes_now {
+                // Start a new merged group
+                let group_start_col = supernodes[i].start;
+                let mut group_nfs = supernodes[i].nfs;
+                let mut group_end = i;
+
+                // Extend the group: merge consecutive supernodes that are contiguous
+                // and the total nfs stays reasonable (cap at 4*NEMIN to avoid huge fronts)
+                while group_end + 1 < num_snodes_now && group_nfs < NEMIN {
+                    let next = group_end + 1;
+                    let current_end = supernodes[group_end].start + supernodes[group_end].nfs;
+                    // Check contiguity: current supernode's end == next's start
+                    if current_end == supernodes[next].start {
+                        group_nfs += supernodes[next].nfs;
+                        group_end = next;
+                    } else {
+                        break;
+                    }
+                }
+
+                // Build the merged supernode's front_indices
+                // FS cols: [group_start_col .. group_start_col + group_nfs]
+                // CB cols: union of all component supernodes' CB, minus the FS cols
+                let group_fs_end = group_start_col + group_nfs;
+                let mut cb_set: Vec<usize> = Vec::new();
+                for k in i..=group_end {
+                    let sn = &supernodes[k];
+                    for &idx in &sn.front_indices[sn.nfs..] {
+                        if idx >= group_fs_end {
+                            cb_set.push(idx);
+                        }
+                    }
+                }
+                cb_set.sort_unstable();
+                cb_set.dedup();
+
+                let mut front_indices = Vec::with_capacity(group_nfs + cb_set.len());
+                for col in group_start_col..group_fs_end {
+                    front_indices.push(col);
+                }
+                front_indices.extend_from_slice(&cb_set);
+
+                let new_idx = merged_supernodes.len();
+                merged_supernodes.push(Supernode {
+                    start: group_start_col,
+                    nfs: group_nfs,
+                    front_indices,
+                });
+
+                // Update snode_id for ALL columns in this merged group
+                for col in group_start_col..group_fs_end {
+                    snode_id[col] = new_idx;
+                }
+
+                i = group_end + 1;
+            }
+
+            supernodes = merged_supernodes;
+        }
+
         // Phase 3: Build supernodal elimination tree
         let num_snodes = supernodes.len();
         let mut snode_parent: Vec<Option<usize>> = vec![None; num_snodes];
@@ -336,12 +415,6 @@ impl SymbolicFactorization {
             ch.sort_unstable();
             ch.dedup();
         }
-
-        // Supernodes are already in topological order (postorder) because
-        // we created them by scanning columns 0..n, and parents have higher indices.
-        // But let's verify and compute a proper postorder.
-        // Actually, since snode indices increase with column indices, and parents
-        // always have higher column indices, the natural snode order IS a valid postorder.
 
         // Compute L nnz
         let l_nnz: usize = col_indices
