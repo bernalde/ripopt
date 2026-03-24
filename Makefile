@@ -226,7 +226,7 @@ cho-run:
 	@echo "CHO benchmark complete."
 
 # Full benchmark: HS + CUTEst + domain + large-scale + unified report
-benchmark: hs-run cutest-run electrolyte-run opf-run cho-run large-scale benchmark-report
+benchmark: hs-run cutest-run electrolyte-run opf-run large-scale benchmark-report
 	@echo "Full benchmark complete. Report: BENCHMARK_REPORT.md"
 
 # Generate unified benchmark report from existing results
