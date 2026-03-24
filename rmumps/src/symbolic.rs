@@ -319,15 +319,10 @@ impl SymbolicFactorization {
         // Phase 2c: NEMIN-based amalgamation (MA57/MUMPS style)
         //
         // Merge consecutive small supernodes to create larger fronts.
-        // MA57 uses NEMIN=16: any supernode with nfs < NEMIN gets merged with its
-        // neighbor. Larger fronts give Bunch-Kaufman more pivot candidates, which
-        // is critical for KKT systems with near-zero diagonal blocks.
-        //
-        // Strategy: scan supernodes in order. When a consecutive sequence of small
-        // supernodes is found (each with nfs < NEMIN, forming a contiguous column
-        // range), merge them into one supernode. This is simpler than tree-based
-        // merging and catches the most common case (chains of size-1 supernodes).
-        {
+        // Only applied to small/medium matrices (n < 10000) where the cost of
+        // larger fronts is acceptable. For large matrices, the increased front
+        // sizes from NEMIN merging cause significant per-iteration slowdown.
+        if n < 10000 { // Skip NEMIN for large matrices (expensive)
             const NEMIN: usize = 4;
 
             let num_snodes_now = supernodes.len();
@@ -392,7 +387,7 @@ impl SymbolicFactorization {
             }
 
             supernodes = merged_supernodes;
-        }
+        } // end NEMIN gate (n < 10000)
 
         // Phase 3: Build supernodal elimination tree
         let num_snodes = supernodes.len();
