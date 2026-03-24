@@ -371,7 +371,7 @@ pub fn compute_scaling(csc: &CscMatrix, method: Scaling) -> Option<ScalingFactor
     match method {
         Scaling::None => None,
         Scaling::Diagonal => Some(compute_diagonal_scaling(csc)),
-        Scaling::Ruiz { max_iter } => Some(compute_kkt_scaling(csc, max_iter)),
+        Scaling::Ruiz { max_iter } => Some(compute_ruiz_scaling(csc, max_iter)),
     }
 }
 
