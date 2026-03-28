@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.6.0] - 2026-03-28
+
+### Added
+- **Julia/JuMP interface (`Ripopt.jl`)**: MathOptInterface wrapper enabling `Model(Ripopt.Optimizer)` with full JuMP support. Implements the incremental MOI interface (`supports_incremental_interface`, `copy_to`, variable bounds, `NLPBlock`, `Silent`, `TimeLimitSec`, `RawOptimizerAttribute`). Works on ARM/AArch64 (Apple Silicon) — all C callbacks are module-level functions, not closures, avoiding the trampoline requirement.
+- **Julia example scripts**: `jump_hs071.jl`, `jump_rosenbrock.jl`, `c_wrapper_hs071.jl` in `Ripopt.jl/examples/`
+- **Julia tutorial notebook**: `Ripopt.jl/examples/ripopt_jump_tutorial.ipynb` covering 6 examples (Rosenbrock, HS071, options, maximization, Ipopt comparison, economic dispatch)
+- **rmumps genuine delayed pivoting**: CB (Bunch-Bunch) pivot search with look-ahead and delayed pivot acceptance
+- **rmumps NEMIN amalgamation**: supernode amalgamation with minimum node size threshold (skipped for n ≥ 10000 where overhead exceeds benefit)
+- System information output in benchmark scripts
+
+### Fixed
+- **`Ripopt.jl` precompilation**: `const libripopt` replaced with mutable global + `__init__()` so `RIPOPT_LIBRARY_PATH` is read at load time; the precompiled image is no longer tied to a specific build path
+- **`Ripopt.jl` `copy_to`**: added `MOI.supports_incremental_interface` and `MOI.copy_to` — required for JuMP to transfer the model to the optimizer
+- **`Ripopt.jl` option dispatch**: `Integer` check now precedes `Real` check so integer-valued options (e.g. `max_iter=500`) are routed to `AddRipoptIntOption` instead of `AddRipoptNumOption`
+- **`Ripopt.jl` ARM `@cfunction`**: inner callback functions lifted to module level and `$` sigil removed; closure-backed cfunctions are not supported on AArch64
+- **`Ripopt.jl` `_dummy_eval_h` ordering**: moved before `CreateRipoptProblem` — compile-time `@cfunction` requires the name to exist at lowering time
+- **`Ripopt.jl` callback type widening**: `CreateRipoptProblem` now accepts `Union{Base.CFunction, Ptr{Cvoid}}` for all callback arguments
+- **rmumps `factor_csc` threshold pivoting**: fixed correctness bug; reduced threshold to 1e-6
+- **rmumps Ruiz scaling**: reverted KKT-aware variant back to standard Ruiz scaling (KKT variant caused CUTEst regressions)
+- **CUTEst regression recovery**: recovered 552 → 569/727 Optimal after `nlp_lower_bound_inf` threshold changes caused regressions
+- Fixed all compiler warnings in ripopt and rmumps
+
+### Changed
+- rmumps matching-based scaling and KKT matching ordering (added then reverted — standard defaults are more robust across problem families)
+- rmumps NEMIN amalgamation skipped for n ≥ 10000 (amalgamation overhead exceeds benefit for large systems)
+- KKT system improvements for medium-scale equality-constrained problems
+
+### Performance
+- CUTEst suite: **569/727** Optimal (up from 516/727 at v0.5.0 release, recovered from 552 after regression)
+- HS suite: **118/120** Optimal, ripopt surpasses Ipopt (116/120)
+- rmumps: genuine delayed pivoting reduces fill-in on indefinite systems
+
 ## [0.5.0] - 2026-03-16
 
 ### Breaking Changes
