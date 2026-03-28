@@ -397,6 +397,23 @@ The AMPL interface reads NL files (nonlinear expression DAGs) with automatic dif
 - AMPL binary (reads =.nl=, writes =.sol=): [[../src/bin/ripopt_ampl.rs][src/bin/ripopt_ampl.rs]]
 - Pyomo plugin: =pyomo-ripopt/= directory
 
+** Julia/JuMP Interface (Ripopt.jl)
+
+=Ripopt.jl= wraps ripopt's C API behind a MathOptInterface (MOI) =Optimizer= type, enabling use from JuMP. The wrapper implements the incremental MOI interface so that =MOI.Utilities.default_copy_to= can populate the optimizer from JuMP's internal cache.
+
+Key source files:
+
+- Module entry point and =__init__= (runtime library path): [[../Ripopt.jl/src/Ripopt.jl][Ripopt.jl/src/Ripopt.jl]]
+- C API bindings (=RipoptProblem=, =CreateRipoptProblem=, =RipoptSolve=, options, statistics): [[../Ripopt.jl/src/C_wrapper.jl][Ripopt.jl/src/C_wrapper.jl]]
+- MOI wrapper (=Optimizer= struct, =copy_to=, =optimize!=, result accessors): [[../Ripopt.jl/src/MOI_wrapper.jl][Ripopt.jl/src/MOI_wrapper.jl]]
+
+Design notes:
+
+- The five C callbacks (=eval_f=, =eval_grad_f=, =eval_g=, =eval_jac_g=, =eval_h=) are module-level functions, not closures. This is required on ARM/AArch64 (Apple Silicon) where Julia does not support trampoline-backed =@cfunction= closures (the =$f= form). All problem data is passed through the =user_data= pointer as a GC-protected =Ref{NamedTuple}=.
+- The library path is a mutable global set in =__init__=, not a =const=. This ensures the =RIPOPT_LIBRARY_PATH= environment variable is read at module load time, so the precompiled module image is not tied to a specific build directory.
+- =MOI.supports_incremental_interface= returns =true=; =copy_to= delegates to =MOI.Utilities.default_copy_to=. Variable bounds go through =MOI.VariablesContainer=; the nonlinear objective and constraints go through =MOI.NLPBlock=.
+- Option dispatch checks =Integer= before =Real= to avoid routing integer-valued options (e.g., =max_iter=) to the floating-point option setter.
+
 * Parametric Sensitivity Analysis
 
 ** Algorithm Description
@@ -554,3 +571,40 @@ result = solver.solve(model, tee=True)
 print(f'x={value(model.x):.6f}, y={value(model.y):.6f}, obj={value(model.obj):.6f}')
 "
 #+end_src
+
+** Julia/JuMP Integration
+
+To run the Julia examples (requires Julia ≥ 1.9 with JuMP installed):
+
+#+begin_src bash
+# Build the shared library
+cargo build --release
+
+# Run the JuMP examples
+RIPOPT_LIBRARY_PATH=target/release julia --project=@v1.12 \
+    Ripopt.jl/examples/jump_hs071.jl
+
+RIPOPT_LIBRARY_PATH=target/release julia --project=@v1.12 \
+    Ripopt.jl/examples/jump_rosenbrock.jl
+
+# Low-level C wrapper example (no JuMP required)
+RIPOPT_LIBRARY_PATH=target/release julia --project=@v1.12 \
+    Ripopt.jl/examples/c_wrapper_hs071.jl
+#+end_src
+
+Expected output for =jump_hs071.jl=:
+
+#+begin_example
+Termination status: LOCALLY_SOLVED
+Objective value:    17.014017289919348
+Solution:           [1.0, 4.743, 3.821, 1.379]
+#+end_example
+
+To install =Ripopt.jl= into a Julia environment:
+
+#+begin_src julia
+import Pkg
+Pkg.develop(path="Ripopt.jl")   # or Pkg.add(url="...") for remote
+#+end_src
+
+The interactive notebook tutorial is at =Ripopt.jl/examples/ripopt_jump_tutorial.ipynb=.

@@ -756,6 +756,32 @@ option nlp = ripopt;
 Solve mymodel using nlp minimizing obj;
 #+end_src
 
+** Julia/JuMP Interface
+
+For Julia users, ripopt provides =Ripopt.jl=, a MathOptInterface (MOI) citep:legat2021mathoptinterface wrapper that integrates with JuMP citep:lubin2023jump. The wrapper enables ripopt to be used as a drop-in JuMP optimizer:
+
+#+begin_src julia
+using JuMP, Ripopt
+
+model = Model(Ripopt.Optimizer)
+set_silent(model)
+
+@variable(model, 1 <= x[1:4] <= 5)
+set_start_value.(x, [1.0, 5.0, 5.0, 1.0])
+
+@NLobjective(model, Min, x[1]*x[4]*(x[1]+x[2]+x[3]) + x[3])
+@NLconstraint(model, x[1]*x[2]*x[3]*x[4] >= 25)
+@NLconstraint(model, x[1]^2 + x[2]^2 + x[3]^2 + x[4]^2 == 40)
+
+optimize!(model)
+println(termination_status(model))  # LOCALLY_SOLVED
+println(objective_value(model))     # ≈ 17.014
+#+end_src
+
+Solver options use the same string keys as Ipopt (=tol=, =max_iter=, =mu_strategy=, etc.) and are set via =set_optimizer_attribute=. Switching between ripopt and Ipopt requires only replacing =Ripopt.Optimizer= with =Ipopt.Optimizer=; the model definition is identical.
+
+The implementation follows the incremental MOI interface: =Ripopt.Optimizer= implements =MOI.supports_incremental_interface=, =MOI.add_variable=, =MOI.add_constraint= (variable bounds), and =MOI.set= for =NLPBlock=, =ObjectiveSense=, =Silent=, =TimeLimitSec=, and pass-through =RawOptimizerAttribute=. Problem data (evaluator, sparsity structures, objective sign) is passed to the five C callbacks through the =user_data= pointer as a GC-protected =Ref= to a =NamedTuple=; no closures are used, ensuring compatibility with Julia on ARM (AArch64), where closure-backed =@cfunction= trampolines are not supported. The library path is resolved at load time via Julia's =__init__= hook so the precompiled image is not tied to a specific build directory.
+
 * Computational Results
   :PROPERTIES:
   :CUSTOM_ID: results

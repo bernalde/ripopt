@@ -49,6 +49,7 @@ It implements a primal-dual interior point method with a barrier formulation, si
 - **C API** mirroring the Ipopt C interface for direct linking from C/C++/Python/Julia
 - **AMPL NL interface** with Pyomo integration via `SolverFactory('ripopt')`, with `--help` listing all options
 - **GAMS solver link** enabling `option nlp = ripopt;` in GAMS models via the GMO API
+- **Julia/JuMP interface** (`Ripopt.jl`) via MathOptInterface, enabling `Model(Ripopt.Optimizer)` with full JuMP support
 
 ## Benchmarks
 
@@ -276,6 +277,73 @@ GAMS iteration and resource limits (`option iterlim`, `option reslim`) are autom
 
 ```bash
 sudo make -C gams test   # solves HS071 and checks the result
+```
+
+### Using ripopt with Julia/JuMP
+
+`Ripopt.jl` provides a [MathOptInterface](https://github.com/jump-dev/MathOptInterface.jl) (MOI) wrapper so ripopt can be used as a drop-in JuMP optimizer.
+
+**Prerequisites:** Julia ≥ 1.9, JuMP, and the ripopt shared library.
+
+**Install once** (adds Ripopt.jl to your global Julia environment):
+
+```bash
+cargo build --release      # build libripopt.dylib / libripopt.so
+
+julia -e '
+import Pkg
+Pkg.develop(path="Ripopt.jl")   # or Pkg.add(url="...") for a remote install
+'
+```
+
+**Use in a script or notebook:**
+
+```julia
+ENV["RIPOPT_LIBRARY_PATH"] = "/path/to/ripopt/target/release"
+using JuMP, Ripopt
+
+model = Model(Ripopt.Optimizer)
+set_silent(model)
+
+@variable(model, 1 <= x[1:4] <= 5)
+set_start_value.(x, [1.0, 5.0, 5.0, 1.0])
+
+@NLobjective(model, Min, x[1]*x[4]*(x[1]+x[2]+x[3]) + x[3])
+@NLconstraint(model, x[1]*x[2]*x[3]*x[4] >= 25)
+@NLconstraint(model, x[1]^2 + x[2]^2 + x[3]^2 + x[4]^2 == 40)
+
+optimize!(model)
+println(termination_status(model))   # LOCALLY_SOLVED
+println(objective_value(model))      # ≈ 17.014
+println(value.(x))                   # ≈ [1.0, 4.743, 3.821, 1.379]
+```
+
+Or run the provided examples from the repo root:
+
+```bash
+RIPOPT_LIBRARY_PATH=target/release julia --project=@v1.12 Ripopt.jl/examples/jump_hs071.jl
+RIPOPT_LIBRARY_PATH=target/release julia --project=@v1.12 Ripopt.jl/examples/jump_rosenbrock.jl
+RIPOPT_LIBRARY_PATH=target/release julia --project=@v1.12 Ripopt.jl/examples/c_wrapper_hs071.jl
+```
+
+Solver options use the same names as Ipopt:
+
+```julia
+set_optimizer_attribute(model, "tol", 1e-10)
+set_optimizer_attribute(model, "max_iter", 500)
+set_optimizer_attribute(model, "mu_strategy", "adaptive")
+set_time_limit_sec(model, 60.0)
+```
+
+Switching between ripopt and Ipopt requires only changing the optimizer constructor; the rest of the model is identical:
+
+```julia
+# With ripopt
+model = Model(Ripopt.Optimizer)
+
+# With Ipopt (if installed)
+using Ipopt
+model = Model(Ipopt.Optimizer)
 ```
 
 ### Uninstall
