@@ -33,12 +33,20 @@ using Ripopt
 """
 module Ripopt
 
-# Locate the shared library
-const libripopt = if haskey(ENV, "RIPOPT_LIBRARY_PATH")
-    joinpath(ENV["RIPOPT_LIBRARY_PATH"], Sys.iswindows() ? "ripopt.dll" :
-             Sys.isapple() ? "libripopt.dylib" : "libripopt.so")
-else
-    "libripopt"
+# Mutable global: resolved in __init__() at load time, not at precompile time.
+# This allows RIPOPT_LIBRARY_PATH to be set in the calling script/shell and
+# picked up correctly even when the module is already precompiled.
+libripopt::String = "libripopt"
+
+function __init__()
+    global libripopt
+    if haskey(ENV, "RIPOPT_LIBRARY_PATH")
+        libripopt = joinpath(
+            ENV["RIPOPT_LIBRARY_PATH"],
+            Sys.iswindows() ? "ripopt.dll" :
+            Sys.isapple() ? "libripopt.dylib" : "libripopt.so",
+        )
+    end
 end
 
 include("C_wrapper.jl")

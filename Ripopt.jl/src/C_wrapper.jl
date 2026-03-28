@@ -47,12 +47,12 @@ mutable struct RipoptProblem
     mult_x_U::Vector{Float64}
     obj_val::Float64
     status::Cint
-    # Callbacks (stored to prevent GC)
-    eval_f::Base.CFunction
-    eval_grad_f::Base.CFunction
-    eval_g::Base.CFunction
-    eval_jac_g::Base.CFunction
-    eval_h::Union{Base.CFunction,Nothing}
+    # Callbacks (stored to prevent GC of Base.CFunction objects)
+    eval_f::Union{Base.CFunction,Ptr{Cvoid}}
+    eval_grad_f::Union{Base.CFunction,Ptr{Cvoid}}
+    eval_g::Union{Base.CFunction,Ptr{Cvoid}}
+    eval_jac_g::Union{Base.CFunction,Ptr{Cvoid}}
+    eval_h::Union{Base.CFunction,Ptr{Cvoid},Nothing}
 
     function RipoptProblem(
         ptr::Ptr{Cvoid}, n::Int, m::Int,
@@ -85,6 +85,17 @@ Base.unsafe_convert(::Type{Ptr{Cvoid}}, p::RipoptProblem) = p.ptr
 # Problem creation
 # -------------------------------------------------------------------------
 
+# Dummy Hessian callback for L-BFGS mode (must be defined before CreateRipoptProblem
+# because @cfunction resolves the name at compile time)
+function _dummy_eval_h(
+    n::Cint, x::Ptr{Float64}, new_x::Cint, obj_factor::Float64,
+    m::Cint, lambda::Ptr{Float64}, new_lambda::Cint,
+    nele_hess::Cint, iRow::Ptr{Cint}, jCol::Ptr{Cint},
+    values::Ptr{Float64}, user_data::Ptr{Cvoid},
+)::Cint
+    return Cint(0)
+end
+
 """
     CreateRipoptProblem(n, x_L, x_U, m, g_L, g_U, nele_jac, nele_hess,
                         eval_f, eval_grad_f, eval_g, eval_jac_g, eval_h)
@@ -92,15 +103,17 @@ Base.unsafe_convert(::Type{Ptr{Cvoid}}, p::RipoptProblem) = p.ptr
 Create a new ripopt problem. Callbacks must be `@cfunction` pointers with
 C-compatible signatures matching the ripopt C API (0-based indexing).
 """
+const _CB = Union{Base.CFunction,Ptr{Cvoid}}
+
 function CreateRipoptProblem(
     n::Int, x_L::Vector{Float64}, x_U::Vector{Float64},
     m::Int, g_L::Vector{Float64}, g_U::Vector{Float64},
     nele_jac::Int, nele_hess::Int,
-    eval_f::Base.CFunction,
-    eval_grad_f::Base.CFunction,
-    eval_g::Base.CFunction,
-    eval_jac_g::Base.CFunction,
-    eval_h::Union{Base.CFunction,Nothing},
+    eval_f::_CB,
+    eval_grad_f::_CB,
+    eval_g::_CB,
+    eval_jac_g::_CB,
+    eval_h::Union{_CB,Nothing},
 )
     # If no Hessian callback, we need a dummy that returns 0
     eval_h_ptr = if eval_h === nothing
@@ -134,16 +147,6 @@ function CreateRipoptProblem(
     end
 
     return RipoptProblem(ptr, n, m, eval_f, eval_grad_f, eval_g, eval_jac_g, eval_h)
-end
-
-# Dummy Hessian callback for L-BFGS mode
-function _dummy_eval_h(
-    n::Cint, x::Ptr{Float64}, new_x::Cint, obj_factor::Float64,
-    m::Cint, lambda::Ptr{Float64}, new_lambda::Cint,
-    nele_hess::Cint, iRow::Ptr{Cint}, jCol::Ptr{Cint},
-    values::Ptr{Float64}, user_data::Ptr{Cvoid},
-)::Cint
-    return Cint(0)
 end
 
 # -------------------------------------------------------------------------

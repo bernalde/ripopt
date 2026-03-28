@@ -109,15 +109,15 @@ function eval_h(
 end
 
 # ---- Create @cfunction pointers ----
-eval_f_cb = @cfunction($eval_f, Cint,
+eval_f_cb = @cfunction(eval_f, Cint,
     (Cint, Ptr{Float64}, Cint, Ptr{Float64}, Ptr{Cvoid}))
-eval_grad_f_cb = @cfunction($eval_grad_f, Cint,
+eval_grad_f_cb = @cfunction(eval_grad_f, Cint,
     (Cint, Ptr{Float64}, Cint, Ptr{Float64}, Ptr{Cvoid}))
-eval_g_cb = @cfunction($eval_g, Cint,
+eval_g_cb = @cfunction(eval_g, Cint,
     (Cint, Ptr{Float64}, Cint, Cint, Ptr{Float64}, Ptr{Cvoid}))
-eval_jac_g_cb = @cfunction($eval_jac_g, Cint,
+eval_jac_g_cb = @cfunction(eval_jac_g, Cint,
     (Cint, Ptr{Float64}, Cint, Cint, Cint, Ptr{Cint}, Ptr{Cint}, Ptr{Float64}, Ptr{Cvoid}))
-eval_h_cb = @cfunction($eval_h, Cint,
+eval_h_cb = @cfunction(eval_h, Cint,
     (Cint, Ptr{Float64}, Cint, Float64, Cint, Ptr{Float64}, Cint,
      Cint, Ptr{Cint}, Ptr{Cint}, Ptr{Float64}, Ptr{Cvoid}))
 

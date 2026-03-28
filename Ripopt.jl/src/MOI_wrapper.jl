@@ -90,6 +90,18 @@ MOI.get(::Optimizer, ::MOI.SolverName) = "Ripopt"
 MOI.get(::Optimizer, ::MOI.SolverVersion) = "0.2.0"
 
 # -------------------------------------------------------------------------
+# copy_to — required for JuMP to transfer the model to our optimizer
+# -------------------------------------------------------------------------
+
+# Declare that we support the incremental interface (add_variable, set, etc.)
+# so that MOI.Utilities.default_copy_to can build the model incrementally.
+MOI.supports_incremental_interface(::Optimizer) = true
+
+function MOI.copy_to(dest::Optimizer, src::MOI.ModelLike)
+    return MOI.Utilities.default_copy_to(dest, src)
+end
+
+# -------------------------------------------------------------------------
 # RawOptimizerAttribute (pass-through options)
 # -------------------------------------------------------------------------
 
@@ -301,6 +313,98 @@ function _dual_status(status::Cint)
 end
 
 # -------------------------------------------------------------------------
+# C callback functions (module-level so @cfunction without $ works on ARM)
+#
+# All problem data is passed through user_data (a Ref to a NamedTuple).
+# -------------------------------------------------------------------------
+
+function _moi_eval_f(
+    n_::Cint, x_ptr::Ptr{Float64}, ::Cint,
+    obj_value::Ptr{Float64}, user_data::Ptr{Cvoid},
+)::Cint
+    x = unsafe_wrap(Array, x_ptr, Int(n_))
+    data = unsafe_pointer_to_objref(user_data)[]
+    val = MOI.eval_objective(data.evaluator, x)
+    unsafe_store!(obj_value, data.obj_factor * val)
+    return Cint(1)
+end
+
+function _moi_eval_grad_f(
+    n_::Cint, x_ptr::Ptr{Float64}, ::Cint,
+    grad_ptr::Ptr{Float64}, user_data::Ptr{Cvoid},
+)::Cint
+    x = unsafe_wrap(Array, x_ptr, Int(n_))
+    grad = unsafe_wrap(Array, grad_ptr, Int(n_))
+    data = unsafe_pointer_to_objref(user_data)[]
+    MOI.eval_objective_gradient(data.evaluator, grad, x)
+    if data.obj_factor != 1.0
+        grad .*= data.obj_factor
+    end
+    return Cint(1)
+end
+
+function _moi_eval_g(
+    n_::Cint, x_ptr::Ptr{Float64}, ::Cint,
+    m_::Cint, g_ptr::Ptr{Float64}, user_data::Ptr{Cvoid},
+)::Cint
+    x = unsafe_wrap(Array, x_ptr, Int(n_))
+    g = unsafe_wrap(Array, g_ptr, Int(m_))
+    data = unsafe_pointer_to_objref(user_data)[]
+    MOI.eval_constraint(data.evaluator, g, x)
+    return Cint(1)
+end
+
+function _moi_eval_jac_g(
+    n_::Cint, x_ptr::Ptr{Float64}, ::Cint,
+    m_::Cint, nele::Cint,
+    iRow_ptr::Ptr{Cint}, jCol_ptr::Ptr{Cint},
+    values_ptr::Ptr{Float64}, user_data::Ptr{Cvoid},
+)::Cint
+    data = unsafe_pointer_to_objref(user_data)[]
+    if values_ptr == C_NULL
+        iRow = unsafe_wrap(Array, iRow_ptr, Int(nele))
+        jCol = unsafe_wrap(Array, jCol_ptr, Int(nele))
+        for (k, (r, c)) in enumerate(data.jac_struct)
+            iRow[k] = Cint(r - 1)
+            jCol[k] = Cint(c - 1)
+        end
+    else
+        x = unsafe_wrap(Array, x_ptr, Int(n_))
+        values = unsafe_wrap(Array, values_ptr, Int(nele))
+        MOI.eval_constraint_jacobian(data.evaluator, values, x)
+    end
+    return Cint(1)
+end
+
+function _moi_eval_h(
+    n_::Cint, x_ptr::Ptr{Float64}, ::Cint,
+    obj_f::Float64,
+    m_::Cint, lambda_ptr::Ptr{Float64}, ::Cint,
+    nele::Cint,
+    iRow_ptr::Ptr{Cint}, jCol_ptr::Ptr{Cint},
+    values_ptr::Ptr{Float64}, user_data::Ptr{Cvoid},
+)::Cint
+    data = unsafe_pointer_to_objref(user_data)[]
+    if values_ptr == C_NULL
+        iRow = unsafe_wrap(Array, iRow_ptr, Int(nele))
+        jCol = unsafe_wrap(Array, jCol_ptr, Int(nele))
+        for (k, (r, c)) in enumerate(data.hess_struct)
+            iRow[k] = Cint(r - 1)
+            jCol[k] = Cint(c - 1)
+        end
+    else
+        x = unsafe_wrap(Array, x_ptr, Int(n_))
+        lambda = unsafe_wrap(Array, lambda_ptr, Int(m_))
+        values = unsafe_wrap(Array, values_ptr, Int(nele))
+        MOI.eval_hessian_lagrangian(
+            data.evaluator, values, x,
+            data.obj_factor * obj_f, lambda,
+        )
+    end
+    return Cint(1)
+end
+
+# -------------------------------------------------------------------------
 # optimize!
 # -------------------------------------------------------------------------
 
@@ -380,127 +484,25 @@ function MOI.optimize!(model::Optimizer)
     )
     user_ref = Ref(callback_data)
 
-    # Eval_F_CB: evaluate objective
-    function _eval_f(
-        n_::Cint, x_ptr::Ptr{Float64}, ::Cint,
-        obj_value::Ptr{Float64}, user_data::Ptr{Cvoid},
-    )::Cint
-        x = unsafe_wrap(Array, x_ptr, Int(n_))
-        data = unsafe_pointer_to_objref(user_data)[]
-        val = MOI.eval_objective(data.evaluator, x)
-        unsafe_store!(obj_value, data.obj_factor * val)
-        return Cint(1)
-    end
-
     eval_f_cb = @cfunction(
-        $_eval_f, Cint,
+        _moi_eval_f, Cint,
         (Cint, Ptr{Float64}, Cint, Ptr{Float64}, Ptr{Cvoid})
     )
-
-    # Eval_Grad_F_CB: evaluate gradient of objective
-    function _eval_grad_f(
-        n_::Cint, x_ptr::Ptr{Float64}, ::Cint,
-        grad_ptr::Ptr{Float64}, user_data::Ptr{Cvoid},
-    )::Cint
-        x = unsafe_wrap(Array, x_ptr, Int(n_))
-        grad = unsafe_wrap(Array, grad_ptr, Int(n_))
-        data = unsafe_pointer_to_objref(user_data)[]
-        MOI.eval_objective_gradient(data.evaluator, grad, x)
-        if data.obj_factor != 1.0
-            grad .*= data.obj_factor
-        end
-        return Cint(1)
-    end
-
     eval_grad_f_cb = @cfunction(
-        $_eval_grad_f, Cint,
+        _moi_eval_grad_f, Cint,
         (Cint, Ptr{Float64}, Cint, Ptr{Float64}, Ptr{Cvoid})
     )
-
-    # Eval_G_CB: evaluate constraints
-    function _eval_g(
-        n_::Cint, x_ptr::Ptr{Float64}, ::Cint,
-        m_::Cint, g_ptr::Ptr{Float64}, user_data::Ptr{Cvoid},
-    )::Cint
-        x = unsafe_wrap(Array, x_ptr, Int(n_))
-        g = unsafe_wrap(Array, g_ptr, Int(m_))
-        data = unsafe_pointer_to_objref(user_data)[]
-        MOI.eval_constraint(data.evaluator, g, x)
-        return Cint(1)
-    end
-
     eval_g_cb = @cfunction(
-        $_eval_g, Cint,
+        _moi_eval_g, Cint,
         (Cint, Ptr{Float64}, Cint, Cint, Ptr{Float64}, Ptr{Cvoid})
     )
-
-    # Eval_Jac_G_CB: evaluate Jacobian (sparsity or values)
-    # NOTE: ripopt uses 0-based indexing; MOI uses 1-based
-    function _eval_jac_g(
-        n_::Cint, x_ptr::Ptr{Float64}, ::Cint,
-        m_::Cint, nele::Cint,
-        iRow_ptr::Ptr{Cint}, jCol_ptr::Ptr{Cint},
-        values_ptr::Ptr{Float64}, user_data::Ptr{Cvoid},
-    )::Cint
-        data = unsafe_pointer_to_objref(user_data)[]
-        if values_ptr == C_NULL
-            # Return sparsity pattern (convert 1-based MOI to 0-based C)
-            iRow = unsafe_wrap(Array, iRow_ptr, Int(nele))
-            jCol = unsafe_wrap(Array, jCol_ptr, Int(nele))
-            for (k, (r, c)) in enumerate(data.jac_struct)
-                iRow[k] = Cint(r - 1)
-                jCol[k] = Cint(c - 1)
-            end
-        else
-            # Return values
-            x = unsafe_wrap(Array, x_ptr, Int(n_))
-            values = unsafe_wrap(Array, values_ptr, Int(nele))
-            MOI.eval_constraint_jacobian(data.evaluator, values, x)
-        end
-        return Cint(1)
-    end
-
     eval_jac_g_cb = @cfunction(
-        $_eval_jac_g, Cint,
+        _moi_eval_jac_g, Cint,
         (Cint, Ptr{Float64}, Cint, Cint, Cint, Ptr{Cint}, Ptr{Cint}, Ptr{Float64}, Ptr{Cvoid})
     )
-
-    # Eval_H_CB: evaluate Hessian of the Lagrangian (sparsity or values)
-    function _eval_h(
-        n_::Cint, x_ptr::Ptr{Float64}, ::Cint,
-        obj_f::Float64,
-        m_::Cint, lambda_ptr::Ptr{Float64}, ::Cint,
-        nele::Cint,
-        iRow_ptr::Ptr{Cint}, jCol_ptr::Ptr{Cint},
-        values_ptr::Ptr{Float64}, user_data::Ptr{Cvoid},
-    )::Cint
-        data = unsafe_pointer_to_objref(user_data)[]
-        if values_ptr == C_NULL
-            # Return sparsity pattern (convert 1-based MOI to 0-based C)
-            iRow = unsafe_wrap(Array, iRow_ptr, Int(nele))
-            jCol = unsafe_wrap(Array, jCol_ptr, Int(nele))
-            for (k, (r, c)) in enumerate(data.hess_struct)
-                iRow[k] = Cint(r - 1)
-                jCol[k] = Cint(c - 1)
-            end
-        else
-            # Return values
-            x = unsafe_wrap(Array, x_ptr, Int(n_))
-            lambda = unsafe_wrap(Array, lambda_ptr, Int(m_))
-            values = unsafe_wrap(Array, values_ptr, Int(nele))
-            # ripopt passes obj_factor already scaled, but we need to
-            # account for MAX_SENSE by adjusting obj_factor
-            MOI.eval_hessian_lagrangian(
-                data.evaluator, values, x,
-                data.obj_factor * obj_f, lambda,
-            )
-        end
-        return Cint(1)
-    end
-
     eval_h_cb = if has_hessian
         @cfunction(
-            $_eval_h, Cint,
+            _moi_eval_h, Cint,
             (Cint, Ptr{Float64}, Cint, Float64, Cint, Ptr{Float64}, Cint,
              Cint, Ptr{Cint}, Ptr{Cint}, Ptr{Float64}, Ptr{Cvoid})
         )
@@ -521,11 +523,11 @@ function MOI.optimize!(model::Optimizer)
     end
 
     for (key, val) in model.options
-        if val isa Float64 || val isa Real
-            AddRipoptNumOption(prob, key, Float64(val))
-        elseif val isa Integer
+        if val isa Integer
             AddRipoptIntOption(prob, key, Int(val))
-        elseif val isa String || val isa AbstractString
+        elseif val isa Real
+            AddRipoptNumOption(prob, key, Float64(val))
+        elseif val isa AbstractString
             AddRipoptStrOption(prob, key, String(val))
         end
     end
