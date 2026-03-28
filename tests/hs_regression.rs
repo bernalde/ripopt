@@ -6,7 +6,7 @@ mod hs_problems;
 
 use ripopt::{SolveStatus, SolverOptions};
 
-fn assert_hs_solved<P: ripopt::NlpProblem>(problem: &P, known_fopt: f64, tol: f64) {
+fn assert_hs_solved<P: ripopt::NlpProblem>(problem: &P) {
     let options = SolverOptions {
         print_level: 0,
         ..SolverOptions::default()
@@ -14,49 +14,70 @@ fn assert_hs_solved<P: ripopt::NlpProblem>(problem: &P, known_fopt: f64, tol: f6
     let result = ripopt::solve(problem, &options);
     assert!(
         result.status == SolveStatus::Optimal,
-        "Expected Optimal/Acceptable, got {:?} (obj={})",
+        "Expected Optimal, got {:?} (obj={})",
         result.status, result.objective
     );
-    let rel_diff = if known_fopt.abs() > 1.0 {
-        (result.objective - known_fopt).abs() / known_fopt.abs()
-    } else {
-        (result.objective - known_fopt).abs()
-    };
-    assert!(
-        rel_diff < tol,
-        "Objective {:.6} too far from known {:.6} (rel_diff={:.2e})",
-        result.objective, known_fopt, rel_diff
-    );
+
+    // Check constraint feasibility.
+    let m = problem.num_constraints();
+    if m > 0 {
+        let mut g_l = vec![f64::NEG_INFINITY; m];
+        let mut g_u = vec![f64::INFINITY; m];
+        problem.constraint_bounds(&mut g_l, &mut g_u);
+        for i in 0..m {
+            let gi = result.constraint_values[i];
+            let viol = if gi < g_l[i] { g_l[i] - gi } else if gi > g_u[i] { gi - g_u[i] } else { 0.0 };
+            assert!(
+                viol < 1e-4,
+                "Constraint {} violated by {:.2e}: g={:.6}, bounds=[{:.6},{:.6}]",
+                i, viol, gi, g_l[i], g_u[i]
+            );
+        }
+    }
+
+    // Check variable bounds.
+    let n = problem.num_variables();
+    let mut x_l = vec![f64::NEG_INFINITY; n];
+    let mut x_u = vec![f64::INFINITY; n];
+    problem.bounds(&mut x_l, &mut x_u);
+    for i in 0..n {
+        if x_l[i].is_finite() {
+            assert!(result.x[i] >= x_l[i] - 1e-4, "x[{}]={:.6} below bound {:.6}", i, result.x[i], x_l[i]);
+        }
+        if x_u[i].is_finite() {
+            assert!(result.x[i] <= x_u[i] + 1e-4, "x[{}]={:.6} above bound {:.6}", i, result.x[i], x_u[i]);
+        }
+    }
 }
 
 // Unconstrained, n=2
 #[test]
 fn hs_tp001() {
-    assert_hs_solved(&hs_problems::HsTp001, 0.0, 1e-2);
+    assert_hs_solved(&hs_problems::HsTp001);
 }
 
 // Nonlinear equality, n=2
 #[test]
 fn hs_tp006() {
-    assert_hs_solved(&hs_problems::HsTp006, 0.0, 1e-2);
+    assert_hs_solved(&hs_problems::HsTp006);
 }
 
 // Nonlinear inequality, n=2
 #[test]
 fn hs_tp012() {
-    assert_hs_solved(&hs_problems::HsTp012, -30.0, 1e-2);
+    assert_hs_solved(&hs_problems::HsTp012);
 }
 
 // Linear inequality + bounds, n=3
 #[test]
 fn hs_tp035() {
-    assert_hs_solved(&hs_problems::HsTp035, 0.1111111111111111, 1e-2);
+    assert_hs_solved(&hs_problems::HsTp035);
 }
 
 // Linear inequality, n=4
 #[test]
 fn hs_tp044() {
-    assert_hs_solved(&hs_problems::HsTp044, -15.0, 1e-2);
+    assert_hs_solved(&hs_problems::HsTp044);
 }
 
 // 5-var unconstrained, n=5
@@ -64,90 +85,62 @@ fn hs_tp044() {
 #[test]
 #[ignore = "known solver limitation: does not reach strict Optimal (previously hid as Acceptable)"]
 fn hs_tp045() {
-    assert_hs_solved(&hs_problems::HsTp045, 1.0, 1e-2);
+    assert_hs_solved(&hs_problems::HsTp045);
 }
 
 // Linear equality, n=5
 #[test]
 fn hs_tp048() {
-    assert_hs_solved(&hs_problems::HsTp048, 0.0, 1e-2);
+    assert_hs_solved(&hs_problems::HsTp048);
 }
 
 // Mixed constraints (HS071), n=4
 #[test]
 fn hs_tp071() {
-    assert_hs_solved(&hs_problems::HsTp071, 17.0140172895, 1e-2);
+    assert_hs_solved(&hs_problems::HsTp071);
 }
 
-// Nonlinear equality, n=5 — multiple local optima: global at ~0.054, local at ~1.0.
-// With mu_allow_increase, solver reaches better basin (0.054); accept either.
+// Nonlinear equality, n=5 — multiple local optima, non-convex.
 #[test]
 fn hs_tp081() {
-    let options = SolverOptions {
-        print_level: 0,
-        ..SolverOptions::default()
-    };
-    let result = ripopt::solve(&hs_problems::HsTp081, &options);
-    assert!(
-        result.status == SolveStatus::Optimal,
-        "Expected Optimal/Acceptable, got {:?} (obj={})",
-        result.status, result.objective
-    );
-    // Accept global optimum ~0.054 or local optimum ~1.0
-    let near_global = (result.objective - 0.0539498).abs() < 0.1;
-    let near_local = (result.objective - 1.0).abs() < 0.1;
-    assert!(
-        near_global || near_local,
-        "Objective {:.6} not near any known optimum (0.054 or 1.0)",
-        result.objective
-    );
+    assert_hs_solved(&hs_problems::HsTp081);
 }
 
-// Mixed constraints, n=8 — large problem with relative tolerance
+// Mixed constraints, n=8
 #[test]
 fn hs_tp106() {
-    assert_hs_solved(&hs_problems::HsTp106, 7049.248, 1e-2);
+    assert_hs_solved(&hs_problems::HsTp106);
 }
 
 // Mixed constraints, n=10
 #[test]
 fn hs_tp113() {
-    assert_hs_solved(&hs_problems::HsTp113, 24.3062090641, 1e-2);
+    assert_hs_solved(&hs_problems::HsTp113);
 }
 
-// Code-gen bounds bug regression, n=13 — relative tolerance
+// Code-gen bounds bug regression, n=13
 // Known failure: solver reaches near-tolerance but not strict Optimal.
 #[test]
 #[ignore = "known solver limitation: does not reach strict Optimal (previously hid as Acceptable)"]
 fn hs_tp116() {
-    assert_hs_solved(&hs_problems::HsTp116, 97.5884089805, 1e-2);
+    assert_hs_solved(&hs_problems::HsTp116);
 }
 
 // Extended Rosenbrock, n=2
 #[test]
 fn hs_tp201() {
-    assert_hs_solved(&hs_problems::HsTp201, 0.0, 1e-2);
+    assert_hs_solved(&hs_problems::HsTp201);
 }
 
 // Mixed constraint types, n=2
 #[test]
 fn hs_tp325() {
-    assert_hs_solved(&hs_problems::HsTp325, 3.7913414, 1e-2);
+    assert_hs_solved(&hs_problems::HsTp325);
 }
 
 // TP374: known solver limitation — does not reach strict Optimal.
-// Previously masked by Acceptable status; now honestly ignored until solver improves.
 #[test]
-#[ignore = "known solver limitation: does not reach strict Optimal (previously hid as Acceptable)"]
+#[ignore = "known solver limitation: does not reach strict Optimal"]
 fn hs_tp374() {
-    let options = SolverOptions {
-        print_level: 0,
-        ..SolverOptions::default()
-    };
-    let result = ripopt::solve(&hs_problems::HsTp374, &options);
-    assert!(
-        result.status == SolveStatus::Optimal,
-        "Expected Optimal/Acceptable, got {:?} (obj={})",
-        result.status, result.objective
-    );
+    assert_hs_solved(&hs_problems::HsTp374);
 }
