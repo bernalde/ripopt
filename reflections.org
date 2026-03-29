@@ -67,6 +67,8 @@ I am mildly concerned about the changes in LLM pricing / access. I use the subsc
 
 I am not too worried about this. In other projects, if there are issues reported on GitHUB, I can get Claude to review them, pose solutions, implement and test them. As long as I have access to LLMs, I think this will be manageable. Without it, like other projects I have had, issues are likely to accumulate unless I find a way to spend more time on them.
 
+ripopt currently lacks community. I have been the only developer and have only recently shared it. It is part of a broader ecosystem I am developing, and as long as that ecosystem is active, I will have motivation to maintain and continue improving it. It is hard work to develop a community to maintain momentum on these projects, and if one doesn't nucleate around it, it is likely to languish when I inevitably get busy with other things. I hope this is just the beginning, but life has a way of being unpredictable. For example, just three months ago I would not have predicted I even try making this!
+
 * How do I feel about this?
 
 I have written a lot of software in my life. This was very different. It was more creative than it might seem; I had to conceive the idea, steer it, think through the best path, etc. I could not have written this myself. I really think the result of this work is better than anything I could have done without Claude code. The code is not perfect, but it is well documented, tested, and does well on benchmarks. I will learn from this, and continue on this path while LLMs are available.
