@@ -58,3 +58,16 @@ nlpbench*
 *.so
 
 .DS_STORE
+
+# LaTeX build artifacts from root-level manuscript compilation
+*.aux
+*.fdb_latexmk
+*.fls
+*.out
+*.toc
+*.pdf
+_minted/
+*.message.minted
+
+# Personal/scratch files
+linkedin.org
