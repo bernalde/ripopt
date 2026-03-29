@@ -1,0 +1,32 @@
+#+title: Reflections on ripopt Development
+#+AUTHOR: John R. Kitchin
+
+ripopt was developed over about six weeks using Claude Code with a Max subscription ($100/200 per month). I mostly used Opus 4.6 with a 200K context window. About a month in, a 1M token context window was released. Initially this seemed exciting, but I am not sure it improved anything. It is hard to tell because this coincided with the project hitting some challenging problems that slowed down development. It is a telling experience that we do not control what the LLM companies do, and they can change things underneath us at any time.
+
+I used planning mode pretty extensively to break the project into documented phases, and frequently used teams of agents to do things in parallel. In this mode I would instruct Claude to read the literature, sometimes review open source codebases, and create a detailed plan to be executed. I allowed for some stochasticity in this process, and did not require a faithful translation of anything. Claude suggested new ideas in places that were better, although in talking to people they are nonstandard, and may make other things more difficult.
+
+I consider it to have been hard work and a lot of it (~60-70 hours maybe) to make this. Not the same kind of hard work as writing the code myself, but hard work to supervise, guide, and decide if an approach was working. The first few weeks were very productive, and got to a working prototype pretty fast. I hit a plateau then that didn't advance until I got some new problems to work on that exposed bugs and gaps in the code logic. Solving these led to new plateau that I stayed on again until I got a new set of problems to work on. These plateaus were basically development stages where fixing one issue created new ones somewhere else, or where Claude would try to fix things by changing one thing at a time, which would not work. It appeared Claude was just trying things and not "reasoning" about the real problem.
+
+I also used benchmarks and testing heavily to make sure we made progress. I started with the HS test suite which is small and fast, and later added the CUTEst benchmark which is much slower to run. At times I observed that Claude had sort of "fit to the benchmark" and was modifying tests to be more lenient so progress looked better. There were also phases where Claude would make changes specific to problems that did not generalize, or used complex logic that was not robust. This is something you have to watch, and sense the smell of to catch and stop it. 
+
+Early on I got very good performance on small problems with dense linear algebra. It was substantially more difficult to get good performance with sparse linear algebra. I partially implemented a solution inspired by MUMPS. This still needs a lot of work, but it is slow to develop this inside ripopt, and I need to learn more about these solvers to make progress. I think this is the main reason for the performance plateau.
+
+I used git branches and worktrees (via Claude) which allowed some parallel development. I occasionally used Claude code web to develop in a remote branch. Mostly I developed on my local machine.
+
+I didn't do a great job documenting the process. There is a git history of the commits, but this doesn't capture the planning, the decisions, the failures, and the successes. I wish I had done a better job of this, but it was hard to do while also trying to make progress on the code. I am not sure there is a great way to do this. The development took place over many sessions, and some of those would compact the conversations, or I would clear the context to start on new tasks.
+
+This wasn't all dedicated work. I frequently did this in parallel with other activities. A common pattern is you ask Claude to do something, and then wait for it to finish which can be minutes or longer before you have to tell it something to do next. It was common to have 3-6 other development projects going at the same time, or to be working on something else while this was in the background. It takes some skill to do a reasonable job at this. Some things were dedicated efforts, primarily the planning work that required frequent iterations, and deep thinking about the directions to choose.
+
+* The development cycle near the end
+
+After the initial plans were implemented I had a basic implementation that solved some problems. There isn't really a debugging cycle to speak of, Claude automatically fixes bugs as you run tests. To continue making progress, I would ask Claude to identify problems in the benchmarks that ipopt solved but ripopt was either much slower, or didn't solve. Then I would ask Claude to diagnose the problems and propose fixes. I would review these suggestions and choose the directions to implement. This was an iterative process that sometimes took hours or days to get to solutions. 
+
+* Why I don't think this is AI slop
+
+I think there is some value in this project. First, I learned a lot about creating a project like this, what the limitations are, the timescales, the challenges, etc. Second, there may be code that smells bad to some in the repo, but it is code that works, passes tests, and performs pretty well on benchmarks. In the end we don't know how all the code we run is written, we mostly care it works. 
+
+I did a lot of work introspecting the code with teams of agents that performed red-team reviews, that were setup as rust experts, optimization experts, code reviewers, and educators. I created examples and tutorials, and benchmarked the code against ipopt for comparison. For these things, I know it works. I know it doesn't work well on some medium to large problems, and there is a path to improve this that relies on me learning some new things.
+
+* Licensing
+
+Originally I wanted this to be MIT licensed. However, the initial plan was to base it heavily on the Ipopt codebase and I instructed Claude to review that codebase, which is EPL licensed. Some research I did suggested this would be considered a derivative work, and as that would require the code to be EPL licensed. I decided an EPL license would be appropriate in this scenario. Similarly MUMPS is CeCILL-C licensed, and I used that license in rmumps for the same reason. 
