@@ -1,0 +1,11 @@
+[book]
+title = "ripopt"
+description = "A memory-safe interior point optimizer written in Rust"
+authors = ["John Kitchin"]
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "navy"
+git-repository-url = "https://github.com/jkitchin/ripopt"
+edit-url-template = "https://github.com/jkitchin/ripopt/edit/main/docs/src/{path}"
