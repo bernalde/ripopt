@@ -1944,6 +1944,8 @@ fn dump_kkt_matrix(
     iteration: usize,
     kkt: &kkt::KktSystem,
     inertia: Option<(usize, usize, usize)>,
+    delta_w: f64,
+    delta_c: f64,
 ) {
     use std::io::Write;
 
@@ -2018,6 +2020,8 @@ fn dump_kkt_matrix(
             "m": kkt.m,
             "rhs": kkt.rhs,
             "inertia": { "positive": pos, "negative": neg, "zero": zer },
+            "delta_w": delta_w,
+            "delta_c": delta_c,
             "status": "ongoing"
         });
         let mut file = std::fs::File::create(&json_path)?;
@@ -3219,6 +3223,8 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     iteration,
                     kkt_system,
                     Some((n, m, 0)),
+                    ic_delta_w,
+                    ic_delta_c,
                 );
             }
         }
