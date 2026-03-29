@@ -30,3 +30,7 @@ I did a lot of work introspecting the code with teams of agents that performed r
 * Licensing
 
 Originally I wanted this to be MIT licensed. However, the initial plan was to base it heavily on the Ipopt codebase and I instructed Claude to review that codebase, which is EPL licensed. Some research I did suggested this would be considered a derivative work, and as that would require the code to be EPL licensed. I decided an EPL license would be appropriate in this scenario. Similarly MUMPS is CeCILL-C licensed, and I used that license in rmumps for the same reason. 
+
+* Should you use this?
+
+Maybe. It is not as mature as established solvers, but if enough people use it and provide feedback maybe it will be (or some future version of it might be). The timeline to get here was only 6 weeks, and I think with 20/20 hindsight an even better version could be made in another 6 weeks. That makes it pretty easy to try new ideas pretty quickly. Don't like the interface? Write a new one. Don't like the solver? Write a new one (this is pretty hard but less hard than writing one from scratch).
