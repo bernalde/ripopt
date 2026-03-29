@@ -17,3 +17,7 @@
 # Tutorials
 
 - [NLP Tutorial Series](tutorials.md)
+
+# API Reference
+
+- [API Documentation](api/ripopt/index.html)

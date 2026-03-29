@@ -14,7 +14,7 @@ pub struct KktSystem {
     /// Right-hand side vector.
     pub rhs: Vec<f64>,
     /// Per-constraint δ_c values added to the (2,2) block during assembly.
-    /// Stored as positive values; the matrix gets -delta_c_diag[i] on diagonal (n+i, n+i).
+    /// Stored as positive values; the matrix gets -delta_c_diag\[i\] on diagonal (n+i, n+i).
     /// Used by iterative refinement to recover the original (unregularized) matvec.
     pub delta_c_diag: Vec<f64>,
 }
@@ -469,7 +469,7 @@ pub fn factor_with_inertia_correction(
 /// on equality constraints and IC perturbation (δ_w on primal, δ_c_ic on constraints).
 ///
 /// The factored system has: A_factored = A_original - diag(assembly_δ_c) - diag(IC_δ_c) + diag(IC_δ_w)
-/// So: A_original * x = A_factored * x - δ_w * x[0..n] + (assembly_δ_c[i] + IC_δ_c) * x[n+i]
+/// So: A_original * x = A_factored * x - δ_w * x\[0..n\] + (assembly_δ_c\[i\] + IC_δ_c) * x\[n+i\]
 fn matvec_original(
     kkt: &KktSystem,
     x: &[f64],
@@ -1040,7 +1040,7 @@ pub struct SparseCondensedKktSystem {
 /// rhs = r_d + J^T · (-D_c)^{-1} · r_p
 ///
 /// The J^T·D_c^{-1}·J product is computed row-by-row:
-/// for each constraint i, add rank-1 update (1/(-d_c[i])) * J[i,:]^T * J[i,:]
+/// for each constraint i, add rank-1 update (1/(-d_c\[i\])) * J\[i,:\]^T * J\[i,:\]
 /// Only nonzero pairs of J entries in the same row produce fill.
 #[allow(clippy::too_many_arguments)]
 pub fn assemble_sparse_condensed_kkt(

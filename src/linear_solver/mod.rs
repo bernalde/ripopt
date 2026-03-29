@@ -147,7 +147,7 @@ impl SymmetricMatrix {
         }
     }
 
-    /// Scale row k and column k by alpha (symmetric scaling: A' = D*A*D where D[k]=alpha).
+    /// Scale row k and column k by alpha (symmetric scaling: A' = D*A*D where D\[k\]=alpha).
     /// Diagonal (k,k) is scaled by alpha^2, off-diagonals by alpha.
     pub fn scale_row_col(&mut self, k: usize, alpha: f64) {
         let n = self.n;

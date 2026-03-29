@@ -12,9 +12,9 @@ pub struct NlFileData {
     /// Common sub-expressions (defined variables), in order.
     /// Each is the full expression (linear + nonlinear combined).
     pub common_exprs: Vec<ExprNode>,
-    /// Linear coefficients per constraint: con_linear[i] = [(var_idx, coeff), ...].
+    /// Linear coefficients per constraint: con_linear\[i\] = [(var_idx, coeff), ...].
     pub con_linear: Vec<Vec<(usize, f64)>>,
-    /// Linear gradient coefficients per objective: obj_linear[i] = [(var_idx, coeff), ...].
+    /// Linear gradient coefficients per objective: obj_linear\[i\] = [(var_idx, coeff), ...].
     pub obj_linear: Vec<Vec<(usize, f64)>>,
     /// Variable bounds.
     pub x_l: Vec<f64>,

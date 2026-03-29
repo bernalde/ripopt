@@ -231,8 +231,8 @@ pub fn complementarity_error(
 ///
 /// In addition to variable bound complementarity (x-x_l)*z_l and (x_u-x)*z_u,
 /// this also checks constraint slack complementarity for inequality constraints:
-/// - Lower-bounded: (g(x) - g_l) * max(y[i], 0)
-/// - Upper-bounded: (g_u - g(x)) * max(-y[i], 0)
+/// - Lower-bounded: (g(x) - g_l) * max(y\[i\], 0)
+/// - Upper-bounded: (g_u - g(x)) * max(-y\[i\], 0)
 /// - Equality constraints are skipped.
 #[allow(clippy::too_many_arguments)]
 pub fn complementarity_error_full(
