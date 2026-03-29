@@ -37,9 +37,13 @@ I think there is some value in this project. First, I learned a lot about creati
 
 I did a lot of work introspecting the code with teams of agents that performed red-team reviews, that were setup as rust experts, optimization experts, code reviewers, and educators. Some of these teams were focused on code quality, e.g. eliminating code smells, duplicate code, dead code, and performance enhancments. I created examples and tutorials, and benchmarked the code against ipopt for comparison. For these things, I know it works. I know it doesn't work well on some medium to large problems, and there is a path to improve this that relies on me learning some new things.
 
+For a while I was running tests on Github actions, but I accidentally used up 3000 minutes of free CI on a set of projects I was working on, and disabled it. I run the tests locally a lot, and Claude runs them more often than I prefer often.
+
 * Licensing
 
 Originally I wanted this to be MIT licensed. However, the initial plan was to base it heavily on the Ipopt codebase and I instructed Claude to review that codebase, which is EPL licensed. Some research I did suggested this would be considered a derivative work, and as that would require the code to be EPL licensed. I decided an EPL license would be appropriate in this scenario. Similarly MUMPS is CeCILL-C licensed, and I used that license in rmumps for the same reason. 
+
+This is a hot topic right now (https://simonwillison.net/2026/Mar/5/chardet/). It is a murky area that likely can only be resolved in courts. It is difficult to defend a "clean room" approach to development, but especially when code is written in a new language, with new features, it is not hard to defend that it is different.
 
 * Should you use this?
 
