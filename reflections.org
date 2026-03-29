@@ -5,7 +5,7 @@ ripopt was developed over about six weeks using Claude Code with a Max subscript
 
 I used planning mode pretty extensively to break the project into documented phases, and frequently used teams of agents to do things in parallel. In this mode I would instruct Claude to read the literature, sometimes review open source codebases, and create a detailed plan to be executed. I allowed for some stochasticity in this process, and did not require a faithful translation of anything. Claude suggested new ideas in places that were better, although in talking to people they are nonstandard, and may make other things more difficult.
 
-I consider it to have been hard work and a lot of it (~60-70 hours maybe) to make this. Not the same kind of hard work as writing the code myself, but hard work to supervise, guide, and decide if an approach was working. The first few weeks were very productive, and got to a working prototype pretty fast. I hit a plateau then that didn't advance until I got some new problems to work on that exposed bugs and gaps in the code logic. Solving these led to new plateau that I stayed on again until I got a new set of problems to work on. These plateaus were basically development stages where fixing one issue created new ones somewhere else, or where Claude would try to fix things by changing one thing at a time, which would not work. It appeared Claude was just trying things and not "reasoning" about the real problem.
+I consider it to have been hard work and a lot of it (~60-70 hours maybe over the 6-7 weeks) to make this. Not the same kind of hard work as learning the methods, and writing the code myself, but hard work to supervise, guide, and decide if an approach was working. The first few weeks were very productive, and got to a working prototype pretty fast. I hit a plateau then that didn't advance until I got some new problems to work on that exposed bugs and gaps in the code logic. Solving these led to new plateau that I stayed on again until I got a new set of problems to work on. These plateaus were basically development stages where fixing one issue created new ones somewhere else, or where Claude would try to fix things by changing one thing at a time, which would not work. It appeared Claude was just trying things and not "reasoning" about the real problem.
 
 I also used benchmarks and testing heavily to make sure we made progress. I started with the HS test suite which is small and fast, and later added the CUTEst benchmark which is much slower to run. At times I observed that Claude had sort of "fit to the benchmark" and was modifying tests to be more lenient so progress looked better. There were also phases where Claude would make changes specific to problems that did not generalize, or used complex logic that was not robust. This is something you have to watch, and sense the smell of to catch and stop it. 
 
@@ -21,11 +21,21 @@ This wasn't all dedicated work. I frequently did this in parallel with other act
 
 After the initial plans were implemented I had a basic implementation that solved some problems. There isn't really a debugging cycle to speak of, Claude automatically fixes bugs as you run tests. To continue making progress, I would ask Claude to identify problems in the benchmarks that ipopt solved but ripopt was either much slower, or didn't solve. Then I would ask Claude to diagnose the problems and propose fixes. I would review these suggestions and choose the directions to implement. This was an iterative process that sometimes took hours or days to get to solutions. 
 
+For small problems there are compelling reasons to be excited about ripopt. For larger problems, there is still a lot of work to do to make it competitive.
+
+* Challenges I had to work around
+
+The 200k token window gets filled pretty fast, and then things tend to degrade. Every session basically starts from scratch. I managed long-term memory by writing planning files (basically telling Claude to do this) that would get read at the beginning of each session. This was pretty effective.
+
+In other sessions, I would task Claude with reviewing the code to identify the missing pieces or functionality to make it competitive with ipopt. There were lots of sessions like this, with interactive back and forth to identify the implementation path.
+
+The process was not that automatic. I still don't use --dangerously-skip-permissions, that is just too scary. I occasionally found it helpful to intervene and redirect mid-session.  My Claude environment is pretty simple, but I have defined a lot of SKILL files that help with brainstorming, planning, etc. I doubt I could reproduce this project exactly again. I am not the same person I was 6 weeks ago though, and the environment is not the same. This has been true of many software projects in the past though. 
+
 * Why I don't think this is AI slop
 
 I think there is some value in this project. First, I learned a lot about creating a project like this, what the limitations are, the timescales, the challenges, etc. Second, there may be code that smells bad to some in the repo, but it is code that works, passes tests, and performs pretty well on benchmarks. In the end we don't know how all the code we run is written, we mostly care it works. 
 
-I did a lot of work introspecting the code with teams of agents that performed red-team reviews, that were setup as rust experts, optimization experts, code reviewers, and educators. I created examples and tutorials, and benchmarked the code against ipopt for comparison. For these things, I know it works. I know it doesn't work well on some medium to large problems, and there is a path to improve this that relies on me learning some new things.
+I did a lot of work introspecting the code with teams of agents that performed red-team reviews, that were setup as rust experts, optimization experts, code reviewers, and educators. Some of these teams were focused on code quality, e.g. eliminating code smells, duplicate code, dead code, and performance enhancments. I created examples and tutorials, and benchmarked the code against ipopt for comparison. For these things, I know it works. I know it doesn't work well on some medium to large problems, and there is a path to improve this that relies on me learning some new things.
 
 * Licensing
 
@@ -34,3 +44,25 @@ Originally I wanted this to be MIT licensed. However, the initial plan was to ba
 * Should you use this?
 
 Maybe. It is not as mature as established solvers, but if enough people use it and provide feedback maybe it will be (or some future version of it might be). The timeline to get here was only 6 weeks, and I think with 20/20 hindsight an even better version could be made in another 6 weeks. That makes it pretty easy to try new ideas pretty quickly. Don't like the interface? Write a new one. Don't like the solver? Write a new one (this is pretty hard but less hard than writing one from scratch).
+
+* Concerns
+
+Probably my biggest concern is probably copyright infringement. Althoough the code is inspired by open-source projects, and licensed consistently with them, I don't know if other codebases could have been in the training data for Claude, or accessed via web search during development. I have taken some care to include references to the literature where we drew inspiration from, but this may not be comprehensive. 
+
+I don't know if I should publish something about the project, maybe something on arxiv at some point. It is something I don't mind talking about, but maybe it is not yet at a stage where it is appropriate to publish. Certainly I think there is another stage necessary to get this to be competitive with existing, trusted solvers.
+
+I only trust the performance on benchmarks I have run. New problems almost always expose new bugs or performance issues. These are opportunities to learn and improve, not something to be afraid of in my opinion. 
+
+I don't know if the optimization community will take this seriously. I am an outsider, and this a very different way to develop software. I hope there will be synergy at some point, where people with much more expertise help me implement new ideas.
+
+I have not read all the generated code (I don't even really know how to write rust, but it is readable). It was generated faster than I could read or understand. That is a feature of LLMs, and I rely heavily on testing and benchmarking to identify problems and verify features. The development process is slowing down, so now there is more time to go back and review it. The six week development cycle was not that sustainable; I still have a day job that isn't this!
+
+
+* How do I feel about this?
+
+I have written a lot of software in my life. This was very different. It was more creative than it might seem; I had to conceive the idea, steer it, think through the best path, etc. I could not have written this myself. I really think the result of this work is better than anything I could have done without Claude code. The code is not perfect, but it is well documented, tested, and does well on benchmarks. I will learn from this, and continue on this path while LLMs are available.
+
+Is it my code? I am not sure. It is not even clear if the code can be copyrighted (the Supreme Court recently declined to overrule a lower court decision that AI generated art cannot be copyrighted). The effort to make this was sufficiently low that I don't think the original goals of copyright even apply. 
+
+I certainly think the last 25 years I spent writing code, learning to debug, understanding algorithms, benchmarking etc, were essential to making this possible. The last year of using LLMs for a very broad range of activites: Youtube videos, fiction, a variety of other software projects, etc. were also crucial in preparing me to do this. I continue to push the boundaries of what I can do with LLMs, and I think this is a very exciting time to be doing this. I am not sure how long this will last, but I am going to enjoy it while it does.
+
