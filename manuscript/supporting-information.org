@@ -1,8 +1,8 @@
 #+TITLE: Supporting Information: ripopt --- An Interior Point Optimizer in Rust with Implicit Slacks and Robust Recovery
 #+AUTHOR: John Kitchin
-#+DATE: 2026-03-09
 #+OPTIONS: toc:3 num:t
-
+\maketitle
+\tableofcontents
 * Introduction
 
 This Supporting Information provides algorithmic details and source code references for each section of the manuscript. Source code locations are given as org-mode links in the format =[[file:line]]= that point to the ripopt repository root at =src/=. All line numbers refer to the current version of the source code at the time of writing.

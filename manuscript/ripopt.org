@@ -1,6 +1,5 @@
 #+TITLE: ripopt: An Interior Point Optimizer in Rust with Implicit Slacks and Robust Recovery
 #+AUTHOR: John R. Kitchin
-#+DATE: 2026-02-14
 #+LATEX_CLASS: article
 #+LATEX_CLASS_OPTIONS: [12pt]
 #+OPTIONS: toc:nil
@@ -10,7 +9,7 @@
 Note: This manuscript is generated and updated by Claude Code, based on the ripopt codebase and its development history. The content reflects the design decisions, algorithmic innovations, and benchmarking results that emerged during the implementation process. The manuscript is structured to provide a comprehensive overview of ripopt's architecture, key contributions, and performance relative to Ipopt. The author (John R. Kitchin) provided high-level guidance and review but did not write any of the code or manuscript text directly (besides this note).
 
 See [[file:supporting-information.org][supporting-information.org]] for links to the full source code, test suite, and benchmarking infrastructure.
-lo
+
 \tableofcontents
 
 
