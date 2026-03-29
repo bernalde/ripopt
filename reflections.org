@@ -61,6 +61,11 @@ I don't know if the optimization community will take this seriously. I am an out
 
 I have not read all the generated code (I don't even really know how to write rust, but it is readable). It was generated faster than I could read or understand. That is a feature of LLMs, and I rely heavily on testing and benchmarking to identify problems and verify features. The development process is slowing down, so now there is more time to go back and review it. The six week development cycle was not that sustainable; I still have a day job that isn't this!
 
+I am mildly concerned about the changes in LLM pricing / access. I use the subscription model, but I think I cost Anthropic much more than the monthly fee. This access is subsidized by other users somehow. If I had to pay the true cost of tokens, which I guess would be in the $500-2000/month range, this would be harder to sustain. It is not that easy to get money for software development, so it would have to be bootstrapped by other work.
+
+* Long-term maintenance 
+
+I am not too worried about this. In other projects, if there are issues reported on GitHUB, I can get Claude to review them, pose solutions, implement and test them. As long as I have access to LLMs, I think this will be manageable. Without it, like other projects I have had, issues are likely to accumulate unless I find a way to spend more time on them.
 
 * How do I feel about this?
 
