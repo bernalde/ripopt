@@ -1931,6 +1931,104 @@ impl PhaseTimings {
     }
 }
 
+/// Dump a KKT system to disk for external solver benchmarking.
+///
+/// Writes two files to `dir`:
+/// - `<name>_<iter:04>.mtx` — Matrix Market symmetric format, lower triangle, 1-indexed
+/// - `<name>_<iter:04>.json` — Metadata: problem_name, iteration, n, m, rhs, inertia, status
+///
+/// All IO errors are logged as warnings and never propagate to the caller.
+fn dump_kkt_matrix(
+    dir: &std::path::Path,
+    name: &str,
+    iteration: usize,
+    kkt: &kkt::KktSystem,
+    inertia: Option<(usize, usize, usize)>,
+) {
+    use std::io::Write;
+
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        log::warn!("kkt_dump: cannot create directory {}: {}", dir.display(), e);
+        return;
+    }
+
+    let stem = format!("{}_{:04}", name, iteration);
+    let dim = kkt.dim;
+
+    // --- Matrix Market (.mtx) ---
+    let mtx_path = dir.join(format!("{}.mtx", stem));
+    let write_mtx = || -> std::io::Result<()> {
+        // Collect lower-triangle entries (1-indexed for Matrix Market).
+        let entries: Vec<(usize, usize, f64)> = match &kkt.matrix {
+            KktMatrix::Dense(d) => {
+                let mut v = Vec::with_capacity(dim * (dim + 1) / 2);
+                for j in 0..dim {
+                    for i in j..dim {
+                        let val = d.get(i, j);
+                        if val != 0.0 {
+                            v.push((i + 1, j + 1, val));
+                        }
+                    }
+                }
+                v
+            }
+            KktMatrix::Sparse(s) => {
+                // Triplets are upper triangle (row <= col). Flip each entry to lower
+                // triangle by swapping indices, then aggregate duplicates.
+                let mut map: std::collections::HashMap<(usize, usize), f64> =
+                    std::collections::HashMap::with_capacity(s.triplet_rows.len());
+                for k in 0..s.triplet_rows.len() {
+                    let r = s.triplet_rows[k]; // r <= c (upper tri)
+                    let c = s.triplet_cols[k];
+                    // Lower-triangle key: larger index first → (c, r) with c >= r.
+                    *map.entry((c, r)).or_insert(0.0) += s.triplet_vals[k];
+                }
+                let mut v: Vec<(usize, usize, f64)> = map
+                    .into_iter()
+                    .filter(|(_, val)| *val != 0.0)
+                    .map(|((i, j), val)| (i + 1, j + 1, val))
+                    .collect();
+                // Sort column-major for reader convenience.
+                v.sort_unstable_by_key(|&(i, j, _)| (j, i));
+                v
+            }
+        };
+
+        let mut file = std::fs::File::create(&mtx_path)?;
+        writeln!(file, "%%MatrixMarket matrix coordinate real symmetric")?;
+        writeln!(file, "{} {} {}", dim, dim, entries.len())?;
+        for (i, j, v) in &entries {
+            writeln!(file, "{} {} {:.17e}", i, j, v)?;
+        }
+        Ok(())
+    };
+    if let Err(e) = write_mtx() {
+        log::warn!("kkt_dump: failed to write {}.mtx: {}", stem, e);
+        return;
+    }
+
+    // --- JSON sidecar (.json) ---
+    let json_path = dir.join(format!("{}.json", stem));
+    let (pos, neg, zer) = inertia.unwrap_or((0, 0, 0));
+    let write_json = || -> std::io::Result<()> {
+        let meta = serde_json::json!({
+            "problem_name": name,
+            "iteration": iteration,
+            "n": kkt.n,
+            "m": kkt.m,
+            "rhs": kkt.rhs,
+            "inertia": { "positive": pos, "negative": neg, "zero": zer },
+            "status": "ongoing"
+        });
+        let mut file = std::fs::File::create(&json_path)?;
+        write!(file, "{}", meta)?;
+        Ok(())
+    };
+    if let Err(e) = write_json() {
+        log::warn!("kkt_dump: failed to write {}.json: {}", stem, e);
+    }
+}
+
 /// Core IPM solver implementation.
 fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult {
     // --- NLP Scaling (gradient-based, matching Ipopt's nlp_scaling_method) ---
@@ -3109,6 +3207,20 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         match &inertia_result {
             Ok((dw, dc)) => { ic_delta_w = *dw; ic_delta_c = *dc; }
             _ => {}
+        }
+
+        // KKT matrix dump for external solver benchmarking (e.g. FERAL).
+        // Only fires when options.kkt_dump_dir is Some and factorization succeeded.
+        if let Some(ref dump_dir) = options.kkt_dump_dir {
+            if inertia_result.is_ok() {
+                dump_kkt_matrix(
+                    dump_dir,
+                    &options.kkt_dump_name,
+                    iteration,
+                    kkt_system,
+                    Some((n, m, 0)),
+                );
+            }
         }
 
         if let Err(e) = inertia_result {

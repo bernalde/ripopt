@@ -177,6 +177,15 @@ pub struct SolverOptions {
     /// oracle when the iterate is well-centered.
     /// Default: true.
     pub mu_oracle_quality_function: bool,
+    /// If set, serialize each KKT matrix (main IPM loop only) to this directory
+    /// after factorization. Writes two files per iteration:
+    ///   `<kkt_dump_name>_<iter:04>.mtx`  — Matrix Market format, symmetric, lower triangle
+    ///   `<kkt_dump_name>_<iter:04>.json` — Metadata: n, m, iteration, rhs, inertia, status
+    /// The directory is created with `create_dir_all` if it does not exist.
+    /// No-op when `None` (default). IO errors are logged as warnings, never abort the solve.
+    pub kkt_dump_dir: Option<std::path::PathBuf>,
+    /// Problem name used in dump filenames. Defaults to `"problem"`.
+    pub kkt_dump_name: String,
 }
 
 impl Default for SolverOptions {
@@ -233,6 +242,8 @@ impl Default for SolverOptions {
             stall_iter_limit: 30,
             early_stall_timeout: 10.0,
             mu_oracle_quality_function: false,
+            kkt_dump_dir: None,
+            kkt_dump_name: "problem".to_string(),
         }
     }
 }
