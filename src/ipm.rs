@@ -2863,13 +2863,36 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     let stall_du_ok = dual_inf <= (stall_near_tol * s_d_for_acc).max(1e-2);
                     let stall_co_ok = compl_inf_best <= (stall_near_tol * s_d_for_acc).max(1e-2);
                     if stall_pr_ok && stall_du_ok && stall_co_ok {
-                        if options.print_level >= 3 {
-                            rip_log!(
-                                "ripopt: Stalled but near-tolerance (pr={:.2e}, du={:.2e}, co={:.2e}), returning NumericalError",
-                                primal_inf, dual_inf, compl_inf_best
-                            );
+                        // In Fixed (monotone) mode, stalling near tolerance means the barrier
+                        // subproblem is solved at the current mu — force a mu decrease to
+                        // continue toward the NLP optimum instead of returning NumericalError.
+                        if !options.mu_strategy_adaptive && state.mu > options.mu_min {
+                            let new_mu = (options.mu_linear_decrease_factor * state.mu)
+                                .min(state.mu.powf(options.mu_superlinear_decrease_power))
+                                .max(options.mu_min);
+                            if options.print_level >= 3 {
+                                rip_log!(
+                                    "ripopt: Fixed mode stall near tolerance (pr={:.2e}, du={:.2e}, co={:.2e}), forcing mu {:.2e} -> {:.2e}",
+                                    primal_inf, dual_inf, compl_inf_best, state.mu, new_mu
+                                );
+                            }
+                            state.mu = new_mu;
+                            filter.reset();
+                            let theta_new = state.constraint_violation();
+                            filter.set_theta_min_from_initial(theta_new);
+                            stall_no_progress_count = 0;
+                            stall_best_pr = f64::INFINITY;
+                            stall_best_du = f64::INFINITY;
+                            continue;
+                        } else {
+                            if options.print_level >= 3 {
+                                rip_log!(
+                                    "ripopt: Stalled but near-tolerance (pr={:.2e}, du={:.2e}, co={:.2e}), returning NumericalError",
+                                    primal_inf, dual_inf, compl_inf_best
+                                );
+                            }
+                            return make_result(&state, SolveStatus::NumericalError);
                         }
-                        return make_result(&state, SolveStatus::NumericalError);
                     }
                     // Full two-gate near-tolerance check with optimal dual multipliers.
                     // When duals have diverged but the primal point is near-optimal
