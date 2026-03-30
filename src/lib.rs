@@ -17,36 +17,36 @@
 //! Implement [`NlpProblem`] for your problem, then call [`solve`]:
 //!
 //! ```rust,no_run
-//! use ripopt::{NlpProblem, SolveResult, SolverOptions, SolveStatus};
+//! use ripopt::{NlpProblem, SolveResult, SolverOptions, SolveStatus, solve};
 //!
 //! struct MyProblem;
 //!
 //! impl NlpProblem for MyProblem {
-//!     fn n(&self) -> usize { 2 }
-//!     fn m(&self) -> usize { 0 }
-//!     fn x_l(&self) -> Vec<f64> { vec![-1e20; 2] }
-//!     fn x_u(&self) -> Vec<f64> { vec![ 1e20; 2] }
-//!     fn g_l(&self) -> Vec<f64> { vec![] }
-//!     fn g_u(&self) -> Vec<f64> { vec![] }
-//!     fn x0(&self) -> Vec<f64> { vec![0.5, 0.5] }
-//!     fn f(&self, x: &[f64]) -> f64 { (1.0 - x[0]).powi(2) + 100.0 * (x[1] - x[0].powi(2)).powi(2) }
-//!     fn grad_f(&self, x: &[f64]) -> Vec<f64> {
-//!         vec![
-//!             -2.0 * (1.0 - x[0]) - 400.0 * x[0] * (x[1] - x[0].powi(2)),
-//!              200.0 * (x[1] - x[0].powi(2)),
-//!         ]
+//!     fn num_variables(&self) -> usize { 2 }
+//!     fn num_constraints(&self) -> usize { 0 }
+//!     fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+//!         x_l.fill(f64::NEG_INFINITY);
+//!         x_u.fill(f64::INFINITY);
 //!     }
-//!     fn g(&self, _x: &[f64]) -> Vec<f64> { vec![] }
-//!     fn jac_g(&self, _x: &[f64]) -> Vec<f64> { vec![] }
-//!     fn jac_g_sparsity(&self) -> (Vec<usize>, Vec<usize>) { (vec![], vec![]) }
-//!     fn hess_l(&self, x: &[f64], _sigma: f64, _lambda: &[f64]) -> Vec<f64> {
-//!         let h00 = 2.0 - 400.0 * (x[1] - x[0].powi(2)) + 800.0 * x[0].powi(2);
-//!         let h10 = -400.0 * x[0];
-//!         let h11 = 200.0_f64;
-//!         vec![h00, h10, h11]
+//!     fn constraint_bounds(&self, _g_l: &mut [f64], _g_u: &mut [f64]) {}
+//!     fn initial_point(&self, x0: &mut [f64]) { x0[0] = 0.5; x0[1] = 0.5; }
+//!     fn objective(&self, x: &[f64]) -> f64 {
+//!         (1.0 - x[0]).powi(2) + 100.0 * (x[1] - x[0].powi(2)).powi(2)
 //!     }
-//!     fn hess_l_sparsity(&self) -> (Vec<usize>, Vec<usize>) {
+//!     fn gradient(&self, x: &[f64], grad: &mut [f64]) {
+//!         grad[0] = -2.0 * (1.0 - x[0]) - 400.0 * x[0] * (x[1] - x[0].powi(2));
+//!         grad[1] = 200.0 * (x[1] - x[0].powi(2));
+//!     }
+//!     fn constraints(&self, _x: &[f64], _g: &mut [f64]) {}
+//!     fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) { (vec![], vec![]) }
+//!     fn jacobian_values(&self, _x: &[f64], _vals: &mut [f64]) {}
+//!     fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
 //!         (vec![0, 1, 1], vec![0, 0, 1])
+//!     }
+//!     fn hessian_values(&self, x: &[f64], obj_factor: f64, _lambda: &[f64], vals: &mut [f64]) {
+//!         vals[0] = obj_factor * (2.0 - 400.0 * (x[1] - x[0].powi(2)) + 800.0 * x[0].powi(2));
+//!         vals[1] = obj_factor * (-400.0 * x[0]);
+//!         vals[2] = obj_factor * 200.0;
 //!     }
 //! }
 //!
