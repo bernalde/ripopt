@@ -46,6 +46,11 @@ name = "cutest_suite"
 path = "cutest_suite/run_cutest.rs"
 required-features = ["cutest", "ipopt-native"]
 
+[[bin]]
+name = "collect_kkt"
+path = "cutest_suite/collect_kkt.rs"
+required-features = ["cutest"]
+
 [[example]]
 name = "compare_large_scale"
 required-features = ["ipopt-native"]
