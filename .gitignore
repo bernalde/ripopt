@@ -30,6 +30,7 @@ manuscript/*.tex
 manuscript/*.pdf
 manuscript/*.synctex.gz
 manuscript/_minted/
+manuscript/*.pyg
 
 # Archive of old docs
 archive/
