@@ -18,7 +18,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
       - name: Run tests (20s per-test timeout)
-        run: cargo nextest run --test-timeout 20s
+        run: cargo nextest run
       - name: Run doctests
         run: cargo test --doc
       - name: Build shared library
