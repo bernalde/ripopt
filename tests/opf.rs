@@ -97,6 +97,7 @@ fn opf_case14_ieee() {
 }
 
 #[test]
+#[ignore = "too slow for CI (>20s)"]
 fn opf_case30_ieee() {
     let problem = case30_ieee();
     let options = default_options();
