@@ -15,7 +15,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - name: Run tests (20s per-test timeout)
+        run: cargo nextest run --test-timeout 20s
+      - name: Run doctests
+        run: cargo test --doc
       - name: Build shared library
         run: cargo build --release
       - name: Compile and run C API examples
