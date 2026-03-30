@@ -51,7 +51,7 @@ jobs:
         run: cargo doc --no-deps --features rmumps
 
       - name: Copy API docs into book output
-        run: cp -r target/doc docs/book/api
+        run: cp -r target/doc/. docs/book/api/
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
