@@ -8,6 +8,22 @@ edition = "2021"
 license = "EPL-2.0"
 description = "A memory-safe interior point optimizer in Rust"
 repository = "https://github.com/jkitchin/ripopt"
+exclude = [
+    "cho/",
+    "cutest_suite/",
+    "docs/",
+    "hs_suite/",
+    "manuscript/",
+    "tutorials/",
+    "Ripopt.jl/",
+    "ipopt-rust.png",
+    "*.pdf",
+    "*.ipynb",
+    "BENCHMARK_REPORT.*",
+    "RIPOPT_VS_IPOPT.md",
+    "benchmark_report.py",
+    ".github/",
+]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
