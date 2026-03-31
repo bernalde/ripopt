@@ -1,5 +1,6 @@
 # ripopt
 
+[![Crates.io](https://img.shields.io/crates/v/ripopt.svg)](https://crates.io/crates/ripopt)
 [![Tests](https://github.com/jkitchin/ripopt/actions/workflows/test.yml/badge.svg)](https://github.com/jkitchin/ripopt/actions/workflows/test.yml)
 
 ![img](./ipopt-rust.png)
@@ -158,7 +159,21 @@ For other installation methods (Homebrew, distro packages, Windows), see the [of
 
 ### Install ripopt
 
-Clone the repository and run `make install`:
+**From crates.io:**
+
+```bash
+cargo install ripopt
+```
+
+This installs the `ripopt` AMPL solver binary to `~/.cargo/bin/`.
+
+To use ripopt as a library dependency in your Rust project:
+
+```bash
+cargo add ripopt
+```
+
+**From source** (clone the repository and run `make install`):
 
 ```bash
 git clone https://github.com/jkitchin/ripopt.git
