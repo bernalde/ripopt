@@ -36,6 +36,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 faer = { version = "0.20", optional = true }
 rmumps = { version = "0.1.1", path = "rmumps", optional = true, features = ["faer"] }
+num-dual = { version = "0.13", optional = true }
+nalgebra = { version = "0.34", optional = true }
 
 [features]
 default = ["rmumps", "faer"]
@@ -44,6 +46,7 @@ cutest = []
 hs = []
 rmumps = ["dep:rmumps"]
 faer = ["dep:faer"]
+num-dual = ["dep:num-dual", "dep:nalgebra"]
 
 [[bin]]
 name = "hs_suite"
@@ -72,6 +75,10 @@ required-features = ["cutest"]
 [[example]]
 name = "compare_large_scale"
 required-features = ["ipopt-native"]
+
+[[example]]
+name = "autodiff_num_dual"
+required-features = ["num-dual"]
 
 [[example]]
 name = "benchmark_solvers"

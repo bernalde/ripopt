@@ -4358,10 +4358,10 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     }
                 }
                 if let Ok(obj_soft) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    problem.objective(&x_soft)
+                    problem.objective(&x_soft, true)
                 })) {
                     let mut g_soft = vec![0.0; m];
-                    problem.constraints(&x_soft, &mut g_soft);
+                    problem.constraints(&x_soft, false, &mut g_soft);
                     {
                         let theta_soft = convergence::primal_infeasibility(&g_soft, &state.g_l, &state.g_u);
                         // Accept if constraint violation decreased
