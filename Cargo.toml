@@ -9,11 +9,14 @@ license = "EPL-2.0"
 description = "A memory-safe interior point optimizer in Rust"
 repository = "https://github.com/jkitchin/ripopt"
 exclude = [
+    "adversary/",
     "cho/",
+    ".crucible/",
     "cutest_suite/",
     "docs/",
     "hs_suite/",
     "manuscript/",
+    "research/",
     "tutorials/",
     "Ripopt.jl/",
     "ipopt-rust.png",
