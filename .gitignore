@@ -74,3 +74,9 @@ _minted/
 linkedin.org
 docs/book
 .claude/
+
+# Adversary agent (local testing, not part of crate)
+adversary/
+examples/adversary_*
+.crucible/
+research/
