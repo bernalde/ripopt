@@ -2624,6 +2624,18 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             log_line_count += 1;
         }
 
+        // z_opt component-wise scaled dual infeasibility (fallback for unscaled gate)
+        let dual_inf_unscaled_opt = convergence::dual_infeasibility_scaled(
+            &state.grad_f,
+            &state.jac_rows,
+            &state.jac_cols,
+            &state.jac_vals,
+            &state.y,
+            &z_l_opt,
+            &z_u_opt,
+            n,
+        );
+
         // Compute multiplier scaling for convergence check
         let multiplier_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
             + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
@@ -2635,7 +2647,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             primal_inf,
             dual_inf,
             dual_inf_unscaled,
+            dual_inf_unscaled_opt,
             compl_inf: compl_inf_best,
+            compl_inf_opt,
             mu: state.mu,
             objective: state.obj,
             multiplier_sum,
@@ -2712,7 +2726,10 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         );
                         let avg_conv = ConvergenceInfo {
                             primal_inf: avg_pr, dual_inf: avg_du,
-                            dual_inf_unscaled: avg_du, compl_inf: avg_compl,
+                            dual_inf_unscaled: avg_du,
+                            dual_inf_unscaled_opt: avg_du,
+                            compl_inf: avg_compl,
+                            compl_inf_opt: avg_compl,
                             mu: state.mu, objective: state.obj,
                             multiplier_sum: avg_y.iter().map(|v| v.abs()).sum::<f64>()
                                 + avg_zl.iter().map(|v| v.abs()).sum::<f64>()
@@ -2796,7 +2813,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             primal_inf: conv_info.primal_inf,
                             dual_inf: snap_du,
                             dual_inf_unscaled: snap_du,
+                            dual_inf_unscaled_opt: snap_du,
                             compl_inf: snap_compl,
+                            compl_inf_opt: snap_compl,
                             mu: state.mu,
                             objective: state.obj,
                             multiplier_sum: snap_mult_sum,
@@ -5879,7 +5898,9 @@ fn try_active_set_solve<P: NlpProblem>(
         primal_inf,
         dual_inf,
         dual_inf_unscaled: dual_inf, // same z used for both
+        dual_inf_unscaled_opt: dual_inf,
         compl_inf,
+        compl_inf_opt: compl_inf,
         mu: 0.0, // at the solution, mu should be zero
         objective: state.obj,
         multiplier_sum,
