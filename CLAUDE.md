@@ -36,6 +36,15 @@
 
 **Tests must be honest:** If the solver cannot solve a problem to `Optimal`, the test should either fail (exposing the real limitation), be marked `#[ignore]` with a clear explanation, or be removed. A failing test that documents a real limitation is more valuable than a passing test that hides one.
 
+## Benchmark Versioning
+After each release, save tagged benchmark results so we can track improvement and regression across versions. Run `make hs-run` (or the full `make benchmark`) and copy the results:
+```
+cp hs_suite/hs_ripopt_results.json hs_suite/hs_ripopt_results_vX.Y.Z.json
+cp hs_suite/hs_ipopt_native_results.json hs_suite/hs_ipopt_native_results_vX.Y.Z.json
+cp BENCHMARK_REPORT.json BENCHMARK_REPORT_vX.Y.Z.json
+```
+This enables per-problem timing comparisons between versions (e.g. "did problem 12 get faster?") and catches regressions that aggregate pass rates miss.
+
 <!-- crucible-project -->
 ## Crucible Knowledge Base
 
