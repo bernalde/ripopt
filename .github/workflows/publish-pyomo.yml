@@ -1,0 +1,136 @@
+name: Publish pyomo-ripopt
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build-wheels:
+    name: Build wheel (${{ matrix.os }}-${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            wheel-plat: manylinux_2_17_x86_64
+          - os: linux
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            wheel-plat: manylinux_2_17_aarch64
+          - os: macos
+            runner: macos-13
+            target: x86_64-apple-darwin
+            wheel-plat: macosx_10_12_x86_64
+          - os: macos
+            runner: macos-latest
+            target: aarch64-apple-darwin
+            wheel-plat: macosx_11_0_arm64
+          - os: windows
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            wheel-plat: win_amd64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build ripopt binary
+        run: cargo build --release --bin ripopt --target ${{ matrix.target }}
+
+      - name: Bundle binary into wheel (Unix)
+        if: matrix.os != 'windows'
+        run: |
+          mkdir -p pyomo-ripopt/pyomo_ripopt/bin
+          cp target/${{ matrix.target }}/release/ripopt pyomo-ripopt/pyomo_ripopt/bin/
+          chmod +x pyomo-ripopt/pyomo_ripopt/bin/ripopt
+
+      - name: Bundle binary into wheel (Windows)
+        if: matrix.os == 'windows'
+        run: |
+          mkdir -p pyomo-ripopt/pyomo_ripopt/bin
+          cp target/${{ matrix.target }}/release/ripopt.exe pyomo-ripopt/pyomo_ripopt/bin/
+        shell: bash
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build wheel
+        run: |
+          pip install build wheel
+          cd pyomo-ripopt
+          python -m build --wheel
+        env:
+          # Force the wheel platform tag
+          SETUPTOOLS_SCM_PRETEND_VERSION: "0.0.0"
+
+      - name: Re-tag wheel with correct platform
+        run: |
+          pip install wheel
+          cd pyomo-ripopt/dist
+          for whl in *.whl; do
+            python -m wheel tags --remove \
+              --platform-tag ${{ matrix.wheel-plat }} \
+              --python-tag py3 \
+              --abi-tag none \
+              "$whl"
+          done
+        shell: bash
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}-${{ matrix.target }}
+          path: pyomo-ripopt/dist/*.whl
+
+  # Also build a source distribution (no binary, users need ripopt on PATH)
+  build-sdist:
+    name: Build sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build sdist
+        run: |
+          pip install build
+          cd pyomo-ripopt
+          python -m build --sdist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: pyomo-ripopt/dist/*.tar.gz
+
+  publish:
+    name: Publish to PyPI
+    needs: [build-wheels, build-sdist]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # for trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

@@ -9,10 +9,23 @@ Usage:
     solver = SolverFactory('ripopt')
     result = solver.solve(model)
 """
+import os
+import platform
 import shutil
+import sys
 
 from pyomo.opt import SolverFactory
 from pyomo.solvers.plugins.solvers.ASL import ASL
+
+
+def _bundled_binary():
+    """Find the ripopt binary bundled inside this wheel (if any)."""
+    name = "ripopt.exe" if platform.system() == "Windows" else "ripopt"
+    bin_dir = os.path.join(os.path.dirname(__file__), "bin")
+    path = os.path.join(bin_dir, name)
+    if os.path.isfile(path) and os.access(path, os.X_OK):
+        return path
+    return None
 
 
 @SolverFactory.register("ripopt", doc="The ripopt NLP solver")
@@ -26,4 +39,5 @@ class RIPOPT(ASL):
         self.options.solver = "ripopt"
 
     def _default_executable(self):
-        return shutil.which("ripopt")
+        # Prefer the binary bundled in the wheel, fall back to PATH
+        return _bundled_binary() or shutil.which("ripopt")
