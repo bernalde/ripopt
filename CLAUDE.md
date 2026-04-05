@@ -35,3 +35,17 @@
 - Hiding known failures behind lenient statuses (`Acceptable` was removed for this reason)
 
 **Tests must be honest:** If the solver cannot solve a problem to `Optimal`, the test should either fail (exposing the real limitation), be marked `#[ignore]` with a clear explanation, or be removed. A failing test that documents a real limitation is more valuable than a passing test that hides one.
+
+<!-- crucible-project -->
+## Crucible Knowledge Base
+
+This project has a [Crucible](https://github.com/jkitchin/crucible) knowledge base in `.crucible/`.
+Use the `crucible` CLI to ingest sources, search, and maintain the wiki.
+
+Layout: `.crucible/sources/` (primary sources), `.crucible/wiki/` (distilled articles),
+`.crucible/crucible.db` (graph database).
+
+Conventions: org-mode with scimax, org-ref citations, narrative prose.
+The LLM maintains the wiki; manual edits are the exception.
+Run `crucible help all` for the full CLI reference.
+<!-- crucible-project -->
