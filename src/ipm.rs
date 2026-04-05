@@ -108,41 +108,46 @@ impl<P: NlpProblem> NlpProblem for ScaledProblem<'_, P> {
     fn initial_point(&self, x0: &mut [f64]) {
         self.inner.initial_point(x0);
     }
-    fn objective(&self, x: &[f64], _new_x: bool) -> f64 {
-        self.inner.objective(x, _new_x) * self.obj_scaling
+    fn objective(&self, x: &[f64], _new_x: bool, obj: &mut f64) -> bool {
+        if !self.inner.objective(x, _new_x, obj) { return false; }
+        *obj *= self.obj_scaling;
+        true
     }
-    fn gradient(&self, x: &[f64], _new_x: bool, grad: &mut [f64]) {
-        self.inner.gradient(x, _new_x, grad);
+    fn gradient(&self, x: &[f64], _new_x: bool, grad: &mut [f64]) -> bool {
+        if !self.inner.gradient(x, _new_x, grad) { return false; }
         for g in grad.iter_mut() {
             *g *= self.obj_scaling;
         }
+        true
     }
-    fn constraints(&self, x: &[f64], _new_x: bool, g: &mut [f64]) {
-        self.inner.constraints(x, _new_x, g);
+    fn constraints(&self, x: &[f64], _new_x: bool, g: &mut [f64]) -> bool {
+        if !self.inner.constraints(x, _new_x, g) { return false; }
         for (i, &s) in self.g_scaling.iter().enumerate() {
             g[i] *= s;
         }
+        true
     }
     fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
         self.inner.jacobian_structure()
     }
-    fn jacobian_values(&self, x: &[f64], _new_x: bool, vals: &mut [f64]) {
-        self.inner.jacobian_values(x, _new_x, vals);
+    fn jacobian_values(&self, x: &[f64], _new_x: bool, vals: &mut [f64]) -> bool {
+        if !self.inner.jacobian_values(x, _new_x, vals) { return false; }
         for (idx, &row) in self.jac_rows.iter().enumerate() {
             vals[idx] *= self.g_scaling[row];
         }
+        true
     }
     fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
         self.inner.hessian_structure()
     }
-    fn hessian_values(&self, x: &[f64], _new_x: bool, obj_factor: f64, lambda: &[f64], vals: &mut [f64]) {
+    fn hessian_values(&self, x: &[f64], _new_x: bool, obj_factor: f64, lambda: &[f64], vals: &mut [f64]) -> bool {
         let scaled_lambda: Vec<f64> = lambda
             .iter()
             .zip(self.g_scaling.iter())
             .map(|(l, s)| l * s)
             .collect();
         self.inner
-            .hessian_values(x, _new_x, obj_factor * self.obj_scaling, &scaled_lambda, vals);
+            .hessian_values(x, _new_x, obj_factor * self.obj_scaling, &scaled_lambda, vals)
     }
 }
 
@@ -630,15 +635,19 @@ impl SolverState {
         // The sparse LS path is available for post-restoration recovery.
         let mut y = if options.least_squares_mult_init && m > 0 && m <= 500 {
             let mut grad_f_init = vec![0.0; n];
-            problem.gradient(&x, true, &mut grad_f_init);
+            let grad_ok = problem.gradient(&x, true, &mut grad_f_init);
 
             let mut jac_vals_init = vec![0.0; jac_nnz];
-            problem.jacobian_values(&x, false, &mut jac_vals_init);
-
-            compute_ls_multiplier_estimate(
-                &grad_f_init, &jac_rows, &jac_cols, &jac_vals_init,
-                &g_l, &g_u, n, m, options.constr_mult_init_max,
-            ).unwrap_or_else(|| vec![0.0; m])
+            let jac_ok = problem.jacobian_values(&x, false, &mut jac_vals_init);
+            if !grad_ok || !jac_ok {
+                // Evaluation failed during LS mult init; skip and use default multipliers
+                vec![0.0; m]
+            } else {
+                compute_ls_multiplier_estimate(
+                    &grad_f_init, &jac_rows, &jac_cols, &jac_vals_init,
+                    &g_l, &g_u, n, m, options.constr_mult_init_max,
+                ).unwrap_or_else(|| vec![0.0; m])
+            }
         } else {
             vec![0.0; m]
         };
@@ -708,17 +717,17 @@ impl SolverState {
         obj_factor: f64,
         linear_constraints: Option<&[bool]>,
         skip_hessian: bool,
-    ) {
+    ) -> bool {
         let new_x = self.x != self.x_last_eval;
-        self.obj = problem.objective(&self.x, new_x);
-        problem.gradient(&self.x, false, &mut self.grad_f);
+        if !problem.objective(&self.x, new_x, &mut self.obj) { return false; }
+        if !problem.gradient(&self.x, false, &mut self.grad_f) { return false; }
         if self.m > 0 {
-            problem.constraints(&self.x, false, &mut self.g);
-            problem.jacobian_values(&self.x, false, &mut self.jac_vals);
+            if !problem.constraints(&self.x, false, &mut self.g) { return false; }
+            if !problem.jacobian_values(&self.x, false, &mut self.jac_vals) { return false; }
         }
         self.x_last_eval.copy_from_slice(&self.x);
         if skip_hessian {
-            return;
+            return true;
         }
         if let Some(flags) = linear_constraints {
             let mut lambda_for_hess = self.y.clone();
@@ -727,10 +736,11 @@ impl SolverState {
                     lambda_for_hess[i] = 0.0;
                 }
             }
-            problem.hessian_values(&self.x, false, obj_factor, &lambda_for_hess, &mut self.hess_vals);
+            if !problem.hessian_values(&self.x, false, obj_factor, &lambda_for_hess, &mut self.hess_vals) { return false; }
         } else {
-            problem.hessian_values(&self.x, false, obj_factor, &self.y, &mut self.hess_vals);
+            if !problem.hessian_values(&self.x, false, obj_factor, &self.y, &mut self.hess_vals) { return false; }
         }
+        true
     }
 
     /// Compute the barrier objective:
@@ -913,66 +923,60 @@ impl<P: NlpProblem> NlpProblem for LeastSquaresProblem<'_, P> {
     fn initial_point(&self, x0: &mut [f64]) {
         self.inner.initial_point(x0);
     }
-    fn objective(&self, x: &[f64], _new_x: bool) -> f64 {
+    fn objective(&self, x: &[f64], _new_x: bool, obj: &mut f64) -> bool {
         let m = self.targets.len();
         let mut g = vec![0.0; m];
-        self.inner.constraints(x, _new_x, &mut g);
+        if !self.inner.constraints(x, _new_x, &mut g) { return false; }
         let mut sum = 0.0;
         for i in 0..m {
             let r = g[i] - self.targets[i];
             sum += r * r;
         }
-        0.5 * sum
+        *obj = 0.5 * sum;
+        true
     }
-    fn gradient(&self, x: &[f64], _new_x: bool, grad: &mut [f64]) {
+    fn gradient(&self, x: &[f64], _new_x: bool, grad: &mut [f64]) -> bool {
         let n = self.inner.num_variables();
         let m = self.targets.len();
-        // Compute residual r = g(x) - target
         let mut g = vec![0.0; m];
-        self.inner.constraints(x, _new_x, &mut g);
+        if !self.inner.constraints(x, _new_x, &mut g) { return false; }
         let mut r = vec![0.0; m];
         for i in 0..m {
             r[i] = g[i] - self.targets[i];
         }
-        // grad = J^T * r
         let jac_nnz = self.jac_rows.len();
         let mut jac_vals = vec![0.0; jac_nnz];
-        self.inner.jacobian_values(x, _new_x, &mut jac_vals);
+        if !self.inner.jacobian_values(x, _new_x, &mut jac_vals) { return false; }
         for i in 0..n {
             grad[i] = 0.0;
         }
         for (idx, (&row, &col)) in self.jac_rows.iter().zip(self.jac_cols.iter()).enumerate() {
             grad[col] += jac_vals[idx] * r[row];
         }
+        true
     }
-    fn constraints(&self, _x: &[f64], _new_x: bool, _g: &mut [f64]) {
-        // no constraints
-    }
+    fn constraints(&self, _x: &[f64], _new_x: bool, _g: &mut [f64]) -> bool { true }
     fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
-        (vec![], vec![]) // no constraints
+        (vec![], vec![])
     }
-    fn jacobian_values(&self, _x: &[f64], _new_x: bool, _vals: &mut [f64]) {
-        // no constraints
-    }
+    fn jacobian_values(&self, _x: &[f64], _new_x: bool, _vals: &mut [f64]) -> bool { true }
     fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
         (self.hess_rows.clone(), self.hess_cols.clone())
     }
-    fn hessian_values(&self, x: &[f64], _new_x: bool, obj_factor: f64, _lambda: &[f64], vals: &mut [f64]) {
+    fn hessian_values(&self, x: &[f64], _new_x: bool, obj_factor: f64, _lambda: &[f64], vals: &mut [f64]) -> bool {
         let n = self.inner.num_variables();
         let m = self.targets.len();
 
-        // Compute residual r = g(x) - target
         let mut g = vec![0.0; m];
-        self.inner.constraints(x, _new_x, &mut g);
+        if !self.inner.constraints(x, _new_x, &mut g) { return false; }
         let mut r = vec![0.0; m];
         for i in 0..m {
             r[i] = g[i] - self.targets[i];
         }
 
-        // Part 1: J^T * J (Gauss-Newton term)
         let jac_nnz = self.jac_rows.len();
         let mut jac_vals = vec![0.0; jac_nnz];
-        self.inner.jacobian_values(x, _new_x, &mut jac_vals);
+        if !self.inner.jacobian_values(x, _new_x, &mut jac_vals) { return false; }
 
         let mut j_dense = vec![0.0; m * n];
         for (idx, (&row, &col)) in self.jac_rows.iter().zip(self.jac_cols.iter()).enumerate() {
@@ -991,16 +995,15 @@ impl<P: NlpProblem> NlpProblem for LeastSquaresProblem<'_, P> {
             }
         }
 
-        // Part 2: ∑ r_i * ∇²g_i (second-order correction)
-        // inner.hessian_values(x, 0.0, r, hess) gives ∑ r_i * ∇²g_i
         let inner_hess_nnz = self.inner_hess_map.len();
         if inner_hess_nnz > 0 {
             let mut inner_hess_vals = vec![0.0; inner_hess_nnz];
-            self.inner.hessian_values(x, _new_x, 0.0, &r, &mut inner_hess_vals);
+            if !self.inner.hessian_values(x, _new_x, 0.0, &r, &mut inner_hess_vals) { return false; }
             for (k, &v) in inner_hess_vals.iter().enumerate() {
                 vals[self.inner_hess_map[k]] += obj_factor * v;
             }
         }
+        true
     }
 }
 
@@ -1078,13 +1081,18 @@ fn detect_ne_problem<P: NlpProblem>(problem: &P) -> bool {
     let mut x0 = vec![0.0; n];
     problem.initial_point(&mut x0);
 
-    let f0 = problem.objective(&x0, true);
+    let mut f0 = 0.0;
+    if !problem.objective(&x0, true, &mut f0) {
+        return false;
+    }
     if f0.abs() > 1e-10 {
         return false;
     }
 
     let mut grad = vec![0.0; n];
-    problem.gradient(&x0, false, &mut grad);
+    if !problem.gradient(&x0, false, &mut grad) {
+        return false;
+    }
     let grad_max = grad.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
     if grad_max > 1e-10 {
         return false;
@@ -1103,7 +1111,9 @@ fn detect_ne_problem<P: NlpProblem>(problem: &P) -> bool {
     // If constraints are already satisfied at x0, no need to reformulate —
     // the standard IPM can handle it (e.g., FBRAIN3 starts feasible).
     let mut g0 = vec![0.0; m];
-    problem.constraints(&x0, false, &mut g0);
+    if !problem.constraints(&x0, false, &mut g0) {
+        return false;
+    }
     let theta0 = convergence::primal_infeasibility(&g0, &g_l, &g_u);
     if theta0 < 1e-8 {
         return false;
@@ -1272,7 +1282,22 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
         // Evaluate original constraint violation at the LS solution
         let mut g_final = vec![0.0; m];
-        problem.constraints(&ls_result.x, true, &mut g_final);
+        if !problem.constraints(&ls_result.x, true, &mut g_final) {
+            // Evaluation failed; skip polishing, return LS result as-is
+            let mut diag = ls_result.diagnostics.clone();
+            diag.fallback_used = Some("ne-to-ls".into());
+            return SolveResult {
+                x: ls_result.x,
+                objective: ls_result.objective,
+                constraint_multipliers: vec![0.0; m],
+                bound_multipliers_lower: ls_result.bound_multipliers_lower,
+                bound_multipliers_upper: ls_result.bound_multipliers_upper,
+                constraint_values: g_final,
+                status: SolveStatus::EvaluationError,
+                iterations: ls_result.iterations,
+                diagnostics: diag,
+            };
+        }
         let mut g_l = vec![0.0; m];
         let mut g_u = vec![0.0; m];
         problem.constraint_bounds(&mut g_l, &mut g_u);
@@ -1301,7 +1326,9 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
                 // Get Jacobian at current point
                 let mut jac_vals = vec![0.0; nnz];
-                problem.jacobian_values(&polished_x, true, &mut jac_vals);
+                if !problem.jacobian_values(&polished_x, true, &mut jac_vals) {
+                    break; // Eval failed, stop polishing
+                }
 
                 // Build dense J (m x n)
                 let mut j_dense = vec![0.0; m * n];
@@ -1363,7 +1390,10 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     for i in 0..n {
                         trial_x[i] = polished_x[i] - best_alpha * dx[i];
                     }
-                    problem.constraints(&trial_x, true, &mut trial_g);
+                    if !problem.constraints(&trial_x, true, &mut trial_g) {
+                        best_alpha *= 0.5;
+                        continue; // Eval failed, try shorter step
+                    }
                     let trial_theta = convergence::primal_infeasibility(&trial_g, &g_l, &g_u);
                     if trial_theta < theta {
                         best_theta = trial_theta;
@@ -1380,7 +1410,9 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 for i in 0..n {
                     polished_x[i] -= best_alpha * dx[i];
                 }
-                problem.constraints(&polished_x, true, &mut g_final);
+                if !problem.constraints(&polished_x, true, &mut g_final) {
+                    break; // Eval failed, stop polishing
+                }
                 theta = best_theta;
 
                 if options.print_level >= 5 {
@@ -1491,8 +1523,11 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 }
                 let lbfgs_ls = crate::lbfgs::solve(&ls_problem, options);
                 let mut g_lb = vec![0.0; m];
-                problem.constraints(&lbfgs_ls.x, true, &mut g_lb);
-                let theta_lb = convergence::primal_infeasibility(&g_lb, &g_l, &g_u);
+                let theta_lb = if problem.constraints(&lbfgs_ls.x, true, &mut g_lb) {
+                    convergence::primal_infeasibility(&g_lb, &g_l, &g_u)
+                } else {
+                    f64::INFINITY // Eval failed, skip this fallback
+                };
 
                 if theta_lb < theta {
                     let new_status = if theta_lb < options.tol {
@@ -1689,7 +1724,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 }
                 let x_out = candidate.x[..n].to_vec();
                 let mut g_out = vec![0.0; m];
-                problem.constraints(&x_out, true, &mut g_out);
+                let _ = problem.constraints(&x_out, true, &mut g_out); // best-effort
                 let mut diag = candidate.diagnostics;
                 diag.fallback_used = Some("slack".into());
                 diag.wall_time_secs = solve_start.elapsed().as_secs_f64();
@@ -2039,55 +2074,65 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let mut x0 = vec![0.0; n_sc];
     problem.initial_point(&mut x0);
 
-    // Objective scaling: obj_scaling = min(1, max_grad / ||∇f(x0)||∞)
-    // Use a floor of 1e-2 to prevent extreme downscaling that creates a mismatch
-    // with the unscaled log-barrier terms (we don't have explicit slack variables).
-    let nlp_scaling_max_gradient = 100.0;
-    let nlp_scaling_min_value = 1e-2;
-    let mut grad_f0 = vec![0.0; n_sc];
-    problem.gradient(&x0, true, &mut grad_f0);
-    let grad_max = grad_f0
-        .iter()
-        .map(|v| v.abs())
-        .fold(0.0f64, f64::max);
-    // Skip objective scaling for unconstrained problems: there is no constraint-objective
-    // tradeoff to balance, and extreme downscaling makes the barrier terms dominate.
-    let obj_scaling = if m_sc > 0 && grad_max > nlp_scaling_max_gradient && grad_max.is_finite() {
-        (nlp_scaling_max_gradient / grad_max).max(nlp_scaling_min_value)
-    } else {
-        1.0
-    };
-
-    // Constraint scaling: g_scaling[i] = min(1, 100 / ||∇g_i(x0)||∞)
-    // Skip constraint scaling when initial violation is very large (>1e6) — extreme
-    // scaling ratios make restoration ill-conditioned for far-from-feasible problems.
+    // --- Problem scaling ---
+    // User-provided scaling takes priority over automatic gradient-based scaling.
     let (jac_rows_sc, _) = problem.jacobian_structure();
-    let mut g_scaling = vec![1.0; m_sc];
-    if m_sc > 0 {
-        let mut g0_sc = vec![0.0; m_sc];
-        problem.constraints(&x0, false, &mut g0_sc);
-        let mut g_l_sc = vec![0.0; m_sc];
-        let mut g_u_sc = vec![0.0; m_sc];
-        problem.constraint_bounds(&mut g_l_sc, &mut g_u_sc);
-        let init_cv = convergence::primal_infeasibility(&g0_sc, &g_l_sc, &g_u_sc);
+    let (obj_scaling, g_scaling) = if options.user_obj_scaling.is_some() || options.user_g_scaling.is_some() {
+        let os = options.user_obj_scaling.unwrap_or(1.0);
+        let gs = options.user_g_scaling.clone().unwrap_or_else(|| vec![1.0; m_sc]);
+        (os, gs)
+    } else {
+        // Automatic gradient-based scaling
+        let nlp_scaling_max_gradient = 100.0;
+        let nlp_scaling_min_value = 1e-2;
+        let mut grad_f0 = vec![0.0; n_sc];
+        let grad_ok = problem.gradient(&x0, true, &mut grad_f0);
+        let grad_max = if grad_ok {
+            grad_f0.iter().map(|v| v.abs()).fold(0.0f64, f64::max)
+        } else {
+            0.0
+        };
+        let os = if m_sc > 0 && grad_max > nlp_scaling_max_gradient && grad_max.is_finite() {
+            (nlp_scaling_max_gradient / grad_max).max(nlp_scaling_min_value)
+        } else {
+            1.0
+        };
 
-        if init_cv < 1e6 {
-            let mut jac_vals0 = vec![0.0; jac_rows_sc.len()];
-            problem.jacobian_values(&x0, false, &mut jac_vals0);
-            let mut row_max = vec![0.0f64; m_sc];
-            for (idx, &row) in jac_rows_sc.iter().enumerate() {
-                let v = jac_vals0[idx].abs();
-                if v.is_finite() && v > row_max[row] {
-                    row_max[row] = v;
-                }
-            }
-            for i in 0..m_sc {
-                if row_max[i] > nlp_scaling_max_gradient {
-                    g_scaling[i] = (nlp_scaling_max_gradient / row_max[i]).max(nlp_scaling_min_value);
+        let mut gs = vec![1.0; m_sc];
+        if m_sc > 0 {
+            let mut g0_sc = vec![0.0; m_sc];
+            let constr_ok = problem.constraints(&x0, false, &mut g0_sc);
+            let mut g_l_sc = vec![0.0; m_sc];
+            let mut g_u_sc = vec![0.0; m_sc];
+            problem.constraint_bounds(&mut g_l_sc, &mut g_u_sc);
+            let init_cv = if constr_ok {
+                convergence::primal_infeasibility(&g0_sc, &g_l_sc, &g_u_sc)
+            } else {
+                f64::INFINITY
+            };
+
+            if init_cv < 1e6 {
+                let mut jac_vals0 = vec![0.0; jac_rows_sc.len()];
+                if !problem.jacobian_values(&x0, false, &mut jac_vals0) {
+                    // Jacobian eval failed, skip constraint scaling
+                } else {
+                    let mut row_max = vec![0.0f64; m_sc];
+                    for (idx, &row) in jac_rows_sc.iter().enumerate() {
+                        let v = jac_vals0[idx].abs();
+                        if v.is_finite() && v > row_max[row] {
+                            row_max[row] = v;
+                        }
+                    }
+                    for i in 0..m_sc {
+                        if row_max[i] > nlp_scaling_max_gradient {
+                            gs[i] = (nlp_scaling_max_gradient / row_max[i]).max(nlp_scaling_min_value);
+                        }
+                    }
                 }
             }
         }
-    }
+        (os, gs)
+    };
 
     if options.print_level >= 5
         && (obj_scaling != 1.0 || g_scaling.iter().any(|&s| s != 1.0))
@@ -2145,6 +2190,19 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
     // Handle warm-start
     if options.warm_start {
+        // Copy user-provided initial multipliers before WarmStartInitializer adjusts them
+        if let Some(ref init_y) = options.warm_start_y {
+            let len = init_y.len().min(state.y.len());
+            state.y[..len].copy_from_slice(&init_y[..len]);
+        }
+        if let Some(ref init_z_l) = options.warm_start_z_l {
+            let len = init_z_l.len().min(state.z_l.len());
+            state.z_l[..len].copy_from_slice(&init_z_l[..len]);
+        }
+        if let Some(ref init_z_u) = options.warm_start_z_u {
+            let len = init_z_u.len().min(state.z_u.len());
+            state.z_u[..len].copy_from_slice(&init_z_u[..len]);
+        }
         state.mu = WarmStartInitializer::initialize(
             &mut state.x,
             &mut state.z_l,
@@ -2311,7 +2369,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let mut _tried_compl_polish: bool = false;
 
     // Initial evaluation
-    state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
+    let init_eval_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
         if let Some(ref mut lbfgs) = lbfgs_state {
             let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
                 &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
@@ -2321,7 +2379,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
 
     // NaN/Inf guard on initial evaluation — try perturbation before giving up
-    if state.obj.is_nan() || state.obj.is_infinite()
+    if !init_eval_ok || state.obj.is_nan() || state.obj.is_infinite()
         || state.grad_f.iter().any(|v| v.is_nan() || v.is_infinite())
     {
         let mut recovered = false;
@@ -2357,7 +2415,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     state.z_u[i] = options.mu_init / slack;
                 }
             }
-            state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
+            let perturb_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
         if let Some(ref mut lbfgs) = lbfgs_state {
             let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
                 &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
@@ -2365,7 +2423,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             lbfgs.update(&state.x, &lag_grad);
             lbfgs.fill_hessian(&mut state.hess_vals);
         }
-            if !state.obj.is_nan() && !state.obj.is_infinite()
+            if perturb_ok && !state.obj.is_nan() && !state.obj.is_infinite()
                 && !state.grad_f.iter().any(|v| v.is_nan() || v.is_infinite())
             {
                 recovered = true;
@@ -2373,7 +2431,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             }
         }
         if !recovered {
-            return make_result(&state, SolveStatus::NumericalError);
+            return make_result(&state, SolveStatus::EvaluationError);
         }
     }
 
@@ -2473,7 +2531,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     if let Some(ref bdy) = best_du_y { state.y.copy_from_slice(bdy); }
                     if let Some(ref bdzl) = best_du_zl { state.z_l.copy_from_slice(bdzl); }
                     if let Some(ref bdzu) = best_du_zu { state.z_u.copy_from_slice(bdzu); }
-                    state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
+                    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
         if let Some(ref mut lbfgs) = lbfgs_state {
             let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
                 &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
@@ -2638,6 +2696,23 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             n,
         );
 
+        // Invoke intermediate callback (if registered)
+        if !crate::intermediate::invoke_intermediate(
+            iteration,
+            state.obj / state.obj_scaling,
+            primal_inf,
+            dual_inf,
+            state.mu,
+            state.alpha_primal,
+            state.alpha_dual,
+            ls_steps,
+        ) {
+            if options.print_level >= 5 {
+                rip_log!("ripopt: User requested stop via intermediate callback");
+            }
+            return make_result(&state, SolveStatus::UserRequestedStop);
+        }
+
         // Compute multiplier scaling for convergence check
         let multiplier_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
             + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
@@ -2718,7 +2793,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         state.y.copy_from_slice(&avg_y);
                         state.z_l.copy_from_slice(&avg_zl);
                         state.z_u.copy_from_slice(&avg_zu);
-                        state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
+                        let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
                         let avg_pr = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
                         let avg_du = convergence::dual_infeasibility(
                             &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
@@ -2750,7 +2825,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         state.y.copy_from_slice(&saved_y);
                         state.z_l.copy_from_slice(&saved_zl);
                         state.z_u.copy_from_slice(&saved_zu);
-                        state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
+                        let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
                     }
                 }
 
@@ -3373,7 +3448,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             state.z_u[i] = state.mu / slack;
                         }
                     }
-                    state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
+                    let pert_eval_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
         if let Some(ref mut lbfgs) = lbfgs_state {
             let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
                 &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
@@ -3381,7 +3456,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             lbfgs.update(&state.x, &lag_grad);
             lbfgs.fill_hessian(&mut state.hess_vals);
         }
-                    if !state.obj.is_nan() && !state.obj.is_infinite()
+                    if pert_eval_ok && !state.obj.is_nan() && !state.obj.is_infinite()
                         && !state.grad_f.iter().any(|v| v.is_nan() || v.is_infinite())
                     {
                         // Re-try factorization at perturbed point
@@ -3440,8 +3515,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             x_trial[i] = x_trial[i].min(state.x_u[i] - 1e-14);
                         }
                     }
-                    let obj_trial = problem.objective(&x_trial, true);
-                    if !obj_trial.is_nan() && obj_trial < obj_current {
+                    let mut obj_trial = f64::INFINITY;
+                    let obj_ok = problem.objective(&x_trial, true, &mut obj_trial);
+                    if obj_ok && !obj_trial.is_nan() && obj_trial < obj_current {
                         state.x = x_trial;
                         state.obj = obj_trial;
                         state.alpha_primal = alpha_fb;
@@ -3451,7 +3527,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     alpha_fb *= 0.5;
                 }
                 if fb_accepted {
-                    state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
+                    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
         if let Some(ref mut lbfgs) = lbfgs_state {
             let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
                 &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
@@ -3469,13 +3545,13 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 &|theta, phi| filter.is_acceptable(theta, phi),
                 &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
                 &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
-                Some(&|x_eval: &[f64]| problem.objective(x_eval, true)),
+                Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
                 deadline,
             );
             if success {
                 state.x = x_rest;
                 state.alpha_primal = 0.0;
-                state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
+                let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
         if let Some(ref mut lbfgs) = lbfgs_state {
             let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
                 &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
@@ -3499,7 +3575,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         state.x[i] = state.x[i].min(state.x_u[i] - 1e-14);
                     }
                 }
-                state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
+                let pert2_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
         if let Some(ref mut lbfgs) = lbfgs_state {
             let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
                 &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
@@ -3507,7 +3583,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             lbfgs.update(&state.x, &lag_grad);
             lbfgs.fill_hessian(&mut state.hess_vals);
         }
-                if !state.obj.is_nan() && !state.obj.is_infinite() {
+                if pert2_ok && !state.obj.is_nan() && !state.obj.is_infinite() {
                     recovered_from_perturb = true;
                     break;
                 }
@@ -3564,13 +3640,13 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         &|theta, phi| filter.is_acceptable(theta, phi),
                         &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
                         &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
-                        Some(&|x_eval: &[f64]| problem.objective(x_eval, true)),
+                        Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
                         deadline,
                     );
                     if success {
                         state.x = x_rest;
                         state.alpha_primal = 0.0;
-                        state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
+                        let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
         if let Some(ref mut lbfgs) = lbfgs_state {
             let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
                 &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
@@ -3597,13 +3673,13 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             &|theta, phi| filter.is_acceptable(theta, phi),
                             &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
                             &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
-                            Some(&|x_eval: &[f64]| problem.objective(x_eval, true)),
+                            Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
                             deadline,
                         );
                         if success {
                             state.x = x_rest;
                             state.alpha_primal = 0.0;
-                            state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
+                            let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
         if let Some(ref mut lbfgs) = lbfgs_state {
             let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
                 &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
@@ -3869,13 +3945,13 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             &|theta, phi| filter.is_acceptable(theta, phi),
                             &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
                             &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
-                            Some(&|x_eval: &[f64]| problem.objective(x_eval, true)),
+                            Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
                             deadline,
                         );
                         if success {
                             state.x = x_rest;
                             state.alpha_primal = 0.0;
-                            state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
+                            let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
         if let Some(ref mut lbfgs) = lbfgs_state {
             let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
                 &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
@@ -4199,14 +4275,17 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             }
 
             // Evaluate at trial point
-            let obj_trial = problem.objective(&x_trial, true);
+            let mut obj_trial = f64::INFINITY;
+            let obj_ok = problem.objective(&x_trial, true, &mut obj_trial);
             let mut g_trial = vec![0.0; m];
-            if m > 0 {
-                problem.constraints(&x_trial, true, &mut g_trial);
-            }
+            let constr_ok = if m > 0 {
+                problem.constraints(&x_trial, true, &mut g_trial)
+            } else {
+                true
+            };
 
-            // NaN guard: reject trial points with NaN/Inf values
-            if obj_trial.is_nan() || obj_trial.is_infinite()
+            // NaN guard: reject trial points with NaN/Inf values or eval failures
+            if !obj_ok || !constr_ok || obj_trial.is_nan() || obj_trial.is_infinite()
                 || g_trial.iter().any(|v| v.is_nan() || v.is_infinite())
             {
                 alpha *= 0.5;
@@ -4357,12 +4436,13 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         x_soft[i] = x_soft[i].min(state.x_u[i] - 1e-14);
                     }
                 }
-                if let Ok(obj_soft) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    problem.objective(&x_soft, true)
-                })) {
+                let mut obj_soft = 0.0;
+                let obj_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    problem.objective(&x_soft, true, &mut obj_soft)
+                }));
+                if matches!(obj_result, Ok(true)) {
                     let mut g_soft = vec![0.0; m];
-                    problem.constraints(&x_soft, false, &mut g_soft);
-                    {
+                    if problem.constraints(&x_soft, false, &mut g_soft) {
                         let theta_soft = convergence::primal_infeasibility(&g_soft, &state.g_l, &state.g_u);
                         // Accept if constraint violation decreased
                         if theta_soft < (1.0 - 1e-4) * theta_current
@@ -4405,7 +4485,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 &|theta, phi| filter.is_acceptable(theta, phi),
                 &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
                 &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
-                Some(&|x_eval: &[f64]| problem.objective(x_eval, true)),
+                Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
                 deadline,
             );
 
@@ -4570,7 +4650,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             state.x[i] = state.x[i].min(state.x_u[i] - 1e-14);
                         }
                     }
-                    state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
+                    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
         if let Some(ref mut lbfgs) = lbfgs_state {
             let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
                 &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
@@ -4665,7 +4745,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     state.obj = saved.obj;
                     state.g = saved.g.clone();
                     state.grad_f = saved.grad_f.clone();
-                    state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
+                    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
         if let Some(ref mut lbfgs) = lbfgs_state {
             let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
                 &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
@@ -4742,7 +4822,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
         // Re-evaluate at new point
         let t_eval = Instant::now();
-        state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
+        if !state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode) {
+            return make_result(&state, SolveStatus::EvaluationError);
+        }
         if let Some(ref mut lbfgs) = lbfgs_state {
             let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
                 &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
@@ -4775,13 +4857,13 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 &|theta, phi| filter.is_acceptable(theta, phi),
                 &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
                 &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
-                Some(&|x_eval: &[f64]| problem.objective(x_eval, true)),
+                Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
                 deadline,
             );
             if success {
                 state.x = x_rest;
                 state.alpha_primal = 0.0;
-                state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
+                let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
         if let Some(ref mut lbfgs) = lbfgs_state {
             let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
                 &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
@@ -5236,9 +5318,10 @@ fn attempt_soc<P: NlpProblem>(
             }
         }
 
-        let obj_soc = problem.objective(&x_soc, true);
+        let mut obj_soc = f64::INFINITY;
+        if !problem.objective(&x_soc, true, &mut obj_soc) { return None; }
         let mut g_soc = vec![0.0; m];
-        problem.constraints(&x_soc, false, &mut g_soc);
+        if !problem.constraints(&x_soc, false, &mut g_soc) { return None; }
 
         let theta_soc = convergence::primal_infeasibility(&g_soc, &state.g_l, &state.g_u);
 
@@ -5372,9 +5455,10 @@ fn attempt_soc_condensed<P: NlpProblem>(
             }
         }
 
-        let obj_soc = problem.objective(&x_soc, true);
+        let mut obj_soc = f64::INFINITY;
+        if !problem.objective(&x_soc, true, &mut obj_soc) { return None; }
         let mut g_soc = vec![0.0; m];
-        problem.constraints(&x_soc, false, &mut g_soc);
+        if !problem.constraints(&x_soc, false, &mut g_soc) { return None; }
 
         let theta_soc = convergence::primal_infeasibility(&g_soc, &state.g_l, &state.g_u);
 
@@ -5492,9 +5576,10 @@ fn attempt_soc_sparse_condensed<P: NlpProblem>(
             if state.x_u[i].is_finite() { x_soc[i] = x_soc[i].min(state.x_u[i] - 1e-14); }
         }
 
-        let obj_soc = problem.objective(&x_soc, true);
+        let mut obj_soc = f64::INFINITY;
+        if !problem.objective(&x_soc, true, &mut obj_soc) { return None; }
         let mut g_soc = vec![0.0; m];
-        problem.constraints(&x_soc, false, &mut g_soc);
+        if !problem.constraints(&x_soc, false, &mut g_soc) { return None; }
 
         let theta_soc = convergence::primal_infeasibility(&g_soc, &state.g_l, &state.g_u);
         if theta_soc >= kappa_soc * theta_prev_soc { return None; }
@@ -5560,7 +5645,7 @@ fn apply_restoration_success<P: NlpProblem>(
 ) {
     state.x.copy_from_slice(x_new);
     state.alpha_primal = 0.0;
-    state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
     if let Some(ref mut lbfgs) = lbfgs_state {
         let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
             &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
@@ -5761,11 +5846,16 @@ fn attempt_nlp_restoration<P: NlpProblem>(
 
     // Evaluate original constraints at the restored point
     let mut g_new = vec![0.0; m];
-    problem.constraints(&x_nlp, true, &mut g_new);
+    if !problem.constraints(&x_nlp, true, &mut g_new) {
+        return (x_nlp, RestorationOutcome::Failed);
+    }
     let theta_new = convergence::primal_infeasibility(&g_new, &state.g_l, &state.g_u);
 
     // Evaluate original objective at the restored point
-    let phi_new = problem.objective(&x_nlp, false);
+    let mut phi_new = f64::INFINITY;
+    if !problem.objective(&x_nlp, false, &mut phi_new) {
+        return (x_nlp, RestorationOutcome::Failed);
+    }
 
     if options.print_level >= 5 {
         // Log slack residuals to diagnose restoration effectiveness
@@ -6238,7 +6328,7 @@ fn try_active_set_solve<P: NlpProblem>(
     }
 
     // Re-evaluate at the snapped point
-    state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
 
     // Build reduced KKT system (dense):
     // [ H_ff   J_f^T ] [ dx_f ]   [ -grad_f_f ]
@@ -6303,7 +6393,7 @@ fn try_active_set_solve<P: NlpProblem>(
         state.y.copy_from_slice(&saved_y);
         state.z_l.copy_from_slice(&saved_zl);
         state.z_u.copy_from_slice(&saved_zu);
-        state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+        let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
         return None;
     }
     let sol = solution.unwrap();
@@ -6328,7 +6418,7 @@ fn try_active_set_solve<P: NlpProblem>(
     }
 
     // Re-evaluate at the new point
-    state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
 
     // Recover z from stationarity: ∇f + J^T y = z_l - z_u
     let mut grad_jty = state.grad_f.clone();
@@ -6381,7 +6471,7 @@ fn try_active_set_solve<P: NlpProblem>(
     state.y.copy_from_slice(&saved_y);
     state.z_l.copy_from_slice(&saved_zl);
     state.z_u.copy_from_slice(&saved_zu);
-    state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
 
     None
 }
