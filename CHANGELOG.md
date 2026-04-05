@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.1] - 2026-04-05
+
+### Fixed
+- **Dual infeasibility stall on exp/log objectives (#7)**: Added z_opt fallback in the convergence check. When the kappa_sigma safeguard corrupts iterative bound multipliers (z_l, z_u), the unscaled convergence gate now accepts z_opt with component-wise scaling as an alternative, provided z_opt complementarity also passes. This prevents the solver from wasting thousands of iterations on problems where z_opt confirms the point is optimal but iterative z is stuck.
+
+### Changed
+- Exclude `adversary/`, `.crucible/`, and `research/` directories from crates.io package
+
 ## [0.6.0] - 2026-03-28
 
 ### Added
