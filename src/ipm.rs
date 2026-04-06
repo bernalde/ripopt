@@ -627,65 +627,10 @@ impl SolverState {
             let mut jac_vals_init = vec![0.0; jac_nnz];
             problem.jacobian_values(&x, &mut jac_vals_init);
 
-            // Compute b = -J * grad_f  (m-vector)
-            let mut b = vec![0.0; m];
-            for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
-                b[row] -= jac_vals_init[idx] * grad_f_init[col];
-            }
-
-            // Compute A = J * J^T  (m x m dense symmetric matrix)
-            // Build dense J (m x n) first for small m
-            let mut j_dense = vec![0.0; m * n];
-            for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
-                j_dense[row * n + col] = jac_vals_init[idx];
-            }
-            let mut a_mat = SymmetricMatrix::zeros(m);
-            for i in 0..m {
-                for j in 0..=i {
-                    let mut dot = 0.0;
-                    for k in 0..n {
-                        dot += j_dense[i * n + k] * j_dense[j * n + k];
-                    }
-                    a_mat.set(i, j, dot);
-                }
-            }
-
-            // Solve (J J^T) y = b using DenseLdl
-            let mut ls_solver = DenseLdl::new();
-            let mut y_ls = vec![0.0; m];
-            let factored = ls_solver.bunch_kaufman_factor(&a_mat);
-            let solved = factored.is_ok() && ls_solver.solve(&b, &mut y_ls).is_ok();
-
-            if solved {
-                let max_abs = y_ls.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
-                if max_abs <= options.constr_mult_init_max {
-                    // For inequality constraints, zero out multipliers with wrong sign.
-                    // Ipopt convention (L = f + y^T g):
-                    //   g >= g_l (lower bound only): y >= 0
-                    //   g <= g_u (upper bound only): y <= 0
-                    //   g_l <= g <= g_u: sign depends on active bound
-                    // Only apply LS init for equality constraints or when sign is correct.
-                    for i in 0..m {
-                        if convergence::is_equality_constraint(g_l[i], g_u[i]) {
-                            continue; // LS init fine for equalities
-                        }
-                        let has_lower = g_l[i].is_finite();
-                        let has_upper = g_u[i].is_finite();
-                        if has_lower && !has_upper && y_ls[i] < 0.0 {
-                            y_ls[i] = 0.0; // Wrong sign for lower-bound constraint
-                        } else if has_upper && !has_lower && y_ls[i] > 0.0 {
-                            y_ls[i] = 0.0; // Wrong sign for upper-bound constraint
-                        } else if !has_lower && !has_upper {
-                            y_ls[i] = 0.0; // No bounds at all (shouldn't happen)
-                        }
-                    }
-                    y_ls
-                } else {
-                    vec![0.0; m]
-                }
-            } else {
-                vec![0.0; m]
-            }
+            compute_ls_multiplier_estimate(
+                &grad_f_init, &jac_rows, &jac_cols, &jac_vals_init,
+                &g_l, &g_u, n, m, options.constr_mult_init_max,
+            ).unwrap_or_else(|| vec![0.0; m])
         } else {
             vec![0.0; m]
         };
@@ -1216,7 +1161,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
     // --- Preprocessing: eliminate fixed variables and redundant constraints ---
     if options.enable_preprocessing {
-        let prep = crate::preprocessing::PreprocessedProblem::new(problem as &dyn NlpProblem);
+        let prep = crate::preprocessing::PreprocessedProblem::new(problem as &dyn NlpProblem, options.bound_push);
         if prep.did_reduce() {
             if options.print_level >= 5 {
                 rip_log!(
@@ -2185,7 +2130,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     // Estimate Schur complement density from Jacobian structure.
     // If J^T·D·J would be denser than the full augmented KKT system,
     // disable sparse condensed and use the full (n+m)×(n+m) system instead.
-    let disable_sparse_condensed = if use_sparse && m > 0 {
+    let mut disable_sparse_condensed = if use_sparse && m > 0 {
         let (jac_rows_est, _) = problem.jacobian_structure();
         // Build row counts
         let mut row_nnz = vec![0usize; m];
@@ -3161,7 +3106,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             None
         };
 
-        let sparse_condensed_system = if use_sparse_condensed {
+        let mut sparse_condensed_system = if use_sparse_condensed {
             Some(kkt::assemble_sparse_condensed_kkt(
                 n, m,
                 &state.hess_rows, &state.hess_cols, &state.hess_vals,
@@ -3196,16 +3141,31 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         // abandon it and switch to the full augmented KKT system which MUMPS can
         // reorder efficiently.
         if iteration == 0 && use_sparse_condensed {
-            if let Some(ref sc) = sparse_condensed_system {
-                let bw = BandedLdl::compute_bandwidth(&sc.matrix.triplet_rows, &sc.matrix.triplet_cols);
+            // Detect bandwidth and decide whether to keep sparse condensed or switch to full augmented.
+            let sc_bw = sparse_condensed_system.as_ref().map(|sc| {
+                BandedLdl::compute_bandwidth(&sc.matrix.triplet_rows, &sc.matrix.triplet_cols)
+            });
+            if let Some(bw) = sc_bw {
                 if bw > n / 2 {
-                    // Condensed system has high bandwidth — use sparse solver
+                    // Condensed Schur complement is essentially dense - switch to full
+                    // augmented KKT system which MUMPS can reorder efficiently.
                     if options.print_level >= 3 {
                         rip_log!(
-                            "ripopt: Sparse condensed S has bandwidth {} for n={}, using sparse solver",
+                            "ripopt: Sparse condensed S has bandwidth {} for n={}, switching to full augmented KKT",
                             bw, n
                         );
                     }
+                    disable_sparse_condensed = true;
+                    sparse_condensed_system = None;
+                    kkt_system_opt = Some(kkt::assemble_kkt(
+                        n, m,
+                        &state.hess_rows, &state.hess_cols, &state.hess_vals,
+                        &state.jac_rows, &state.jac_cols, &state.jac_vals,
+                        &sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
+                        &state.y, &state.z_l, &state.z_u,
+                        &state.x, &state.x_l, &state.x_u, state.mu,
+                        use_sparse, &state.v_l, &state.v_u,
+                    ));
                 } else if bw * bw <= n {
                     if options.print_level >= 5 {
                         rip_log!("ripopt: Sparse condensed S has bandwidth {} for n={}, using banded solver", bw, n);
@@ -4664,8 +4624,14 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             }
                             state.mu = best_mu.clamp(mu_floor, 1e5);
                         } else if avg_compl > 0.0 {
-                            // Loqo fallback
-                            state.mu = (avg_compl / options.kappa).clamp(options.mu_min, 1e5);
+                            // Loqo fallback with rate limit (at most 5x decrease if subproblem not solved)
+                            let barrier_err = compute_barrier_error(&state);
+                            let mu_floor = if barrier_err <= options.barrier_tol_factor * state.mu {
+                                options.mu_min
+                            } else {
+                                (state.mu / 5.0).max(options.mu_min)
+                            };
+                            state.mu = (avg_compl / options.kappa).clamp(mu_floor, 1e5);
                         } else {
                             // No complementarity products (all bounds inactive) → decrease mu
                             state.mu = (options.mu_linear_decrease_factor * state.mu)
@@ -4699,7 +4665,13 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             // Stay in Free mode with conservative mu decrease
                             let avg_compl = compute_avg_complementarity(&state);
                             if avg_compl > 0.0 {
-                                state.mu = (avg_compl / options.kappa).clamp(options.mu_min, 1e5);
+                                let barrier_err = compute_barrier_error(&state);
+                                let mu_floor = if barrier_err <= options.barrier_tol_factor * state.mu {
+                                    options.mu_min
+                                } else {
+                                    (state.mu / 5.0).max(options.mu_min)
+                                };
+                                state.mu = (avg_compl / options.kappa).clamp(mu_floor, 1e5);
                             } else {
                                 state.mu = (options.mu_linear_decrease_factor * state.mu)
                                     .max(options.mu_min);
@@ -5348,9 +5320,26 @@ fn apply_restoration_success<P: NlpProblem>(
             }
         }
     }
-    // Reset constraint multipliers to zero.
-    for i in 0..m {
-        state.y[i] = 0.0;
+    // Compute least-squares multiplier estimate at the restored point.
+    // This avoids the "dead start" (y=0) that causes the filter to reject every
+    // post-restoration step. Use a higher dimension limit than initialization since
+    // restoration runs infrequently.
+    let ls_restoration_dim_limit = 1000;
+    if m > 0 && (m + n) <= ls_restoration_dim_limit {
+        if let Some(y_ls) = compute_ls_multiplier_estimate(
+            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+            &state.g_l, &state.g_u, n, m, options.constr_mult_init_max,
+        ) {
+            state.y.copy_from_slice(&y_ls);
+        } else {
+            for i in 0..m {
+                state.y[i] = 0.0;
+            }
+        }
+    } else {
+        for i in 0..m {
+            state.y[i] = 0.0;
+        }
     }
 
     // Reset constraint slack barrier multipliers v_l, v_u from mu/slack.
@@ -5599,6 +5588,83 @@ fn quality_function_mu(state: &SolverState, mu_lower: f64, mu_upper: f64, n_cand
     }
 
     best_mu
+}
+
+/// Compute least-squares multiplier estimate: min ||grad_f + J^T y||^2.
+/// Solves the normal equations (J J^T) y = -J grad_f using dense Bunch-Kaufman LDL.
+/// Returns Some(y) if successful and all estimates are within threshold; None otherwise.
+fn compute_ls_multiplier_estimate(
+    grad_f: &[f64],
+    jac_rows: &[usize],
+    jac_cols: &[usize],
+    jac_vals: &[f64],
+    g_l: &[f64],
+    g_u: &[f64],
+    n: usize,
+    m: usize,
+    max_abs_threshold: f64,
+) -> Option<Vec<f64>> {
+    if m == 0 {
+        return None;
+    }
+
+    // Compute b = -J * grad_f  (m-vector)
+    let mut b = vec![0.0; m];
+    for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
+        b[row] -= jac_vals[idx] * grad_f[col];
+    }
+
+    // Compute A = J * J^T  (m x m dense symmetric matrix)
+    let mut j_dense = vec![0.0; m * n];
+    for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
+        j_dense[row * n + col] = jac_vals[idx];
+    }
+    let mut a_mat = SymmetricMatrix::zeros(m);
+    for i in 0..m {
+        for j in 0..=i {
+            let mut dot = 0.0;
+            for k in 0..n {
+                dot += j_dense[i * n + k] * j_dense[j * n + k];
+            }
+            a_mat.set(i, j, dot);
+        }
+    }
+
+    // Solve (J J^T) y = b using DenseLdl
+    let mut ls_solver = DenseLdl::new();
+    let mut y_ls = vec![0.0; m];
+    let factored = ls_solver.bunch_kaufman_factor(&a_mat);
+    let solved = factored.is_ok() && ls_solver.solve(&b, &mut y_ls).is_ok();
+
+    if !solved {
+        return None;
+    }
+
+    let max_abs = y_ls.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+    if max_abs > max_abs_threshold {
+        return None;
+    }
+
+    // For inequality constraints, zero out multipliers with wrong sign.
+    // Ipopt convention (L = f + y^T g):
+    //   g >= g_l (lower bound only): y >= 0
+    //   g <= g_u (upper bound only): y <= 0
+    for i in 0..m {
+        if convergence::is_equality_constraint(g_l[i], g_u[i]) {
+            continue;
+        }
+        let has_lower = g_l[i].is_finite();
+        let has_upper = g_u[i].is_finite();
+        if has_lower && !has_upper && y_ls[i] < 0.0 {
+            y_ls[i] = 0.0;
+        } else if has_upper && !has_lower && y_ls[i] > 0.0 {
+            y_ls[i] = 0.0;
+        } else if !has_lower && !has_upper {
+            y_ls[i] = 0.0;
+        }
+    }
+
+    Some(y_ls)
 }
 
 fn compute_avg_complementarity(state: &SolverState) -> f64 {

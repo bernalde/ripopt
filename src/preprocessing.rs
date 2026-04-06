@@ -45,7 +45,7 @@ const FIXED_TOL: f64 = 1e-10;
 
 impl<'a> PreprocessedProblem<'a> {
     /// Analyze and build the preprocessed problem wrapper.
-    pub fn new(inner: &'a dyn NlpProblem) -> Self {
+    pub fn new(inner: &'a dyn NlpProblem, bound_push: f64) -> Self {
         let n = inner.num_variables();
         let m = inner.num_constraints();
 
@@ -177,6 +177,24 @@ impl<'a> PreprocessedProblem<'a> {
                         } else {
                             (adj_u, adj_l)
                         };
+                        // Compute candidate bounds after this tightening
+                        let candidate_l = if new_l.is_finite() && new_l > tightened_x_l[red_j] {
+                            new_l
+                        } else {
+                            tightened_x_l[red_j]
+                        };
+                        let candidate_u = if new_u.is_finite() && new_u < tightened_x_u[red_j] {
+                            new_u
+                        } else {
+                            tightened_x_u[red_j]
+                        };
+                        // Skip tightening if it would create a range smaller than 2*bound_push
+                        // (the initial point needs at least bound_push slack on each side)
+                        if candidate_l.is_finite() && candidate_u.is_finite()
+                            && (candidate_u - candidate_l) < 2.0 * bound_push
+                        {
+                            continue;
+                        }
                         if new_l.is_finite() && new_l > tightened_x_l[red_j] {
                             tightened_x_l[red_j] = new_l;
                         }
@@ -595,7 +613,7 @@ mod tests {
     #[test]
     fn test_fixed_var_elimination() {
         let prob = FixedVarProblem;
-        let prep = PreprocessedProblem::new(&prob as &dyn NlpProblem);
+        let prep = PreprocessedProblem::new(&prob as &dyn NlpProblem, 1e-2);
 
         assert!(prep.did_reduce());
         assert_eq!(prep.num_fixed(), 1);
@@ -609,7 +627,7 @@ mod tests {
     #[test]
     fn test_fixed_var_objective() {
         let prob = FixedVarProblem;
-        let prep = PreprocessedProblem::new(&prob as &dyn NlpProblem);
+        let prep = PreprocessedProblem::new(&prob as &dyn NlpProblem, 1e-2);
 
         // With reduced x = [1.0, 3.0] (x0=1, x2=3), x1 is fixed at 2.0
         // obj = (1-1)^2 + (2-2)^2 + (3-3)^2 = 0
@@ -620,7 +638,7 @@ mod tests {
     #[test]
     fn test_fixed_var_gradient() {
         let prob = FixedVarProblem;
-        let prep = PreprocessedProblem::new(&prob as &dyn NlpProblem);
+        let prep = PreprocessedProblem::new(&prob as &dyn NlpProblem, 1e-2);
 
         let x_red = vec![1.0, 3.0];
         let mut grad = vec![0.0; 2];
@@ -632,7 +650,7 @@ mod tests {
     #[test]
     fn test_fixed_var_constraints() {
         let prob = FixedVarProblem;
-        let prep = PreprocessedProblem::new(&prob as &dyn NlpProblem);
+        let prep = PreprocessedProblem::new(&prob as &dyn NlpProblem, 1e-2);
 
         let x_red = vec![1.5, 2.5]; // x0=1.5, x2=2.5
         let mut g = vec![0.0; 1];
@@ -643,7 +661,7 @@ mod tests {
     #[test]
     fn test_unmap_solution() {
         let prob = FixedVarProblem;
-        let prep = PreprocessedProblem::new(&prob as &dyn NlpProblem);
+        let prep = PreprocessedProblem::new(&prob as &dyn NlpProblem, 1e-2);
 
         let reduced_result = SolveResult {
             x: vec![2.0, 2.0],
@@ -731,7 +749,7 @@ mod tests {
     #[test]
     fn test_redundant_constraint_detection() {
         let prob = DuplicateConstraintProblem;
-        let prep = PreprocessedProblem::new(&prob as &dyn NlpProblem);
+        let prep = PreprocessedProblem::new(&prob as &dyn NlpProblem, 1e-2);
 
         assert!(prep.did_reduce());
         assert_eq!(prep.num_redundant(), 1);
@@ -795,7 +813,7 @@ mod tests {
         }
 
         let prob = NothingToReduce;
-        let prep = PreprocessedProblem::new(&prob as &dyn NlpProblem);
+        let prep = PreprocessedProblem::new(&prob as &dyn NlpProblem, 1e-2);
         assert!(!prep.did_reduce());
     }
 
@@ -832,7 +850,7 @@ mod tests {
     #[test]
     fn test_bound_tightening_positive_coeff() {
         let prob = BoundTightenPositive;
-        let prep = PreprocessedProblem::new(&prob as &dyn NlpProblem);
+        let prep = PreprocessedProblem::new(&prob as &dyn NlpProblem, 1e-2);
 
         // Constraint 2*x >= 4 => x >= 2.0
         let mut xl = vec![0.0; 1];
@@ -874,7 +892,7 @@ mod tests {
     #[test]
     fn test_bound_tightening_negative_coeff() {
         let prob = BoundTightenNegative;
-        let prep = PreprocessedProblem::new(&prob as &dyn NlpProblem);
+        let prep = PreprocessedProblem::new(&prob as &dyn NlpProblem, 1e-2);
 
         // Constraint -3*x <= -6 => x >= 2.0 (divide by -3, flip)
         let mut xl = vec![0.0; 1];
@@ -916,7 +934,7 @@ mod tests {
     #[test]
     fn test_bound_tightening_both_sided() {
         let prob = BoundTightenBothSided;
-        let prep = PreprocessedProblem::new(&prob as &dyn NlpProblem);
+        let prep = PreprocessedProblem::new(&prob as &dyn NlpProblem, 1e-2);
 
         // Constraint 1 <= 2*x <= 6 => 0.5 <= x <= 3.0
         let mut xl = vec![0.0; 1];
