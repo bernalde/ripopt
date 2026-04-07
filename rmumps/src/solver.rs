@@ -58,6 +58,8 @@ pub struct Solver {
     numeric: Option<NumericFactorization>,
     /// Permuted CSC matrix (stored for iterative refinement).
     permuted_csc: Option<CscMatrix>,
+    /// Original (unscaled, unpermuted) CSC matrix for original-space refinement.
+    original_csc: Option<CscMatrix>,
     /// Scaling factors (computed during factor, if scaling is enabled).
     scaling_factors: Option<ScalingFactors>,
 }
@@ -72,6 +74,7 @@ impl Solver {
             symbolic: None,
             numeric: None,
             permuted_csc: None,
+            original_csc: None,
             scaling_factors: None,
         }
     }
@@ -103,6 +106,9 @@ impl Solver {
         })?;
 
         let csc = CscMatrix::from_coo(matrix);
+
+        // Store original matrix for original-space iterative refinement
+        self.original_csc = Some(csc.clone());
 
         // Compute and apply scaling if enabled
         let sf = scaling::compute_scaling(&csc, self.options.scaling);
@@ -167,36 +173,61 @@ impl Solver {
         let mut permuted_sol = vec![0.0; n];
         multifrontal_solve(num, sym, &permuted_rhs, &mut permuted_sol)?;
 
-        // Adaptive iterative refinement in permuted space (using the scaled+permuted matrix).
-        // Stops early when residual stagnates (ratio > 0.9) or is small enough.
+        // Iterative refinement in ORIGINAL space: compute residual r = b - A*x
+        // against the unscaled, unpermuted matrix, then transform r to the factored
+        // space for the correction solve. This measures true solve accuracy rather
+        // than accuracy in the scaled space, matching MUMPS's refinement approach.
         if self.options.refine_steps > 0 {
-            if let Some(ref pcsc) = self.permuted_csc {
-                let mut residual = vec![0.0; n];
+            if let Some(ref orig_csc) = self.original_csc {
+                let mut x_orig = vec![0.0; n];
+                let mut residual_orig = vec![0.0; n];
+                let mut residual_perm = vec![0.0; n];
                 let mut correction = vec![0.0; n];
                 let mut prev_res_norm = f64::INFINITY;
+
                 for _ in 0..self.options.refine_steps {
-                    // r = permuted_rhs - A_perm * permuted_sol
-                    pcsc.matvec(&permuted_sol, &mut residual);
-                    let mut res_norm: f64 = 0.0;
+                    // Step 1: Convert current solution to original space
+                    // Unpermute: x_unperm[i] = permuted_sol[perm_inv[i]]
                     for i in 0..n {
-                        residual[i] = permuted_rhs[i] - residual[i];
-                        res_norm = res_norm.max(residual[i].abs());
+                        x_orig[i] = permuted_sol[self.perm_inv[i]];
+                    }
+                    // Unscale: x_orig = D * x_unperm
+                    if let Some(ref sf) = self.scaling_factors {
+                        for i in 0..n {
+                            x_orig[i] *= sf.d[i];
+                        }
                     }
 
-                    // Stop if residual is small enough
+                    // Step 2: Compute residual in original space: r = b - A*x
+                    orig_csc.matvec(&x_orig, &mut residual_orig);
+                    let mut res_norm: f64 = 0.0;
+                    for i in 0..n {
+                        residual_orig[i] = rhs[i] - residual_orig[i];
+                        res_norm = res_norm.max(residual_orig[i].abs());
+                    }
+
                     if res_norm < 1e-14 {
                         break;
                     }
-
-                    // Stop if refinement has stagnated
                     if res_norm > 0.9 * prev_res_norm {
                         break;
                     }
                     prev_res_norm = res_norm;
 
-                    // Solve A_perm * e = r
-                    multifrontal_solve(num, sym, &residual, &mut correction)?;
-                    // x += e
+                    // Step 3: Transform residual to factored space: scale then permute
+                    if let Some(ref sf) = self.scaling_factors {
+                        for i in 0..n {
+                            residual_orig[i] *= sf.d[i];
+                        }
+                    }
+                    for i in 0..n {
+                        residual_perm[self.perm_inv[i]] = residual_orig[i];
+                    }
+
+                    // Step 4: Solve for correction in factored space
+                    multifrontal_solve(num, sym, &residual_perm, &mut correction)?;
+
+                    // Step 5: Update permuted solution
                     for i in 0..n {
                         permuted_sol[i] += correction[i];
                     }
@@ -238,6 +269,9 @@ impl Solver {
         let sym = self.symbolic.as_ref().ok_or_else(|| {
             SolverError::InvalidState("must call analyze() before factor_csc()".into())
         })?;
+
+        // Store original matrix for original-space iterative refinement
+        self.original_csc = Some(csc.clone());
 
         // Compute and apply scaling — use MC64 for KKT systems
         let sf = if self.options.n_primal.is_some() {
