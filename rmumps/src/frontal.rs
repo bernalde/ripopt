@@ -185,19 +185,44 @@ impl FrontalMatrix {
     fn expand_for_delayed(&mut self, new_indices: &[usize]) {
         let old_size = self.size();
         let new_size = old_size + new_indices.len();
+        let nfs = self.nfs;
 
-        // Add new indices to the CB portion (after existing CB)
+        // Build the expanded index array: [FS cols] [old CB + new indices, sorted]
         let mut new_front_indices = self.indices.clone();
         new_front_indices.extend_from_slice(new_indices);
-        // Sort the CB portion only (preserve FS at front)
-        let nfs = self.nfs;
-        new_front_indices[nfs..].sort_unstable();
 
-        // Expand the dense matrix: copy old data into new larger matrix
+        // Build sort permutation for CB portion so we can permute matrix data to match.
+        // perm[new_pos - nfs] = old_pos, where old_pos < old_size means an existing
+        // CB column and old_pos >= old_size means a newly added column.
+        let cb_len = new_size - nfs;
+        let mut cb_perm: Vec<usize> = (0..cb_len).collect();
+        cb_perm.sort_unstable_by_key(|&i| new_front_indices[nfs + i]);
+        // Apply the sort to the indices
+        let sorted_cb: Vec<usize> = cb_perm.iter().map(|&i| new_front_indices[nfs + i]).collect();
+        new_front_indices[nfs..].copy_from_slice(&sorted_cb);
+
+        // Build full old-to-new position mapping:
+        // FS columns (0..nfs) keep their positions.
+        // CB columns are reordered according to cb_perm.
+        let mut old_to_new = vec![usize::MAX; new_size];
+        for i in 0..nfs {
+            old_to_new[i] = i;
+        }
+        for (new_cb_pos, &old_cb_pos) in cb_perm.iter().enumerate() {
+            old_to_new[nfs + old_cb_pos] = nfs + new_cb_pos;
+        }
+
+        // Expand and permute the dense matrix data.
+        // Old entries at (old_i, old_j) go to (new_i, new_j).
+        // New columns (old_pos >= old_size) are zero-initialized.
         let mut new_data = vec![0.0; new_size * new_size];
-        for j in 0..old_size {
-            for i in 0..old_size {
-                new_data[j * new_size + i] = self.mat.data[j * old_size + i];
+        for old_j in 0..old_size {
+            let new_j = old_to_new[old_j];
+            if new_j == usize::MAX { continue; }
+            for old_i in 0..old_size {
+                let new_i = old_to_new[old_i];
+                if new_i == usize::MAX { continue; }
+                new_data[new_j * new_size + new_i] = self.mat.data[old_j * old_size + old_i];
             }
         }
 
