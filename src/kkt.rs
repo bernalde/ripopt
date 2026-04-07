@@ -351,15 +351,15 @@ pub fn factor_with_inertia_correction(
             && (inertia.positive as isize - n as isize).unsigned_abs() <= 1
             && (inertia.negative as isize - m as isize).unsigned_abs() <= 1;
         if inertia_ok || approx_ok {
-            // For large systems with δ_c regularization, accept the factorization
-            // even with large backward error — iterative refinement in solve_for_direction
-            // will recover accuracy. The δ_c ensures the system is non-singular.
-            let has_dc = kkt.delta_c_diag.iter().any(|&v| v > 0.0);
-            if has_dc && (n + m) >= 100 {
+            // For large systems, accept once inertia is correct. With a permissive
+            // pivot threshold (1e-6), small pivots are common and produce large
+            // factorization backward error. Iterative refinement in solve_for_direction
+            // recovers solve accuracy; the factorization just needs correct inertia.
+            if (n + m) >= 100 {
                 params.delta_w_last = 0.0;
                 return Ok((0.0, 0.0));
             }
-            // Verify backward error is acceptable
+            // For small systems: verify backward error is acceptable
             if check_factorization_backward_error(kkt, solver) {
                 params.delta_w_last = 0.0;
                 return Ok((0.0, 0.0));
@@ -418,7 +418,13 @@ pub fn factor_with_inertia_correction(
                 && (inertia.positive as isize - n as isize).unsigned_abs() <= 1
                 && (inertia.negative as isize - m as isize).unsigned_abs() <= 1;
             if exact_ok || approx_ok {
-                // Verify backward error is acceptable
+                // For large systems, accept once inertia is correct.
+                if (n + m) >= 100 {
+                    kkt.matrix = perturbed;
+                    params.delta_w_last = delta_w;
+                    return Ok((delta_w, delta_c));
+                }
+                // For small systems: verify backward error is acceptable
                 if check_factorization_backward_error_with_matrix(&perturbed, &kkt.rhs, solver) {
                     kkt.matrix = perturbed;
                     params.delta_w_last = delta_w;

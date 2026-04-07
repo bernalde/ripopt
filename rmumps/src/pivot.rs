@@ -109,11 +109,12 @@ const BK_ALPHA: f64 = 0.6404;
 const ZERO_PIVOT_TOL: f64 = 1e-12;
 
 /// Default threshold for pivot acceptance in multifrontal factorization.
-/// Threshold for pivot acceptance in multifrontal factorization.
-/// Matches MA57/MUMPS default CNTL(1) = 0.01. IPOPT uses 1e-6 with MUMPS
-/// but that requires MC64 scaling to be effective; without MC64, 0.01
-/// provides better numerical quality on general problems.
-pub const DEFAULT_PIVOT_THRESHOLD: f64 = 0.01;
+/// Matches ipopt's MUMPS configuration (CNTL(1) = 1e-6). A permissive
+/// threshold accepts small pivots (including regularized zero-diagonal
+/// equality constraint rows) and relies on iterative refinement to
+/// recover accuracy. Requires good matrix scaling (matching-based or
+/// MC64) to be effective.
+pub const DEFAULT_PIVOT_THRESHOLD: f64 = 1e-6;
 
 /// Pivot selection result.
 #[derive(Debug, Clone, Copy, PartialEq)]
