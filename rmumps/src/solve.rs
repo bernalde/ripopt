@@ -2,6 +2,38 @@ use crate::numeric::NumericFactorization;
 use crate::symbolic::SymbolicFactorization;
 use crate::SolverError;
 
+/// Dense GEMV on contiguous arrays: y[0..m] -= A[m x n, col-major] * x[0..n].
+/// Column-oriented loop for cache efficiency and auto-vectorization.
+#[inline]
+fn gemv_sub(m: usize, n: usize, a: &[f64], lda: usize, x: &[f64], y: &mut [f64]) {
+    for j in 0..n {
+        let xj = x[j];
+        if xj == 0.0 { continue; }
+        let col = &a[j * lda..j * lda + m];
+        for i in 0..m {
+            y[i] -= col[i] * xj;
+        }
+    }
+}
+
+/// Dense transposed GEMV on contiguous arrays: y[0..n] -= A[m x n, col-major]^T * x[0..m].
+/// Uses Kahan summation for each output element.
+#[inline]
+fn gemv_t_sub_kahan(m: usize, n: usize, a: &[f64], lda: usize, x: &[f64], y: &mut [f64]) {
+    for j in 0..n {
+        let col = &a[j * lda..j * lda + m];
+        let mut sum = 0.0;
+        let mut comp = 0.0;
+        for i in 0..m {
+            let term = col[i] * x[i] - comp;
+            let new_sum = sum + term;
+            comp = (new_sum - sum) - term;
+            sum = new_sum;
+        }
+        y[j] -= sum;
+    }
+}
+
 /// Solve A*x = b using the multifrontal factorization.
 ///
 /// The factorization represents A = product of P*L*D*L^T*P^T blocks
@@ -26,9 +58,11 @@ pub fn multifrontal_solve(
     let mut x = rhs.to_vec();
     let ns = num.num_snodes;
 
-    // Pre-allocate workspace (max nfs across all supernodes)
+    // Pre-allocate workspace
     let max_nfs = num.node_factors.iter().map(|nf| nf.fs_indices.len()).max().unwrap_or(0);
+    let max_ncb = num.node_factors.iter().map(|nf| nf.cb_indices.len()).max().unwrap_or(0);
     let mut fs_vals = vec![0.0; max_nfs];
+    let mut cb_vals = vec![0.0; max_ncb];
 
     // Phase 1: Forward substitution (L^{-1}) + L21 scatter
     for s in 0..ns {
@@ -73,16 +107,13 @@ pub fn multifrontal_solve(
             x[nf.fs_indices[nf.bk.perm[k]]] = fs_vals[k];
         }
 
-        // Update CB: x[cb] -= L21 * fs_vals
-        let l21_data = &nf.l21.data;
-        let cb_indices = &nf.cb_indices;
-        for j in 0..nfs {
-            let fsj = fs_vals[j];
-            if fsj == 0.0 { continue; }
-            let col = &l21_data[j * ncb..j * ncb + ncb];
-            for i in 0..ncb {
-                x[cb_indices[i]] -= col[i] * fsj;
-            }
+        // Update CB: x[cb] -= L21 * fs_vals (gather/GEMV/scatter)
+        if ncb > 0 {
+            let l21_data = &nf.l21.data;
+            let cb_indices = &nf.cb_indices;
+            for i in 0..ncb { cb_vals[i] = x[cb_indices[i]]; }
+            gemv_sub(ncb, nfs, l21_data, ncb, &fs_vals[..nfs], &mut cb_vals[..ncb]);
+            for i in 0..ncb { x[cb_indices[i]] = cb_vals[i]; }
         }
     }
 
@@ -126,16 +157,21 @@ pub fn multifrontal_solve(
         let ncb = nf.cb_indices.len();
 
         if nfs == 1 {
-            // Fast path for single-column supernodes
+            // Fast path for single-column supernodes (gather + Kahan dot)
             let gi = nf.fs_indices[nf.bk.perm[0]];
             if ncb > 0 {
                 let l21_data = &nf.l21.data;
                 let cb_indices = &nf.cb_indices;
-                let mut update = 0.0;
+                for i in 0..ncb { cb_vals[i] = x[cb_indices[i]]; }
+                let mut sum = 0.0;
+                let mut comp = 0.0;
                 for i in 0..ncb {
-                    update += l21_data[i] * x[cb_indices[i]];
+                    let term = l21_data[i] * cb_vals[i] - comp;
+                    let new_sum = sum + term;
+                    comp = (new_sum - sum) - term;
+                    sum = new_sum;
                 }
-                x[gi] -= update;
+                x[gi] -= sum;
             }
             // No L11^T solve needed for nfs=1
             continue;
@@ -148,16 +184,12 @@ pub fn multifrontal_solve(
             fs_vals[k] = x[nf.fs_indices[nf.bk.perm[k]]];
         }
 
-        // Update from CB: fs_vals -= L21^T * x[cb]
-        let l21_data = &nf.l21.data;
-        let cb_indices = &nf.cb_indices;
-        for j in 0..nfs {
-            let mut update = 0.0;
-            let col = &l21_data[j * ncb..j * ncb + ncb];
-            for i in 0..ncb {
-                update += col[i] * x[cb_indices[i]];
-            }
-            fs_vals[j] -= update;
+        // Update from CB: fs_vals -= L21^T * x[cb] (gather/GEMV^T/Kahan)
+        if ncb > 0 {
+            let l21_data = &nf.l21.data;
+            let cb_indices = &nf.cb_indices;
+            for i in 0..ncb { cb_vals[i] = x[cb_indices[i]]; }
+            gemv_t_sub_kahan(ncb, nfs, l21_data, ncb, &cb_vals[..ncb], &mut fs_vals[..nfs]);
         }
 
         // Backward solve with L11^T (column-oriented for cache efficiency)

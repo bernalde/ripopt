@@ -1,17 +1,17 @@
 # ripopt Benchmark Report
 
-Generated: 2026-04-05 13:11:56
+Generated: 2026-04-07 01:29:08
 
 ## Executive Summary
 
 | Metric | ripopt | Ipopt |
 |--------|--------|-------|
-| Optimal | **697/865** (80.6%) | **688/865** (79.5%) |
+| Optimal | **696/865** (80.5%) | **688/865** (79.5%) |
 | Acceptable | 0 | 5 |
-| Total solved (Optimal + Acceptable) | 697 (80.6%) | 693 (80.1%) |
-| Solved exclusively | 41 | 37 |
-| Both solved | 656 | |
-| Matching objectives (< 0.01%) | 542/656 | |
+| Total solved (Optimal + Acceptable) | 696 (80.5%) | 693 (80.1%) |
+| Solved exclusively | 41 | 38 |
+| Both solved | 655 | |
+| Matching objectives (< 0.01%) | 542/655 | |
 
 > **Note:** ripopt uses fallback strategies (L-BFGS Hessian, AL, SQP, slack
 > reformulation) that Ipopt does not have, which accounts for much of the
@@ -22,7 +22,7 @@ Generated: 2026-04-05 13:11:56
 
 | Suite | Problems | ripopt solved | Ipopt solved | ripopt only | Ipopt only | Both solved | Match |
 |-------|----------|--------------|-------------|-------------|------------|------------|-------|
-| HS | 120 | 118 (98.3%) | 116 (96.7%) | 2 | 0 | 116 | 109/116 |
+| HS | 120 | 117 (97.5%) | 116 (96.7%) | 2 | 1 | 115 | 109/115 |
 | CUTEst | 727 | 562 (77.3%) | 561 (77.2%) | 38 | 37 | 524 | 419/524 |
 | Electrolyte | 13 | 13 (100.0%) | 12 (92.3%) | 1 | 0 | 12 | 12/12 |
 | OPF | 4 | 4 (100.0%) | 4 (100.0%) | 0 | 0 | 4 | 2/4 |
@@ -30,20 +30,20 @@ Generated: 2026-04-05 13:11:56
 
 ## HS Suite — Performance
 
-On 116 commonly-solved problems:
+On 115 commonly-solved problems:
 
 | Metric | ripopt | Ipopt |
 |--------|--------|-------|
-| Median time | 111us | 2.4ms |
-| Total time | 47.4ms | 370.8ms |
-| Mean iterations | 15.6 | 13.3 |
-| Median iterations | 11 | 10 |
+| Median time | 118us | 2.6ms |
+| Total time | 41.1ms | 376.9ms |
+| Mean iterations | 18.8 | 13.3 |
+| Median iterations | 13 | 10 |
 
-- **Geometric mean speedup**: 20.2x
-- **Median speedup**: 21.6x
-- ripopt faster: 114/116 (98%)
-- ripopt 10x+ faster: 101/116
-- Ipopt faster: 2/116
+- **Geometric mean speedup**: 19.7x
+- **Median speedup**: 19.3x
+- ripopt faster: 114/115 (99%)
+- ripopt 10x+ faster: 100/115
+- Ipopt faster: 1/115
 
 ## CUTEst Suite — Performance
 
@@ -106,7 +106,7 @@ On 4 commonly-solved problems:
 | InvalidNumberDetected | 0 | 1 |
 | IpoptStatus(-11) | 0 | 1 |
 | IpoptStatus(-199) | 0 | 1 |
-| NumericalError | 1 | 0 |
+| NumericalError | 2 | 0 |
 | RestorationFailed | 1 | 0 |
 
 ### CUTEst Suite
@@ -152,6 +152,7 @@ On 4 commonly-solved problems:
 | FEEDLOC | CUTEst | 90 | 259 | NumericalError | -9.539854e-10 |
 | HAHN1LS | CUTEst | 7 | 0 | NumericalError | 3.338424e+01 |
 | HAIFAM | CUTEst | 99 | 150 | NumericalError | -4.500036e+01 |
+| HS225 | HS | 2 | 5 | NumericalError | 2.000000e+00 |
 | HS84 | CUTEst | 5 | 3 | NumericalError | -5.280335e+06 |
 | HS99EXP | CUTEst | 31 | 21 | NumericalError | -1.260006e+12 |
 | HYDC20LS | CUTEst | 99 | 0 | NumericalError | 2.967522e-15 |
