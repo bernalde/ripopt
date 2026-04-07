@@ -547,4 +547,250 @@ mod tests {
                 "x[{}]: unscaled={:.10e}, scaled={:.10e}", i, x1[i], x2[i]);
         }
     }
+
+    // --- KKT system tests ---
+    // These test the factorization on saddle-point matrices with zero-diagonal
+    // constraint rows, which are critical for interior-point optimization.
+
+    /// Verify that inertia counts always sum to the matrix dimension.
+    /// This catches the overcounting bug where in-factorization CB promotion
+    /// caused the sum to exceed n.
+    #[test]
+    fn test_kkt_inertia_invariant() {
+        // 6x6 KKT: 3 primal (positive diagonal) + 3 dual (zero diagonal)
+        // H = diag(2, 3, 4), J = [[1, 0, 1], [0, 1, 0], [1, 1, 0]]
+        let coo = make_coo(6, &[
+            // H block (primal)
+            (0, 0, 2.0), (1, 1, 3.0), (2, 2, 4.0),
+            // J^T block (upper triangle: row < col means primal-dual coupling)
+            (0, 3, 1.0), (0, 5, 1.0),  // J[0,:] = [1, 0, 1]
+            (1, 4, 1.0), (1, 5, 1.0),  // J[1,:] = [0, 1, 1]
+            (2, 3, 1.0),               // J[2,:] = [1, 0, 0]
+            // (2,2) block: all zeros (equality constraints)
+        ]);
+        let mut solver = Solver::new(SolverOptions::default());
+        let inertia = solver.analyze_and_factor(&coo).unwrap();
+        assert_eq!(
+            inertia.positive + inertia.negative + inertia.zero, 6,
+            "Inertia sum {} != matrix dimension 6: ({}, {}, {})",
+            inertia.positive + inertia.negative + inertia.zero,
+            inertia.positive, inertia.negative, inertia.zero,
+        );
+    }
+
+    /// KKT with zero-diagonal equality rows: verify correct inertia (n, m, 0).
+    #[test]
+    fn test_kkt_inertia_correctness() {
+        // 5x5 KKT: 3 primal + 2 dual with zero diagonal
+        let coo = make_coo(5, &[
+            (0, 0, 4.0), (0, 3, 1.0),
+            (1, 1, 5.0), (1, 4, 1.0),
+            (2, 2, 6.0), (2, 3, 1.0), (2, 4, 1.0),
+            // rows 3,4 have zero diagonal (equality constraints)
+        ]);
+        let mut solver = Solver::new(SolverOptions::default());
+        let inertia = solver.analyze_and_factor(&coo).unwrap();
+        assert_eq!(inertia.positive, 3, "Expected 3 positive, got {}", inertia.positive);
+        assert_eq!(inertia.negative, 2, "Expected 2 negative, got {}", inertia.negative);
+        assert_eq!(inertia.zero, 0, "Expected 0 zero, got {}", inertia.zero);
+    }
+
+    /// KKT factorization + solve: verify L*D*L^T reconstructs the matrix.
+    #[test]
+    fn test_kkt_solve_correctness() {
+        // 6x6 KKT: H = diag(10, 20, 30), J = [[1, 2, 0], [0, 1, 3], [2, 0, 1]]
+        let coo = make_coo(6, &[
+            (0, 0, 10.0), (1, 1, 20.0), (2, 2, 30.0),
+            (0, 3, 1.0), (1, 3, 2.0),                  // J[0,:] = [1, 2, 0]
+            (1, 4, 1.0), (2, 4, 3.0),                  // J[1,:] = [0, 1, 3]
+            (0, 5, 2.0), (2, 5, 1.0),                  // J[2,:] = [2, 0, 1]
+        ]);
+        let mut solver = Solver::new(SolverOptions::default());
+        let inertia = solver.analyze_and_factor(&coo).unwrap();
+        assert_eq!(inertia.positive, 3);
+        assert_eq!(inertia.negative, 3);
+
+        let b = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let mut x = [0.0; 6];
+        solver.solve(&b, &mut x).unwrap();
+        check_residual(&coo, &x, &b, 1e-10);
+    }
+
+    /// KKT with KktMatchingAmd ordering: verify it works and gives correct inertia.
+    #[test]
+    fn test_kkt_matching_amd_ordering() {
+        let coo = make_coo(6, &[
+            (0, 0, 10.0), (1, 1, 20.0), (2, 2, 30.0),
+            (0, 3, 1.0), (1, 3, 2.0),
+            (1, 4, 1.0), (2, 4, 3.0),
+            (0, 5, 2.0), (2, 5, 1.0),
+        ]);
+        let opts = SolverOptions {
+            n_primal: Some(3),
+            ordering: crate::ordering::Ordering::KktMatchingAmd,
+            ..Default::default()
+        };
+        let mut solver = Solver::new(opts);
+        let inertia = solver.analyze_and_factor(&coo).unwrap();
+        assert_eq!(inertia.positive, 3);
+        assert_eq!(inertia.negative, 3);
+        assert_eq!(inertia.zero, 0);
+
+        let b = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let mut x = [0.0; 6];
+        solver.solve(&b, &mut x).unwrap();
+        check_residual(&coo, &x, &b, 1e-10);
+    }
+
+    /// Larger KKT system (10 primal + 8 dual) to exercise multi-supernode paths.
+    /// Verifies inertia invariant and solve correctness.
+    #[test]
+    fn test_kkt_larger_system() {
+        // 18x18 KKT: 10 primal + 8 dual
+        // H = diag(1..10), J is a banded pattern
+        let n_primal = 10;
+        let m_dual = 8;
+        let n = n_primal + m_dual;
+        let mut triplets = Vec::new();
+
+        // H block: diagonal
+        for i in 0..n_primal {
+            triplets.push((i, i, (i + 1) as f64));
+        }
+        // J block: each dual row couples to 2-3 primal columns
+        for j in 0..m_dual {
+            let p1 = j % n_primal;
+            let p2 = (j + 1) % n_primal;
+            triplets.push((p1, n_primal + j, 1.0 + j as f64 * 0.1));
+            triplets.push((p2, n_primal + j, 0.5 + j as f64 * 0.05));
+            if j < m_dual - 1 {
+                let p3 = (j + 3) % n_primal;
+                triplets.push((p3, n_primal + j, 0.3));
+            }
+        }
+
+        let coo = make_coo(n, &triplets);
+        let opts = SolverOptions {
+            n_primal: Some(n_primal),
+            ordering: crate::ordering::Ordering::KktMatchingAmd,
+            ..Default::default()
+        };
+        let mut solver = Solver::new(opts);
+        let inertia = solver.analyze_and_factor(&coo).unwrap();
+
+        // Inertia must sum to n
+        assert_eq!(
+            inertia.positive + inertia.negative + inertia.zero, n,
+            "Inertia sum {} != {}: ({}, {}, {})",
+            inertia.positive + inertia.negative + inertia.zero, n,
+            inertia.positive, inertia.negative, inertia.zero,
+        );
+        assert_eq!(inertia.positive, n_primal);
+        assert_eq!(inertia.negative, m_dual);
+        assert_eq!(inertia.zero, 0);
+
+        // Solve and verify
+        let b: Vec<f64> = (1..=n).map(|i| i as f64).collect();
+        let mut x = vec![0.0; n];
+        solver.solve(&b, &mut x).unwrap();
+        check_residual(&coo, &x, &b, 1e-8);
+    }
+
+    /// KKT where some dual rows have very weak coupling (tests robustness).
+    #[test]
+    fn test_kkt_weak_coupling() {
+        // 8x8 KKT: 4 primal + 4 dual
+        // Two dual rows have strong coupling (1.0), two have weak coupling (1e-6)
+        let coo = make_coo(8, &[
+            (0, 0, 5.0), (1, 1, 5.0), (2, 2, 5.0), (3, 3, 5.0),
+            (0, 4, 1.0),    // strong
+            (1, 5, 1.0),    // strong
+            (2, 6, 1e-6),   // weak
+            (3, 7, 1e-6),   // weak
+        ]);
+        let opts = SolverOptions {
+            n_primal: Some(4),
+            ordering: crate::ordering::Ordering::KktMatchingAmd,
+            ..Default::default()
+        };
+        let mut solver = Solver::new(opts);
+        let inertia = solver.analyze_and_factor(&coo).unwrap();
+
+        assert_eq!(
+            inertia.positive + inertia.negative + inertia.zero, 8,
+            "Inertia sum {} != 8", inertia.positive + inertia.negative + inertia.zero,
+        );
+
+        let b = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let mut x = [0.0; 8];
+        solver.solve(&b, &mut x).unwrap();
+        check_residual(&coo, &x, &b, 1e-4);
+    }
+
+    /// KKT with threshold pivoting: verify delayed pivots don't cause overcounting.
+    #[test]
+    fn test_kkt_threshold_pivoting_no_overcounting() {
+        // 10x10 KKT: 5 primal + 5 dual, all zero diagonal on dual side
+        // With threshold pivoting, some duals will be delayed
+        let coo = make_coo(10, &[
+            (0, 0, 1.0), (1, 1, 2.0), (2, 2, 3.0), (3, 3, 4.0), (4, 4, 5.0),
+            // Each dual row couples to 2 primal columns
+            (0, 5, 1.0), (1, 5, 0.5),
+            (1, 6, 1.0), (2, 6, 0.5),
+            (2, 7, 1.0), (3, 7, 0.5),
+            (3, 8, 1.0), (4, 8, 0.5),
+            (4, 9, 1.0), (0, 9, 0.5),
+        ]);
+
+        // Test with multiple orderings to exercise different code paths
+        for ordering in [Ordering::Natural, Ordering::Amd, Ordering::KktMatchingAmd] {
+            let opts = SolverOptions {
+                n_primal: Some(5),
+                ordering,
+                pivot_threshold: 0.01,
+                ..Default::default()
+            };
+            let mut solver = Solver::new(opts);
+            let inertia = solver.analyze_and_factor(&coo).unwrap();
+
+            assert_eq!(
+                inertia.positive + inertia.negative + inertia.zero, 10,
+                "Ordering {:?}: inertia sum {} != 10: ({}, {}, {})",
+                ordering,
+                inertia.positive + inertia.negative + inertia.zero,
+                inertia.positive, inertia.negative, inertia.zero,
+            );
+        }
+    }
+
+    /// Backward error test: solve Ax=b and verify ||b - Ax|| / (||A|| ||x|| + ||b||).
+    #[test]
+    fn test_kkt_backward_error() {
+        let coo = make_coo(6, &[
+            (0, 0, 10.0), (1, 1, 20.0), (2, 2, 30.0),
+            (0, 3, 1.0), (1, 3, 2.0),
+            (1, 4, 1.0), (2, 4, 3.0),
+            (0, 5, 2.0), (2, 5, 1.0),
+        ]);
+        let opts = SolverOptions {
+            n_primal: Some(3),
+            ordering: crate::ordering::Ordering::KktMatchingAmd,
+            ..Default::default()
+        };
+        let mut solver = Solver::new(opts);
+        solver.analyze_and_factor(&coo).unwrap();
+
+        let b = [7.0, -3.0, 12.0, 1.0, -5.0, 4.0];
+        let mut x = [0.0; 6];
+        solver.solve(&b, &mut x).unwrap();
+
+        // Compute backward error: ||b - Ax|| / (||x|| + ||b||)
+        let mut ax = [0.0; 6];
+        coo.matvec(&x, &mut ax).unwrap();
+        let resid_norm: f64 = ax.iter().zip(&b).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max);
+        let x_norm: f64 = x.iter().map(|v| v.abs()).fold(0.0, f64::max);
+        let b_norm: f64 = b.iter().map(|v| v.abs()).fold(0.0, f64::max);
+        let berr = resid_norm / (x_norm + b_norm).max(1e-30);
+        assert!(berr < 1e-12, "Backward error {:.2e} exceeds 1e-12", berr);
+    }
 }
