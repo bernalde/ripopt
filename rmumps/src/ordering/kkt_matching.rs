@@ -19,6 +19,39 @@
 
 use crate::csc::CscMatrix;
 
+/// Try to find an augmenting path from `dual_idx` to an unmatched primal.
+/// Returns true if the matching was augmented (increased by 1).
+fn augment(
+    dual_idx: usize,
+    dual_neighbors: &[Vec<usize>],
+    match_dual_to_primal: &mut [Option<usize>],
+    match_primal_to_dual: &mut [Option<usize>],
+    visited: &mut [bool],
+) -> bool {
+    for &primal_idx in &dual_neighbors[dual_idx] {
+        if visited[primal_idx] {
+            continue;
+        }
+        visited[primal_idx] = true;
+
+        // If primal is unmatched, or we can re-route its current match
+        if match_primal_to_dual[primal_idx].is_none()
+            || augment(
+                match_primal_to_dual[primal_idx].unwrap(),
+                dual_neighbors,
+                match_dual_to_primal,
+                match_primal_to_dual,
+                visited,
+            )
+        {
+            match_dual_to_primal[dual_idx] = Some(primal_idx);
+            match_primal_to_dual[primal_idx] = Some(dual_idx);
+            return true;
+        }
+    }
+    false
+}
+
 /// Compute a KKT matching + compressed AMD ordering.
 ///
 /// `n_primal` is the number of primal variables (the (1,1) block size).
@@ -33,33 +66,39 @@ pub fn kkt_matching_ordering(csc: &CscMatrix, n_primal: usize) -> (Vec<usize>, V
         return super::amd::amd_ordering(csc);
     }
 
-    // Step 1: Greedy maximum-weight matching
-    let mut match_dual_to_primal: Vec<Option<usize>> = vec![None; m_dual];
-    let mut match_primal_to_dual: Vec<Option<usize>> = vec![None; n_primal];
-
-    let mut edges: Vec<(usize, usize, f64)> = Vec::new();
+    // Step 1: Maximum cardinality bipartite matching using augmenting paths.
+    // Build adjacency lists: for each dual, which primals does it couple to?
+    // Sort neighbors by descending weight so augmenting paths prefer strong couplings.
+    let mut dual_neighbors: Vec<Vec<usize>> = vec![Vec::new(); m_dual];
     for dual_idx in 0..m_dual {
         let col = n_primal + dual_idx;
+        let mut neighbors: Vec<(usize, f64)> = Vec::new();
         for idx in csc.col_ptr[col]..csc.col_ptr[col + 1] {
             let row = csc.row_idx[idx];
             if row < n_primal {
                 let weight = csc.vals[idx].abs();
                 if weight > 0.0 {
-                    edges.push((dual_idx, row, weight));
+                    neighbors.push((row, weight));
                 }
             }
         }
+        neighbors.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        dual_neighbors[dual_idx] = neighbors.into_iter().map(|(p, _)| p).collect();
     }
-    edges.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
 
-    let mut num_matched = 0usize;
-    for &(dual_idx, primal_idx, _) in &edges {
-        if match_dual_to_primal[dual_idx].is_none() && match_primal_to_dual[primal_idx].is_none() {
-            match_dual_to_primal[dual_idx] = Some(primal_idx);
-            match_primal_to_dual[primal_idx] = Some(dual_idx);
-            num_matched += 1;
-        }
+    let mut match_dual_to_primal: Vec<Option<usize>> = vec![None; m_dual];
+    let mut match_primal_to_dual: Vec<Option<usize>> = vec![None; n_primal];
+
+    // For each unmatched dual, try to find an augmenting path.
+    // An augmenting path alternates: unmatched dual -> primal -> matched dual -> primal -> ...
+    // until it reaches an unmatched primal. Flipping the path increases matching by 1.
+    for dual_idx in 0..m_dual {
+        let mut visited = vec![false; n_primal];
+        augment(dual_idx, &dual_neighbors, &mut match_dual_to_primal,
+                &mut match_primal_to_dual, &mut visited);
     }
+
+    let num_matched = match_dual_to_primal.iter().filter(|m| m.is_some()).count();
 
     // Step 2: Build compressed graph
     // Each matched pair becomes a single super-node.
