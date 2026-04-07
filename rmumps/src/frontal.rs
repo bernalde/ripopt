@@ -595,105 +595,25 @@ impl FrontalMatrix {
                     k += 2;
                 }
                 PivotResult::Delayed => {
-                    // No FS-only pivot passed threshold. Before genuinely delaying,
-                    // search CB columns for a 2×2 partner (MA57-style).
-                    // This pairs primal-dual variables across the FS-CB boundary.
-                    let cb_partner = find_cb_pivot_partner(
-                        &a, n, active_start, orig_nfs - k, orig_nfs, threshold,
-                    );
-
-                    if let Some((fs_pos, cb_pos)) = cb_partner {
-                        // Found a good FS-CB 2×2 pivot. Promote the CB column
-                        // into the FS range by swapping it to orig_nfs position
-                        // (right after the last FS column).
-                        //
-                        // First, swap the CB column to position orig_nfs (end of FS range)
-                        if cb_pos != orig_nfs {
-                            swap_full(&mut a, n, cb_pos, orig_nfs);
-                            perm.swap(cb_pos, orig_nfs);
-                            for j in 0..nfs_elim {
-                                l_data.swap(j * n + cb_pos, j * n + orig_nfs);
-                            }
+                    // No FS-only pivot passed threshold. Delay this column to the
+                    // parent supernode via the contribution block. The parent will
+                    // receive it via extend_add and promote_cb_to_fs, getting a
+                    // fresh chance to pair it with better pivots.
+                    //
+                    // NOTE: In-factorization CB promotion (promoting a CB column
+                    // to FS and eliminating it here) was removed because it causes
+                    // the parent's frontal matrix to have incomplete Schur complement
+                    // data for that column, leading to inertia overcounting and
+                    // corrupted factorizations on problems like gas40.
+                    let last_fs = active_start + (orig_nfs - k) - 1;
+                    if active_start != last_fs {
+                        swap_full(&mut a, n, active_start, last_fs);
+                        perm.swap(active_start, last_fs);
+                        for j in 0..nfs_elim {
+                            l_data.swap(j * n + active_start, j * n + last_fs);
                         }
-                        // Increase FS range to include the promoted column
-                        orig_nfs += 1;
-                        // Expand d_diag/d_offdiag/l_data to accommodate all FS columns
-                        if orig_nfs > d_diag.len() {
-                            d_diag.resize(orig_nfs, 0.0);
-                            d_offdiag.resize(orig_nfs, 0.0);
-                        }
-                        if orig_nfs > l_data.len() / n {
-                            l_data.resize(orig_nfs * n, 0.0);
-                        }
-
-                        // Now swap fs_pos to active_start, and orig_nfs-1 to active_start+1
-                        // (the promoted column is now at orig_nfs - 1)
-                        let promoted_pos = orig_nfs - 1;
-                        if promoted_pos != active_start + 1 {
-                            swap_full(&mut a, n, active_start + 1, promoted_pos);
-                            perm.swap(active_start + 1, promoted_pos);
-                            for j in 0..nfs_elim {
-                                l_data.swap(j * n + (active_start + 1), j * n + promoted_pos);
-                            }
-                        }
-                        if fs_pos != active_start {
-                            swap_full(&mut a, n, active_start, fs_pos);
-                            perm.swap(active_start, fs_pos);
-                            for j in 0..nfs_elim {
-                                l_data.swap(j * n + active_start, j * n + fs_pos);
-                            }
-                        }
-
-                        // Now eliminate as 2×2 pivot (same code as TwoByTwo handler)
-                        let akk = a[active_start * n + active_start];
-                        let ak1k = a[(active_start + 1) * n + active_start];
-                        let ak1k1 = a[(active_start + 1) * n + (active_start + 1)];
-
-                        d_diag[nfs_elim] = akk;
-                        d_diag[nfs_elim + 1] = ak1k1;
-                        d_offdiag[nfs_elim] = ak1k;
-
-                        let det = akk * ak1k1 - ak1k * ak1k;
-                        if det.abs() > 1e-30 {
-                            let d_inv_00 = ak1k1 / det;
-                            let d_inv_01 = -ak1k / det;
-                            let d_inv_11 = akk / det;
-                            let m = n - active_start - 2;
-                            for i in 0..m {
-                                let aik = a[(active_start + 2 + i) * n + active_start];
-                                let aik1 = a[(active_start + 2 + i) * n + (active_start + 1)];
-                                work[i] = aik * d_inv_00 + aik1 * d_inv_01;
-                                work[m + i] = aik * d_inv_01 + aik1 * d_inv_11;
-                                l_data[nfs_elim * n + (active_start + 2 + i)] = work[i];
-                                l_data[(nfs_elim + 1) * n + (active_start + 2 + i)] = work[m + i];
-                            }
-                            for i in 0..m {
-                                let li0 = work[i];
-                                let li1 = work[m + i];
-                                let si0 = li0 * akk + li1 * ak1k;
-                                let si1 = li0 * ak1k + li1 * ak1k1;
-                                let base = (active_start + 2 + i) * n + (active_start + 2);
-                                for j in 0..m {
-                                    a[base + j] -= si0 * work[j] + si1 * work[m + j];
-                                }
-                            }
-                        }
-                        l_data[nfs_elim * n + active_start] = 1.0;
-                        l_data[(nfs_elim + 1) * n + (active_start + 1)] = 1.0;
-                        nfs_elim += 2;
-                        k += 2; // consumed 1 original FS + 1 promoted CB
-                    } else {
-                        // No CB partner found — genuinely delay this column.
-                        let last_fs = active_start + (orig_nfs - k) - 1;
-                        if active_start != last_fs {
-                            swap_full(&mut a, n, active_start, last_fs);
-                            perm.swap(active_start, last_fs);
-                            for j in 0..nfs_elim {
-                                l_data.swap(j * n + active_start, j * n + last_fs);
-                            }
-                        }
-                        k += 1;
                     }
+                    k += 1;
                 }
             }
         }
@@ -838,59 +758,6 @@ fn find_pivot_in_fs(
     }
 
     PivotResult::Delayed
-}
-
-/// Search CB columns for a 2×2 pivot partner for an FS column.
-/// For KKT systems, pairs primal variables with dual variables across the FS-CB boundary.
-/// Returns Some((fs_pos, cb_pos)) if a good pair is found.
-fn find_cb_pivot_partner(
-    a: &[f64],
-    n: usize,
-    active_start: usize,
-    fs_remaining: usize,
-    orig_nfs: usize,
-    threshold: f64,
-) -> Option<(usize, usize)> {
-    let fs_end = active_start + fs_remaining;
-    let mut best: Option<(usize, usize, f64)> = None; // (fs_pos, cb_pos, |det|)
-
-    for fs_pos in active_start..fs_end {
-        let diag_fs = a[fs_pos * n + fs_pos].abs();
-        let is_zero_diag_fs = diag_fs < 1e-12;
-
-        // Search CB columns for a partner with complementary diagonal
-        // (pair zero-diagonal with non-zero-diagonal for good 2×2 pivots)
-        for cb_pos in orig_nfs..n {
-            let diag_cb = a[cb_pos * n + cb_pos].abs();
-            let is_zero_diag_cb = diag_cb < 1e-12;
-
-            // Only pair zero-diagonal with non-zero-diagonal
-            if is_zero_diag_fs == is_zero_diag_cb {
-                continue;
-            }
-
-            let akk = a[fs_pos * n + fs_pos];
-            let akj = a[cb_pos * n + fs_pos]; // off-diagonal coupling
-            let ajj = a[cb_pos * n + cb_pos];
-
-            // Skip if no coupling
-            if akj.abs() < 1e-30 {
-                continue;
-            }
-
-            let det = (akk * ajj - akj * akj).abs();
-            let max_elem = akk.abs().max(ajj.abs()).max(akj.abs());
-
-            if max_elem > 1e-30 && det >= threshold * max_elem * max_elem {
-                // Valid 2×2 pivot — track the best (largest determinant)
-                if best.map_or(true, |(_, _, d)| det > d) {
-                    best = Some((fs_pos, cb_pos, det));
-                }
-            }
-        }
-    }
-
-    best.map(|(fs, cb, _)| (fs, cb))
 }
 
 /// Swap rows and columns p and q in the full n x n matrix stored in `a`.
