@@ -7,7 +7,7 @@
     "status": "Optimal",
     "objective": 1.9740200095186477e-7,
     "iterations": 8,
-    "solve_time": 0.000263167
+    "solve_time": 0.0001395
   },
   {
     "solver": "ipopt",
@@ -17,7 +17,7 @@
     "status": "Optimal",
     "objective": 3.1003500361205586e-7,
     "iterations": 7,
-    "solve_time": 0.003907167
+    "solve_time": 0.003359958
   },
   {
     "solver": "ripopt",
@@ -25,9 +25,9 @@
     "n": 5,
     "m": 2,
     "status": "Optimal",
-    "objective": -0.006919974362588778,
-    "iterations": 11,
-    "solve_time": 0.001911583
+    "objective": -0.006928239172029831,
+    "iterations": 19,
+    "solve_time": 0.001039875
   },
   {
     "solver": "ipopt",
@@ -37,7 +37,7 @@
     "status": "Optimal",
     "objective": -0.006933670187752001,
     "iterations": 28,
-    "solve_time": 0.009896
+    "solve_time": 0.009323417
   },
   {
     "solver": "ripopt",
@@ -45,9 +45,9 @@
     "n": 4,
     "m": 3,
     "status": "Optimal",
-    "objective": -0.4832686943563651,
+    "objective": -0.48326869435300895,
     "iterations": 7,
-    "solve_time": 0.000121458
+    "solve_time": 0.000158916
   },
   {
     "solver": "ipopt",
@@ -57,7 +57,7 @@
     "status": "Optimal",
     "objective": -0.4832680501409171,
     "iterations": 7,
-    "solve_time": 0.001900875
+    "solve_time": 0.001704709
   },
   {
     "solver": "ripopt",
@@ -65,9 +65,9 @@
     "n": 6,
     "m": 4,
     "status": "Optimal",
-    "objective": -0.7723303558567293,
+    "objective": -0.772330355889347,
     "iterations": 7,
-    "solve_time": 0.000251208
+    "solve_time": 0.000216875
   },
   {
     "solver": "ipopt",
@@ -77,7 +77,7 @@
     "status": "Optimal",
     "objective": -0.7723713625975525,
     "iterations": 9,
-    "solve_time": 0.002606416
+    "solve_time": 0.002552333
   },
   {
     "solver": "ripopt",
@@ -85,9 +85,9 @@
     "n": 6,
     "m": 2,
     "status": "Optimal",
-    "objective": -0.05531396331323303,
+    "objective": -0.05531490234060834,
     "iterations": 16,
-    "solve_time": 0.000219208
+    "solve_time": 0.000206334
   },
   {
     "solver": "ipopt",
@@ -97,7 +97,7 @@
     "status": "Optimal",
     "objective": -0.05531205597235094,
     "iterations": 6,
-    "solve_time": 0.001773209
+    "solve_time": 0.001805416
   },
   {
     "solver": "ripopt",
@@ -107,7 +107,7 @@
     "status": "Optimal",
     "objective": 2.658376087317047e-17,
     "iterations": 7,
-    "solve_time": 0.000033667
+    "solve_time": 0.000029708
   },
   {
     "solver": "ipopt",
@@ -117,7 +117,7 @@
     "status": "Optimal",
     "objective": 8.892358562948893e-17,
     "iterations": 5,
-    "solve_time": 0.001296542
+    "solve_time": 0.001317417
   },
   {
     "solver": "ripopt",
@@ -127,7 +127,7 @@
     "status": "Optimal",
     "objective": 1.1132779365834872e-15,
     "iterations": 5,
-    "solve_time": 0.000018667
+    "solve_time": 0.000017
   },
   {
     "solver": "ipopt",
@@ -137,7 +137,7 @@
     "status": "Optimal",
     "objective": 7.973765395748759e-22,
     "iterations": 5,
-    "solve_time": 0.001281167
+    "solve_time": 0.001188
   },
   {
     "solver": "ripopt",
@@ -145,9 +145,9 @@
     "n": 2,
     "m": 2,
     "status": "Optimal",
-    "objective": 7.825840587094075e-10,
-    "iterations": 6,
-    "solve_time": 0.000120375
+    "objective": 7.825840587094013e-10,
+    "iterations": 9,
+    "solve_time": 0.000106833
   },
   {
     "solver": "ipopt",
@@ -157,7 +157,7 @@
     "status": "Optimal",
     "objective": 7.825840587101624e-10,
     "iterations": 4,
-    "solve_time": 0.001190166
+    "solve_time": 0.001109875
   },
   {
     "solver": "ripopt",
@@ -167,7 +167,7 @@
     "status": "Optimal",
     "objective": 0.0,
     "iterations": 7,
-    "solve_time": 0.000119917
+    "solve_time": 0.000105542
   },
   {
     "solver": "ipopt",
@@ -177,7 +177,7 @@
     "status": "Optimal",
     "objective": 0.0,
     "iterations": 4,
-    "solve_time": 0.001279583
+    "solve_time": 0.001192208
   },
   {
     "solver": "ripopt",
@@ -187,7 +187,7 @@
     "status": "Optimal",
     "objective": 2.2385566541210692e-17,
     "iterations": 24,
-    "solve_time": 0.000033416
+    "solve_time": 0.000040292
   },
   {
     "solver": "ipopt",
@@ -197,7 +197,7 @@
     "status": "Optimal",
     "objective": 3.6775853181046546e-16,
     "iterations": 5,
-    "solve_time": 0.001196041
+    "solve_time": 0.001207542
   },
   {
     "solver": "ripopt",
@@ -207,7 +207,7 @@
     "status": "Optimal",
     "objective": 1.0009124892053412e-14,
     "iterations": 96,
-    "solve_time": 0.000129917
+    "solve_time": 0.000097416
   },
   {
     "solver": "ipopt",
@@ -217,7 +217,7 @@
     "status": "Optimal",
     "objective": 2.900599045629635e-10,
     "iterations": 142,
-    "solve_time": 0.030998125
+    "solve_time": 0.030560334
   },
   {
     "solver": "ripopt",
@@ -227,7 +227,7 @@
     "status": "Optimal",
     "objective": 2.2467220860818856e-15,
     "iterations": 75,
-    "solve_time": 0.000079708
+    "solve_time": 0.000066708
   },
   {
     "solver": "ipopt",
@@ -237,17 +237,17 @@
     "status": "Optimal",
     "objective": 3.7390226301833385e-12,
     "iterations": 8,
-    "solve_time": 0.001419833
+    "solve_time": 0.001474417
   },
   {
     "solver": "ripopt",
     "name": "Seawater speciation",
     "n": 15,
     "m": 8,
-    "status": "Optimal",
-    "objective": -1.320458776542314,
-    "iterations": 942,
-    "solve_time": 0.16100875
+    "status": "NumericalError",
+    "objective": -1.3705683786924967,
+    "iterations": 81,
+    "solve_time": 0.182312541
   },
   {
     "solver": "ipopt",
@@ -257,6 +257,6 @@
     "status": "Infeasible",
     "objective": -1.36283675686854,
     "iterations": 23,
-    "solve_time": 0.005836708
+    "solve_time": 0.005648958
   }
 ]

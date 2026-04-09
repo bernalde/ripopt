@@ -1,17 +1,17 @@
 # ripopt Benchmark Report
 
-Generated: 2026-04-07 01:29:08
+Generated: 2026-04-08 18:28:09
 
 ## Executive Summary
 
 | Metric | ripopt | Ipopt |
 |--------|--------|-------|
-| Optimal | **696/865** (80.5%) | **688/865** (79.5%) |
+| Optimal | **703/865** (81.3%) | **688/865** (79.5%) |
 | Acceptable | 0 | 5 |
-| Total solved (Optimal + Acceptable) | 696 (80.5%) | 693 (80.1%) |
-| Solved exclusively | 41 | 38 |
-| Both solved | 655 | |
-| Matching objectives (< 0.01%) | 542/655 | |
+| Total solved (Optimal + Acceptable) | 703 (81.3%) | 693 (80.1%) |
+| Solved exclusively | 42 | 32 |
+| Both solved | 661 | |
+| Matching objectives (< 0.01%) | 555/661 | |
 
 > **Note:** ripopt uses fallback strategies (L-BFGS Hessian, AL, SQP, slack
 > reformulation) that Ipopt does not have, which accounts for much of the
@@ -23,9 +23,9 @@ Generated: 2026-04-07 01:29:08
 | Suite | Problems | ripopt solved | Ipopt solved | ripopt only | Ipopt only | Both solved | Match |
 |-------|----------|--------------|-------------|-------------|------------|------------|-------|
 | HS | 120 | 117 (97.5%) | 116 (96.7%) | 2 | 1 | 115 | 109/115 |
-| CUTEst | 727 | 562 (77.3%) | 561 (77.2%) | 38 | 37 | 524 | 419/524 |
-| Electrolyte | 13 | 13 (100.0%) | 12 (92.3%) | 1 | 0 | 12 | 12/12 |
-| OPF | 4 | 4 (100.0%) | 4 (100.0%) | 0 | 0 | 4 | 2/4 |
+| CUTEst | 727 | 571 (78.5%) | 561 (77.2%) | 40 | 30 | 531 | 433/531 |
+| Electrolyte | 13 | 12 (92.3%) | 12 (92.3%) | 0 | 0 | 12 | 12/12 |
+| OPF | 4 | 3 (75.0%) | 4 (100.0%) | 0 | 1 | 3 | 1/3 |
 | CHO | 1 | 0 (0.0%) | 0 (0.0%) | 0 | 0 | 0 | 0/1 |
 
 ## HS Suite — Performance
@@ -34,33 +34,33 @@ On 115 commonly-solved problems:
 
 | Metric | ripopt | Ipopt |
 |--------|--------|-------|
-| Median time | 118us | 2.6ms |
-| Total time | 41.1ms | 376.9ms |
+| Median time | 100us | 1.8ms |
+| Total time | 38.1ms | 272.4ms |
 | Mean iterations | 18.8 | 13.3 |
 | Median iterations | 13 | 10 |
 
-- **Geometric mean speedup**: 19.7x
-- **Median speedup**: 19.3x
-- ripopt faster: 114/115 (99%)
-- ripopt 10x+ faster: 100/115
-- Ipopt faster: 1/115
+- **Geometric mean speedup**: 16.3x
+- **Median speedup**: 14.7x
+- ripopt faster: 113/115 (98%)
+- ripopt 10x+ faster: 92/115
+- Ipopt faster: 2/115
 
 ## CUTEst Suite — Performance
 
-On 524 commonly-solved problems:
+On 531 commonly-solved problems:
 
 | Metric | ripopt | Ipopt |
 |--------|--------|-------|
-| Median time | 92us | 2.3ms |
-| Total time | 103.21s | 9.27s |
-| Mean iterations | 61.2 | 39.3 |
+| Median time | 120us | 2.4ms |
+| Total time | 69.11s | 11.61s |
+| Mean iterations | 63.3 | 39.1 |
 | Median iterations | 15 | 12 |
 
-- **Geometric mean speedup**: 10.4x
-- **Median speedup**: 24.3x
-- ripopt faster: 442/524 (84%)
-- ripopt 10x+ faster: 337/524
-- Ipopt faster: 82/524
+- **Geometric mean speedup**: 9.5x
+- **Median speedup**: 19.8x
+- ripopt faster: 450/531 (85%)
+- ripopt 10x+ faster: 334/531
+- Ipopt faster: 81/531
 
 ## Electrolyte Suite — Performance
 
@@ -68,33 +68,33 @@ On 12 commonly-solved problems:
 
 | Metric | ripopt | Ipopt |
 |--------|--------|-------|
-| Median time | 121us | 1.8ms |
-| Total time | 3.3ms | 58.7ms |
-| Mean iterations | 22.4 | 19.2 |
-| Median iterations | 8 | 7 |
+| Median time | 107us | 1.7ms |
+| Total time | 2.2ms | 56.8ms |
+| Mean iterations | 23.3 | 19.2 |
+| Median iterations | 9 | 7 |
 
-- **Geometric mean speedup**: 20.1x
-- **Median speedup**: 15.7x
+- **Geometric mean speedup**: 22.6x
+- **Median speedup**: 22.1x
 - ripopt faster: 12/12 (100%)
-- ripopt 10x+ faster: 9/12
+- ripopt 10x+ faster: 10/12
 - Ipopt faster: 0/12
 
 ## OPF Suite — Performance
 
-On 4 commonly-solved problems:
+On 3 commonly-solved problems:
 
 | Metric | ripopt | Ipopt |
 |--------|--------|-------|
-| Median time | 149.3ms | 8.4ms |
-| Total time | 30.30s | 67.3ms |
-| Mean iterations | 37.2 | 12.5 |
-| Median iterations | 31 | 14 |
+| Median time | 9.8ms | 4.9ms |
+| Total time | 51.2ms | 18.0ms |
+| Mean iterations | 146.0 | 12.0 |
+| Median iterations | 70 | 11 |
 
-- **Geometric mean speedup**: 0.0x
-- **Median speedup**: 0.1x
-- ripopt faster: 0/4 (0%)
-- ripopt 10x+ faster: 0/4
-- Ipopt faster: 4/4
+- **Geometric mean speedup**: 0.5x
+- **Median speedup**: 0.9x
+- ripopt faster: 1/3 (33%)
+- ripopt 10x+ faster: 0/3
+- Ipopt faster: 2/3
 
 ## Failure Analysis
 
@@ -119,17 +119,24 @@ On 4 commonly-solved problems:
 | IpoptStatus(-10) | 0 | 123 |
 | IpoptStatus(3) | 0 | 1 |
 | IpoptStatus(4) | 0 | 2 |
-| LocalInfeasibility | 69 | 0 |
-| MaxIterations | 6 | 12 |
-| NumericalError | 63 | 0 |
-| RestorationFailed | 15 | 4 |
-| Timeout | 12 | 10 |
+| LocalInfeasibility | 68 | 0 |
+| MaxIterations | 5 | 12 |
+| NumericalError | 59 | 0 |
+| RestorationFailed | 11 | 4 |
+| Timeout | 13 | 10 |
 
 ### Electrolyte Suite
 
 | Failure Mode | ripopt | Ipopt |
 |-------------|--------|-------|
 | Infeasible | 0 | 1 |
+| NumericalError | 1 | 0 |
+
+### OPF Suite
+
+| Failure Mode | ripopt | Ipopt |
+|-------------|--------|-------|
+| NumericalError | 1 | 0 |
 
 ### CHO Suite
 
@@ -143,62 +150,57 @@ On 4 commonly-solved problems:
 | Problem | Suite | n | m | ripopt status | Ipopt obj |
 |---------|-------|---|---|--------------|-----------|
 | ACOPP30 | CUTEst | 72 | 142 | NumericalError | 5.768924e+02 |
+| ACOPR30 | CUTEst | 72 | 172 | Timeout | 5.768924e+02 |
+| BATCH | CUTEst | 48 | 73 | NumericalError | 2.591803e+05 |
 | CERI651ALS | CUTEst | 7 | 0 | NumericalError | 3.348152e+02 |
-| CONCON | CUTEst | 15 | 11 | NumericalError | -6.230796e+03 |
 | CORE1 | CUTEst | 65 | 59 | NumericalError | 9.105624e+01 |
 | CRESC50 | CUTEst | 6 | 100 | RestorationFailed | 7.862467e-01 |
 | DISCS | CUTEst | 36 | 66 | NumericalError | 1.200007e+01 |
-| ELATTAR | CUTEst | 7 | 102 | NumericalError | 7.420618e+01 |
-| FEEDLOC | CUTEst | 90 | 259 | NumericalError | -9.539854e-10 |
 | HAHN1LS | CUTEst | 7 | 0 | NumericalError | 3.338424e+01 |
 | HAIFAM | CUTEst | 99 | 150 | NumericalError | -4.500036e+01 |
 | HS225 | HS | 2 | 5 | NumericalError | 2.000000e+00 |
-| HS84 | CUTEst | 5 | 3 | NumericalError | -5.280335e+06 |
 | HS99EXP | CUTEst | 31 | 21 | NumericalError | -1.260006e+12 |
 | HYDC20LS | CUTEst | 99 | 0 | NumericalError | 2.967522e-15 |
-| HYDCAR20 | CUTEst | 99 | 99 | NumericalError | 0.000000e+00 |
 | KIRBY2LS | CUTEst | 5 | 0 | MaxIterations | 3.905074e+00 |
-| LAKES | CUTEst | 90 | 78 | RestorationFailed | 3.505251e+05 |
-| LINSPANH | CUTEst | 97 | 33 | NumericalError | -7.700005e+01 |
 | LRCOVTYPE | CUTEst | 54 | 0 | Timeout | 5.723072e-01 |
 | MCONCON | CUTEst | 15 | 11 | NumericalError | -6.230796e+03 |
 | MGH10LS | CUTEst | 3 | 0 | NumericalError | 8.794586e+01 |
 | MGH10SLS | CUTEst | 3 | 0 | NumericalError | 8.794586e+01 |
 | MSS1 | CUTEst | 90 | 73 | NumericalError | -1.400000e+01 |
 | MUONSINELS | CUTEst | 1 | 0 | NumericalError | 4.387412e+04 |
-| NET1 | CUTEst | 48 | 57 | NumericalError | 9.411943e+05 |
-| OET5 | CUTEst | 5 | 1002 | MaxIterations | 2.650077e-03 |
+| OET2 | CUTEst | 3 | 1002 | NumericalError | 8.715962e-02 |
+| OET5 | CUTEst | 5 | 1002 | Timeout | 2.650077e-03 |
 | OET6 | CUTEst | 5 | 1002 | NumericalError | 2.069727e-03 |
-| OET7 | CUTEst | 7 | 1002 | NumericalError | 4.465915e-05 |
-| PFIT4 | CUTEst | 3 | 3 | NumericalError | 0.000000e+00 |
+| PALMER3 | CUTEst | 4 | 0 | NumericalError | 2.416980e+03 |
 | QPCBLEND | CUTEst | 83 | 74 | NumericalError | -7.842801e-03 |
 | QPNBLEND | CUTEst | 83 | 74 | NumericalError | -9.136404e-03 |
+| SPANHYD | CUTEst | 97 | 33 | NumericalError | 2.397380e+02 |
 | SSINE | CUTEst | 3 | 2 | NumericalError | 0.000000e+00 |
 | STRATEC | CUTEst | 10 | 0 | NumericalError | 2.212262e+03 |
-| SWOPF | CUTEst | 83 | 92 | RestorationFailed | 6.786018e-02 |
-| TAXR13322 | CUTEst | 72 | 1261 | NumericalError | -3.429089e+02 |
+| SWOPF | CUTEst | 83 | 92 | NumericalError | 6.786018e-02 |
 | THURBERLS | CUTEst | 7 | 0 | NumericalError | 5.642708e+03 |
-| TRO3X3 | CUTEst | 30 | 13 | NumericalError | 8.967478e+00 |
 | VESUVIOLS | CUTEst | 8 | 0 | NumericalError | 9.914100e+02 |
+| case30_ieee | OPF | 72 | 142 | NumericalError | 8.208515e+03 |
 
-## Wins (ripopt solves, Ipopt fails) — 41 problems
+## Wins (ripopt solves, Ipopt fails) — 42 problems
 
 | Problem | Suite | n | m | Ipopt status | ripopt obj |
 |---------|-------|---|---|-------------|------------|
-| AVION2 | CUTEst | 49 | 15 | MaxIterations | 9.468013e+07 |
 | BEALENE | CUTEst | 2 | 3 | IpoptStatus(-10) | 0.000000e+00 |
+| BENNETT5 | CUTEst | 3 | 154 | IpoptStatus(-10) | 0.000000e+00 |
 | BIGGS6NE | CUTEst | 6 | 13 | IpoptStatus(-10) | 0.000000e+00 |
+| BLEACHNG | CUTEst | 17 | 0 | Timeout | 1.823872e+04 |
 | BOX3NE | CUTEst | 3 | 10 | IpoptStatus(-10) | 0.000000e+00 |
 | BROWNBSNE | CUTEst | 2 | 3 | IpoptStatus(-10) | 0.000000e+00 |
 | CERI651A | CUTEst | 7 | 61 | IpoptStatus(-10) | 0.000000e+00 |
 | CERI651E | CUTEst | 7 | 64 | IpoptStatus(-10) | 0.000000e+00 |
-| DECONVB | CUTEst | 63 | 0 | MaxIterations | 7.989309e-06 |
+| DECONVB | CUTEst | 63 | 0 | MaxIterations | 3.233018e-03 |
 | DENSCHNBNE | CUTEst | 2 | 3 | IpoptStatus(-10) | 0.000000e+00 |
 | DEVGLA1NE | CUTEst | 4 | 24 | IpoptStatus(-10) | 0.000000e+00 |
 | DIAMON3DLS | CUTEst | 99 | 0 | Timeout | 5.754759e+02 |
 | DMN15102LS | CUTEst | 66 | 0 | Timeout | 8.950802e+03 |
 | ENGVAL2NE | CUTEst | 3 | 5 | IpoptStatus(-10) | 0.000000e+00 |
-| EQC | CUTEst | 9 | 3 | ErrorInStepComputation | -8.274326e+02 |
+| EQC | CUTEst | 9 | 3 | ErrorInStepComputation | -8.295477e+02 |
 | EXP2NE | CUTEst | 2 | 10 | IpoptStatus(-10) | 0.000000e+00 |
 | FBRAIN3 | CUTEst | 6 | 2211 | IpoptStatus(-10) | 0.000000e+00 |
 | GROUPING | CUTEst | 100 | 125 | IpoptStatus(-10) | 1.385040e+01 |
@@ -207,11 +209,11 @@ On 4 commonly-solved problems:
 | HS214 | HS | 2 | 0 | InvalidNumberDetected | 0.000000e+00 |
 | HS223 | HS | 2 | 2 | Infeasible | -0.000000e+00 |
 | HS25NE | CUTEst | 3 | 99 | IpoptStatus(-10) | 0.000000e+00 |
-| HS87 | CUTEst | 6 | 4 | MaxIterations | 8.996944e+03 |
-| KOEBHELBNE | CUTEst | 3 | 156 | IpoptStatus(-10) | 0.000000e+00 |
+| HS87 | CUTEst | 6 | 4 | MaxIterations | 8.996927e+03 |
 | LANCZOS1 | CUTEst | 6 | 24 | IpoptStatus(-10) | 0.000000e+00 |
 | LEVYMONE6 | CUTEst | 3 | 6 | IpoptStatus(-10) | 0.000000e+00 |
 | LEWISPOL | CUTEst | 6 | 9 | IpoptStatus(-10) | 1.126755e+00 |
+| MESH | CUTEst | 41 | 48 | IpoptStatus(4) | -4.511177e+10 |
 | NYSTROM5 | CUTEst | 18 | 20 | IpoptStatus(-10) | 0.000000e+00 |
 | NYSTROM5C | CUTEst | 18 | 20 | IpoptStatus(-10) | 0.000000e+00 |
 | PALMER5E | CUTEst | 8 | 0 | MaxIterations | 7.795015e-02 |
@@ -222,9 +224,9 @@ On 4 commonly-solved problems:
 | POLAK6 | CUTEst | 5 | 4 | MaxIterations | -1.494339e+01 |
 | POWELLSQ | CUTEst | 2 | 2 | Infeasible | 0.000000e+00 |
 | ROBOT | CUTEst | 14 | 2 | IpoptStatus(3) | 6.593299e+00 |
-| SPIRAL | CUTEst | 3 | 2 | Infeasible | -1.108995e-10 |
-| Seawater speciation | Electrolyte | 15 | 8 | Infeasible | -1.320459e+00 |
-| TAX13322 | CUTEst | 72 | 1261 | MaxIterations | -1.018578e+04 |
+| SPIRAL | CUTEst | 3 | 2 | Infeasible | -1.109001e-10 |
+| TAX13322 | CUTEst | 72 | 1261 | MaxIterations | -3.662555e+03 |
+| TRO4X4 | CUTEst | 63 | 25 | IpoptStatus(4) | 8.999997e+00 |
 | WACHBIEG | CUTEst | 3 | 2 | Infeasible | 1.000000e+00 |
 
 ## Large-Scale Synthetic Problems — ripopt vs Ipopt
@@ -234,19 +236,13 @@ Both solvers receive the exact same NlpProblem struct via the Rust trait interfa
 
 | Problem | n | m | ripopt | iters | time | Ipopt | iters | time | speedup |
 |---------|---|---|--------|-------|------|-------|-------|------|---------|
-| Rosenbrock 500 | 500 | 0 | Optimal | 81 | 0.003s | Optimal | 749 | 0.202s | 70.1x |
-| SparseQP 1K | 500 | 500 | Optimal | 8 | 0.003s | Optimal | 6 | 0.004s | 1.4x |
-| Bratu 1K | 1,000 | 998 | Optimal | 3 | 0.002s | Optimal | 2 | 0.002s | 1.1x |
-| OptControl 2.5K | 2,499 | 1,250 | Optimal | 5 | 0.007s | Optimal | 1 | 0.002s | 0.3x |
-| Rosenbrock 5K | 5,000 | 0 | Optimal | 82 | 256.060s | Failed | 3000 | 3.699s | 0.0x |
-| Poisson 2.5K | 5,000 | 2,500 | NumericalError | 81 | 855.404s | Optimal | 1 | 0.009s | N/A |
-| Bratu 10K | 10,000 | 9,998 | Optimal | 10 | 0.132s | Optimal | 2 | 0.013s | 0.1x |
-| OptControl 20K | 19,999 | 10,000 | Optimal | 6 | 0.249s | Optimal | 1 | 0.022s | 0.1x |
-| Poisson 50K | 49,928 | 24,964 | Optimal | 1 | 1.787s | Optimal | 1 | 0.130s | 0.1x |
-| SparseQP 100K | 50,000 | 50,000 | Optimal | 8 | 4.636s | Optimal | 6 | 0.310s | 0.1x |
+| Rosenbrock 500 | 500 | 0 | Optimal | 81 | 0.002s | Optimal | 749 | 0.192s | 81.0x |
+| SparseQP 1K | 500 | 500 | Optimal | 10 | 0.004s | Optimal | 6 | 0.004s | 0.8x |
+| Bratu 1K | 1,000 | 998 | Optimal | 3 | 0.002s | Optimal | 2 | 0.002s | 1.0x |
+| OptControl 2.5K | 2,499 | 1,250 | Optimal | 1 | 0.006s | Optimal | 1 | 0.003s | 0.5x |
 
-ripopt: **9/10 solved** in 1118.3s total
-Ipopt: **9/10 solved** in 4.4s total
+ripopt: **4/4 solved** in 0.0s total
+Ipopt: **4/4 solved** in 0.2s total
 
 ---
 *Generated by benchmark_report.py*
