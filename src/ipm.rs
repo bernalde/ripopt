@@ -5478,7 +5478,11 @@ fn attempt_nlp_restoration<P: NlpProblem>(
 
     // Configure inner solver options
     let mut inner_opts = options.clone();
-    inner_opts.max_iter = options.restoration_max_iter.max(500);
+    // Cap restoration iterations: if restoration achieves feasibility quickly
+    // (common for problems near the feasibility boundary), spending hundreds of
+    // iterations reducing mu inside the restoration NLP is wasteful. The outer
+    // solver checks feasibility after return and can accept partial convergence.
+    inner_opts.max_iter = options.restoration_max_iter.max(50).min(200);
     inner_opts.disable_nlp_restoration = true; // prevent recursion
     inner_opts.print_level = if options.print_level >= 5 { 3 } else { 0 };
     inner_opts.mu_init = state.mu.max(1e-2);
