@@ -4086,8 +4086,11 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 break;
             }
 
-            // Second-order correction (SOC) — try on every backtracking step where theta increases
-            if theta_trial > theta_current && options.max_soc > 0 {
+            // Second-order correction (SOC) — only on first trial (full step), matching Ipopt.
+            // SOC corrects the Maratos effect: the full Newton step may increase theta
+            // even though it's a good step. SOC re-solves with the trial constraint
+            // residual to recover. Applying SOC to shortened steps is wasteful and poorly scaled.
+            if theta_trial > theta_current && options.max_soc > 0 && ls_steps == 0 {
                 let soc_accepted = if let (Some(ref cond), Some(ref mut cs)) = (&condensed_system, &mut cond_solver_for_soc) {
                     // Use condensed SOC (avoids building full KKT)
                     attempt_soc_condensed(
@@ -4125,6 +4128,43 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             // Backtrack
             alpha *= 0.5;
             ls_steps += 1;
+        }
+
+        if !step_accepted {
+            // Soft restoration (Ipopt's TrySoftRestoStep): before expensive GN restoration,
+            // try the current search direction with alpha = min(alpha_primal_max, alpha_dual_max)
+            // for all variables. Accept if the primal-dual error decreases.
+            {
+                let soft_alpha = alpha_primal_max.min(alpha_dual_max);
+                let mut x_soft = vec![0.0; n];
+                for i in 0..n {
+                    x_soft[i] = state.x[i] + soft_alpha * state.dx[i];
+                    if state.x_l[i].is_finite() {
+                        x_soft[i] = x_soft[i].max(state.x_l[i] + 1e-14);
+                    }
+                    if state.x_u[i].is_finite() {
+                        x_soft[i] = x_soft[i].min(state.x_u[i] - 1e-14);
+                    }
+                }
+                let obj_soft = problem.objective(&x_soft);
+                if obj_soft.is_finite() {
+                    let mut g_soft = vec![0.0; m];
+                    problem.constraints(&x_soft, &mut g_soft);
+                    let theta_soft = convergence::primal_infeasibility(&g_soft, &state.g_l, &state.g_u);
+                    // Accept if constraint violation decreased sufficiently
+                    if theta_soft < (1.0 - 1e-4) * theta_current
+                        && filter.is_acceptable(theta_soft, obj_soft)
+                    {
+                        log::debug!("Soft restoration accepted: theta {:.2e} -> {:.2e}", theta_current, theta_soft);
+                        state.x = x_soft;
+                        state.obj = obj_soft;
+                        state.g = g_soft;
+                        state.alpha_primal = soft_alpha;
+                        filter.add(theta_current, phi_current);
+                        step_accepted = true;
+                    }
+                }
+            }
         }
 
         if !step_accepted {
