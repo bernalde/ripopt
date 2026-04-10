@@ -513,10 +513,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Known bug: L extraction is wrong for promoted (delayed) pivot columns.
-              // The factorization itself (L*D*L^T) doesn't reconstruct A correctly
-              // when threshold pivoting delays columns to parent supernodes.
-              // Error is in frontal.rs L11/L21 extraction, not in solve.rs.
     fn test_threshold_solve_high_threshold() {
         // Same 10x10 KKT with threshold 0.1 to force delayed pivots.
         // Tests that delayed pivot promotion + solve is correct.

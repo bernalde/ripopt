@@ -655,10 +655,20 @@ impl FrontalMatrix {
 
         // Extract contribution block (already in-place in the trailing matrix).
         // Contribution at (i, j) is at a[(nfs_elim+j)*n + (nfs_elim+i)] (column-major).
+        //
+        // IMPORTANT: When threshold pivoting delays columns (nfs_elim < nass), the
+        // MQ within-block update only maintains the upper triangle (col > row in the
+        // factored matrix) for within-block columns. The lower triangle entries
+        // involving delayed columns are stale. We extract from the upper triangle
+        // only and mirror to the lower triangle to ensure symmetry.
         let mut contrib = DenseMat::zeros(ncb_new, ncb_new);
         for col in 0..ncb_new {
-            for row in 0..ncb_new {
-                contrib.data[col * ncb_new + row] = a[(nfs_elim + col) * n + (nfs_elim + row)];
+            for row in 0..=col {
+                // Upper triangle (row <= col): a[(nfs_elim+col)*n + (nfs_elim+row)]
+                // has factored_row = nfs_elim+row <= nfs_elim+col = factored_col
+                let val = a[(nfs_elim + col) * n + (nfs_elim + row)];
+                contrib.data[col * ncb_new + row] = val;
+                contrib.data[row * ncb_new + col] = val; // mirror to lower triangle
             }
         }
 
