@@ -1089,7 +1089,10 @@ fn between_block_gemm_faer(
     last_col_gemm: usize, last_row_gemm: usize,
 ) {
     let npiv_block = npiv - ibeg_block;
-    let update_rows = last_row_gemm - iend_block;
+    // "Symmetric" part: rows [iend_block, last_col_gemm) — must match naive version.
+    // The rectangular part [last_col_gemm, last_row_gemm) is handled separately below.
+    // Using last_row_gemm here would double-update the rectangular rows.
+    let update_rows = last_col_gemm - iend_block;
     let update_cols = last_col_gemm - iend_block;
     if update_rows == 0 || update_cols == 0 { return; }
 
