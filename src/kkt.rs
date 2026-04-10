@@ -418,6 +418,47 @@ pub fn factor_with_inertia_correction(
         }
     }
 
+    // Selective delta_c-only perturbation (Ipopt's PerturbForSingularity path).
+    // When n_neg < m by a small amount, the (1,1) block is likely already positive
+    // (semi)definite and a few eigenvalues near the saddle-point boundary flipped sign
+    // due to GEMM rounding. Adding only -delta_c to the (2,2) block pushes those
+    // borderline eigenvalues negative without perturbing the primal block.
+    if m > 0 {
+        let last_inertia = solver.factor(&kkt.matrix)?;
+        if let Some(inertia) = last_inertia {
+            let total = inertia.positive + inertia.negative + inertia.zero;
+            let deficit = m as isize - inertia.negative as isize;
+            // Too few negatives by a small amount: try delta_c only
+            if deficit > 0
+                && deficit <= 5.max((m / 100) as isize)
+                && inertia.zero == 0
+                && (total as isize - (n + m) as isize).unsigned_abs() <= 2
+            {
+                let mut delta_c = params.delta_c_base;
+                for _ in 0..4 {
+                    let mut perturbed = kkt.matrix.clone();
+                    perturbed.add_diagonal_range(n, n + m, -delta_c);
+                    let inertia = solver.factor(&perturbed)?;
+                    if let Some(inertia) = inertia {
+                        let ok = inertia.positive == n && inertia.negative == m
+                            && inertia.zero == 0;
+                        if ok {
+                            log::debug!(
+                                "Selective delta_c-only correction succeeded: delta_c={:.2e}",
+                                delta_c
+                            );
+                            kkt.matrix = perturbed;
+                            params.delta_w_last = 0.0;
+                            return Ok((0.0, delta_c));
+                        }
+                    }
+                    delta_c *= 4.0;
+                }
+                // delta_c-only didn't work — fall through to full perturbation
+            }
+        }
+    }
+
     // Inertia is wrong or backward error too large — apply perturbation and re-factor
     let mut delta_w = if params.delta_w_last == 0.0 {
         params.delta_w_init
