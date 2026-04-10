@@ -1013,6 +1013,9 @@ fn update_within_block_ldlt(
 /// Applies accumulated pivots from [ibeg_block, npiv) to trailing columns
 /// [iend_block, last_col_gemm) and rows up to last_row_gemm.
 /// U (original values) are in pivot rows, L (D^{-1}-scaled) in pivot columns.
+///
+/// With the `faer` feature, uses faer's optimized GEMM kernel (SIMD+FMA) for
+/// precision matching MUMPS's BLAS-based between-block update.
 fn between_block_gemm_ldlt(
     a: &mut [f64], n: usize,
     ibeg_block: usize, iend_block: usize, npiv: usize,
@@ -1023,32 +1026,37 @@ fn between_block_gemm_ldlt(
     let nel1 = last_col_gemm.saturating_sub(iend_block);
     if nel1 == 0 { return; }
 
-    // Symmetric part: update columns [iend_block, last_col_gemm) with same row range
-    let blsize = 120; // MUMPS KEEP(8) default
-    let mut irow = iend_block;
-    while irow < last_col_gemm {
-        let block = (last_col_gemm - irow).min(blsize);
+    #[cfg(feature = "faer")]
+    {
+        between_block_gemm_faer(a, n, ibeg_block, iend_block, npiv, last_col_gemm, last_row_gemm);
+    }
+    #[cfg(not(feature = "faer"))]
+    {
+        between_block_gemm_naive(a, n, ibeg_block, iend_block, npiv, last_col_gemm, last_row_gemm);
+    }
+}
 
-        // For each target column col in [irow, irow+block):
-        for col in irow..(irow + block) {
-            // For each target row row in [irow, last_col_gemm):
-            for row in irow..last_col_gemm {
-                // Update: a[col*n + row] -= sum_k U[k, row] * L[k, col]
-                // U[k, row] = a[ibeg_block*n + row ... ] (pivot cols, row entries = originals)
-                // L[k, col] = a[col*n + ibeg_block ... ] (target col, pivot row entries = scaled)
-                let mut sum = 0.0;
-                for k in ibeg_block..npiv {
-                    let u_val = a[k * n + row]; // U: original in pivot col k, row=row
-                    let l_val = a[col * n + k]; // L: scaled in target col, row=k
-                    sum += u_val * l_val;
-                }
-                a[col * n + row] -= sum;
+/// Naive triple-loop GEMM fallback (no faer).
+#[cfg(not(feature = "faer"))]
+fn between_block_gemm_naive(
+    a: &mut [f64], n: usize,
+    ibeg_block: usize, iend_block: usize, npiv: usize,
+    last_col_gemm: usize, last_row_gemm: usize,
+) {
+    let npiv_block = npiv - ibeg_block;
+
+    // Symmetric part: update [iend_block, last_col_gemm) x [iend_block, last_col_gemm)
+    for col in iend_block..last_col_gemm {
+        for row in iend_block..last_col_gemm {
+            let mut sum = 0.0;
+            for k in ibeg_block..npiv {
+                sum += a[k * n + row] * a[col * n + k];
             }
+            a[col * n + row] -= sum;
         }
-        irow += block;
     }
 
-    // Rectangular part: columns [iend_block, last_col_gemm), rows [last_col_gemm, last_row_gemm)
+    // Rectangular part: [iend_block, last_col_gemm) x [last_col_gemm, last_row_gemm)
     if last_row_gemm > last_col_gemm {
         for col in iend_block..last_col_gemm {
             for row in last_col_gemm..last_row_gemm {
@@ -1057,6 +1065,98 @@ fn between_block_gemm_ldlt(
                     sum += a[k * n + row] * a[col * n + k];
                 }
                 a[col * n + row] -= sum;
+            }
+        }
+    }
+}
+
+/// faer-accelerated GEMM for between-block Schur complement update.
+/// Uses faer's optimized matmul kernel (SIMD + FMA) matching MUMPS's BLAS quality.
+#[cfg(feature = "faer")]
+fn between_block_gemm_faer(
+    a: &mut [f64], n: usize,
+    ibeg_block: usize, iend_block: usize, npiv: usize,
+    last_col_gemm: usize, last_row_gemm: usize,
+) {
+    let npiv_block = npiv - ibeg_block;
+    let update_rows = last_row_gemm - iend_block;
+    let update_cols = last_col_gemm - iend_block;
+    if update_rows == 0 || update_cols == 0 { return; }
+
+    // Copy U, L, target into faer Mats (column-major).
+    // U: (update_rows x npiv_block), from pivot cols at target rows
+    // L: (npiv_block x update_cols), from target cols at pivot rows
+    let mut u_mat = faer::Mat::<f64>::zeros(update_rows, npiv_block);
+    let mut l_mat = faer::Mat::<f64>::zeros(npiv_block, update_cols);
+    let mut target = faer::Mat::<f64>::zeros(update_rows, update_cols);
+
+    for k in 0..npiv_block {
+        let src_col = ibeg_block + k;
+        for i in 0..update_rows {
+            u_mat[(i, k)] = a[src_col * n + (iend_block + i)];
+        }
+    }
+    for j in 0..update_cols {
+        let src_col = iend_block + j;
+        for k in 0..npiv_block {
+            l_mat[(k, j)] = a[src_col * n + (ibeg_block + k)];
+        }
+    }
+    for j in 0..update_cols {
+        for i in 0..update_rows {
+            target[(i, j)] = a[(iend_block + j) * n + (iend_block + i)];
+        }
+    }
+
+    // target = 1.0 * target + (-1.0) * U * L
+    faer::linalg::matmul::matmul(
+        target.as_mut(),
+        u_mat.as_ref(),
+        l_mat.as_ref(),
+        Some(1.0),
+        -1.0,
+        faer::Parallelism::None,
+    );
+
+    // Write back
+    for j in 0..update_cols {
+        for i in 0..update_rows {
+            a[(iend_block + j) * n + (iend_block + i)] = target[(i, j)];
+        }
+    }
+
+    // Rectangular part: rows [last_col_gemm, last_row_gemm) x cols [iend_block, last_col_gemm)
+    if last_row_gemm > last_col_gemm {
+        let rect_rows = last_row_gemm - last_col_gemm;
+        let nel1 = last_col_gemm - iend_block;
+
+        let mut u_rect = faer::Mat::<f64>::zeros(rect_rows, npiv_block);
+        let mut rect_target = faer::Mat::<f64>::zeros(rect_rows, nel1);
+
+        for k in 0..npiv_block {
+            for i in 0..rect_rows {
+                u_rect[(i, k)] = a[(ibeg_block + k) * n + (last_col_gemm + i)];
+            }
+        }
+        for j in 0..nel1 {
+            for i in 0..rect_rows {
+                rect_target[(i, j)] = a[(iend_block + j) * n + (last_col_gemm + i)];
+            }
+        }
+
+        let l_rect = l_mat.get(.., ..nel1);
+        faer::linalg::matmul::matmul(
+            rect_target.as_mut(),
+            u_rect.as_ref(),
+            l_rect,
+            Some(1.0),
+            -1.0,
+            faer::Parallelism::None,
+        );
+
+        for j in 0..nel1 {
+            for i in 0..rect_rows {
+                a[(iend_block + j) * n + (last_col_gemm + i)] = rect_target[(i, j)];
             }
         }
     }
