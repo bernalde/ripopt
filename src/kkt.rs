@@ -688,12 +688,8 @@ pub fn solve_for_direction(
         // no step length will be accepted and the solver enters restoration.
         // Ipopt similarly trusts the inertia-checked factorization without a
         // backward error gate on the solve.
-        let berr_tol = if (kkt.n + kkt.m) >= 100 { 1e-2 } else { 1e-6 };
-        if max_berr > berr_tol {
-            log::debug!("KKT backward error {:.2e} exceeds {:.0e}", max_berr, berr_tol);
-            return Err(crate::linear_solver::SolverError::NumericalFailure(
-                format!("KKT backward error {:.2e} exceeds tolerance", max_berr),
-            ));
+        if max_berr > 1e-2 {
+            log::debug!("KKT backward error {:.2e} (large but proceeding — line search will filter)", max_berr);
         }
     }
 
