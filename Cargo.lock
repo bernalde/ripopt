@@ -951,6 +951,7 @@ name = "rmumps"
 version = "0.1.0"
 dependencies = [
  "amd",
+ "faer",
  "rayon",
 ]
 
