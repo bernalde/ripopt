@@ -139,6 +139,7 @@ pub fn assemble_kkt(
     //
     // For equality constraints: no slack, (2,2) = 0, r_c = -(g - g_l).
     // For infeasible inequality constraints: no barrier, r_c = -(g - bound).
+    let mut has_sigma_s = vec![false; m]; // tracks which constraints got a (2,2) diagonal entry
     for i in 0..m {
         if is_equality_constraint(g_l[i], g_u[i]) {
             rhs[n + i] = -(g[i] - g_l[i]);
@@ -194,6 +195,7 @@ pub fn assemble_kkt(
             let sigma_s_inv = (1.0 / sigma_s).min(1e20);
             // (2,2) block: -Σ_s^{-1} (always negative, correct for KKT inertia)
             matrix.add(n + i, n + i, -sigma_s_inv);
+            has_sigma_s[i] = true;
             // RHS: Σ_s^{-1} * (y + μ/s_l - μ/s_u) + infeasible contributions
             rhs[n + i] = sigma_s_inv * rhs_correction + rhs_infeasible;
         } else {
@@ -202,16 +204,25 @@ pub fn assemble_kkt(
         }
     }
 
-    // Quasidefinite regularization: add -delta_c to ALL constraint diagonals.
-    // This makes the (2,2) block strictly negative definite, guaranteeing correct
-    // inertia (n, m, 0) and stable factorization for equalities (zero diagonal),
-    // infeasible inequalities (zero diagonal), and even feasible inequalities
-    // (already negative, making them more negative is harmless).
+    // Quasidefinite regularization: add -delta_c to constraint diagonals that are
+    // zero or near-zero. This makes the (2,2) block strictly negative definite,
+    // guaranteeing the factorization has no zero pivots from the constraint block.
     // Iterative refinement in solve_for_direction recovers the true Newton direction.
-    // No assembly-time δ_c — let the IC loop add δ_c when needed for inertia.
-    // The IC's δ_c is tracked and iterative refinement in solve_for_direction
-    // recovers the solution of the ORIGINAL (unperturbed) system.
-    let delta_c_diag = vec![0.0; m];
+    //
+    // This is critical for problems like gas40 where many constraint rows have zero
+    // Jacobian entries at the current iterate, producing zero (2,2) diagonal entries.
+    // Without regularization, the factorization produces zero pivots that the IC loop
+    // cannot fix (adding delta_w to the (1,1) block doesn't help zero constraint pivots).
+    let delta_c_base = 1e-8;
+    let mut delta_c_diag = vec![0.0; m];
+    for i in 0..m {
+        if !has_sigma_s[i] {
+            // No Sigma_s contribution: diagonal is zero (equality or infeasible inequality).
+            // Add regularization to prevent zero pivots.
+            matrix.add(n + i, n + i, -delta_c_base);
+            delta_c_diag[i] = delta_c_base;
+        }
+    }
 
     // Debug: check for NaN in matrix and RHS
     if rhs.iter().any(|v| v.is_nan() || v.is_infinite()) {
@@ -1485,9 +1496,10 @@ mod tests {
         // Verify J block: matrix[2,0] and matrix[2,1] should be 1.0
         assert!((kkt.matrix.get(2, 0) - 1.0).abs() < 1e-12);
         assert!((kkt.matrix.get(2, 1) - 1.0).abs() < 1e-12);
-        // Equality constraint: (2,2) block should be 0 (no δ_c regularization;
-        // KKT-aware scaling handles the zero diagonal)
-        assert!((kkt.matrix.get(2, 2)).abs() < 1e-12);
+        // Equality constraint: (2,2) block should have small quasidefinite regularization
+        // (-1e-8) to prevent zero pivots in the factorization.
+        assert!((kkt.matrix.get(2, 2) - (-1e-8)).abs() < 1e-12);
+        assert!((kkt.delta_c_diag[0] - 1e-8).abs() < 1e-12);
         // Primal residual: -(g - g_l) = -(0.7 - 1.0) = 0.3
         assert!((kkt.rhs[2] - 0.3).abs() < 1e-12);
     }
