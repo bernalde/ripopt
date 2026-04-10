@@ -496,6 +496,13 @@ pub trait LinearSolver {
     fn min_diagonal(&self) -> Option<f64> {
         None
     }
+
+    /// Increase factorization quality (e.g., raise pivot threshold).
+    /// Called when inertia correction fails. Returns true if quality was improved.
+    /// Matches Ipopt's IncreaseQuality() / MUMPS pivtol escalation.
+    fn increase_quality(&mut self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]

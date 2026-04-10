@@ -4086,8 +4086,11 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 break;
             }
 
-            // Second-order correction (SOC) — try on every backtracking step where theta increases
-            if theta_trial > theta_current && options.max_soc > 0 {
+            // Second-order correction (SOC) — only on first trial (full step), matching Ipopt.
+            // SOC corrects the Maratos effect: the full Newton step may increase theta
+            // even though it's a good step. SOC re-solves with the trial constraint
+            // residual to recover. Applying SOC to shortened steps is wasteful and poorly scaled.
+            if theta_trial > theta_current && options.max_soc > 0 && ls_steps == 0 {
                 let soc_accepted = if let (Some(ref cond), Some(ref mut cs)) = (&condensed_system, &mut cond_solver_for_soc) {
                     // Use condensed SOC (avoids building full KKT)
                     attempt_soc_condensed(
@@ -4125,6 +4128,43 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             // Backtrack
             alpha *= 0.5;
             ls_steps += 1;
+        }
+
+        if !step_accepted {
+            // Soft restoration (Ipopt's TrySoftRestoStep): before expensive GN restoration,
+            // try the current search direction with alpha = min(alpha_primal_max, alpha_dual_max)
+            // for all variables. Accept if the primal-dual error decreases.
+            {
+                let soft_alpha = alpha_primal_max.min(alpha_dual_max);
+                let mut x_soft = vec![0.0; n];
+                for i in 0..n {
+                    x_soft[i] = state.x[i] + soft_alpha * state.dx[i];
+                    if state.x_l[i].is_finite() {
+                        x_soft[i] = x_soft[i].max(state.x_l[i] + 1e-14);
+                    }
+                    if state.x_u[i].is_finite() {
+                        x_soft[i] = x_soft[i].min(state.x_u[i] - 1e-14);
+                    }
+                }
+                let obj_soft = problem.objective(&x_soft);
+                if obj_soft.is_finite() {
+                    let mut g_soft = vec![0.0; m];
+                    problem.constraints(&x_soft, &mut g_soft);
+                    let theta_soft = convergence::primal_infeasibility(&g_soft, &state.g_l, &state.g_u);
+                    // Accept if constraint violation decreased sufficiently
+                    if theta_soft < (1.0 - 1e-4) * theta_current
+                        && filter.is_acceptable(theta_soft, obj_soft)
+                    {
+                        log::debug!("Soft restoration accepted: theta {:.2e} -> {:.2e}", theta_current, theta_soft);
+                        state.x = x_soft;
+                        state.obj = obj_soft;
+                        state.g = g_soft;
+                        state.alpha_primal = soft_alpha;
+                        filter.add(theta_current, phi_current);
+                        step_accepted = true;
+                    }
+                }
+            }
         }
 
         if !step_accepted {
@@ -4430,7 +4470,12 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
         timings.line_search += t_ls.elapsed();
 
-        // Update dual variables (with damping for oscillating components)
+        // Update dual variables.
+        // Ipopt default: alpha_for_y = "primal" — use the accepted primal step length
+        // for the y (constraint multiplier) update. This prevents dual divergence on
+        // feasibility problems where y is undetermined and dy can be arbitrarily large.
+        // z_l/z_u/v_l/v_u still use alpha_dual (fraction-to-boundary on bound multipliers).
+        let alpha_y = state.alpha_primal;
         let alpha_d = alpha_dual_max;
         let near_convergence = state.consecutive_acceptable >= 1;
         for i in 0..m {
@@ -4450,7 +4495,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             } else {
                 state.dy[i]
             };
-            state.y[i] += alpha_d * dy_i;
+            state.y[i] += alpha_y * dy_i;
         }
         prev_dy = Some(state.dy.clone());
         // Ipopt kappa_sigma safeguard: keep z*s in [mu_ks/kappa_sigma, kappa_sigma*mu_ks]
@@ -5433,7 +5478,11 @@ fn attempt_nlp_restoration<P: NlpProblem>(
 
     // Configure inner solver options
     let mut inner_opts = options.clone();
-    inner_opts.max_iter = options.restoration_max_iter.max(500);
+    // Cap restoration iterations: if restoration achieves feasibility quickly
+    // (common for problems near the feasibility boundary), spending hundreds of
+    // iterations reducing mu inside the restoration NLP is wasteful. The outer
+    // solver checks feasibility after return and can accept partial convergence.
+    inner_opts.max_iter = options.restoration_max_iter.max(50).min(200);
     inner_opts.disable_nlp_restoration = true; // prevent recursion
     inner_opts.print_level = if options.print_level >= 5 { 3 } else { 0 };
     inner_opts.mu_init = state.mu.max(1e-2);

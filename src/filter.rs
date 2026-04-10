@@ -119,6 +119,11 @@ impl Filter {
     /// Returns (acceptable, use_switching) where:
     /// - acceptable: whether the step should be accepted
     /// - use_switching: whether the switching condition was used (affects filter update)
+    ///
+    /// Follows Ipopt's structure (IpFilterLSAcceptor.cpp:311-437):
+    /// 1. Determine step type (f-type via switching/Armijo, or h-type via reduction)
+    /// 2. Check filter acceptability
+    /// When the switching condition holds, the step is purely f-type — no h-type fallback.
     pub fn check_acceptability(
         &self,
         theta_current: f64,
@@ -128,27 +133,32 @@ impl Filter {
         grad_phi_step: f64,
         alpha: f64,
     ) -> (bool, bool) {
-        // Safeguard: reject if objective increased too much (Ipopt uses factor 5.0)
-        if phi_trial > phi_current + 5.0 * (1.0 + phi_current.abs()) {
+        // Reject if theta exceeds maximum or NaN
+        if theta_trial > self.theta_max || theta_trial.is_nan() || phi_trial.is_nan() {
             return (false, false);
         }
 
-        // First check if trial is acceptable to the filter
+        // Determine step type and check type-specific condition
+        let (type_ok, is_switching) = if self.switching_condition(theta_current, grad_phi_step, alpha) {
+            // f-type: Armijo on barrier objective. No h-type fallback.
+            (self.armijo_condition(phi_current, phi_trial, grad_phi_step, alpha), true)
+        } else {
+            // h-type: sufficient decrease in theta or phi
+            let ok = self.sufficient_infeasibility_reduction(theta_current, theta_trial)
+                || phi_trial <= phi_current - self.gamma_phi * theta_current;
+            (ok, false)
+        };
+
+        if !type_ok {
+            return (false, false);
+        }
+
+        // Check filter acceptability
         if !self.is_acceptable(theta_trial, phi_trial) {
             return (false, false);
         }
 
-        // Check switching condition
-        if self.switching_condition(theta_current, grad_phi_step, alpha) {
-            // Use Armijo condition on the objective
-            let accept = self.armijo_condition(phi_current, phi_trial, grad_phi_step, alpha);
-            (accept, true)
-        } else {
-            // Use filter acceptance: sufficient decrease in theta or phi
-            let accept = self.sufficient_infeasibility_reduction(theta_current, theta_trial)
-                || phi_trial <= phi_current - self.gamma_phi * theta_current;
-            (accept, false)
-        }
+        (true, is_switching)
     }
 
     /// Add a (theta, phi) pair to the filter.
@@ -163,24 +173,27 @@ impl Filter {
 
     /// Compute problem-dependent minimum step size for the line search (Ipopt formula).
     /// Returns alpha_min based on filter parameters and current iterate.
+    ///
+    /// Matches Ipopt's CalculateAlphaMin (IpFilterLSAcceptor.cpp:450-469):
+    /// - When gradBarrTDelta >= 0 (no descent): alpha_min = alpha_min_frac * gamma_theta
+    /// - When gradBarrTDelta < 0: alpha_min from filter parameters
     pub fn compute_alpha_min(&self, theta_current: f64, grad_phi_step: f64) -> f64 {
-        let alpha_min_frac = 0.05; // Ipopt default (was 1e-4)
-        if grad_phi_step >= 0.0 || theta_current <= 1e-15 {
-            // No useful descent direction or already feasible:
-            // use a very small fallback to allow Armijo acceptance to work.
-            return 1e-15;
+        let alpha_min_frac = 0.05; // Ipopt default
+        if grad_phi_step >= 0.0 {
+            // No barrier descent direction (common for feasibility problems with obj=0).
+            // Ipopt uses gamma_theta here, not epsilon — this triggers restoration after
+            // ~12 backtracking steps instead of ~50.
+            return alpha_min_frac * self.gamma_theta;
         }
         let neg_gphi = -grad_phi_step;
         let term1 = self.gamma_theta;
         let term2 = self.gamma_phi * theta_current / neg_gphi;
-        // Ipopt only includes switching-related term when theta <= theta_min
         let mut alpha_min = alpha_min_frac * term1.min(term2);
         if theta_current <= self.theta_min {
             let term3 =
                 self.delta * theta_current.powf(self.s_theta) / neg_gphi.powf(self.s_phi);
             alpha_min = alpha_min.min(alpha_min_frac * term3);
         }
-        // Floor at machine epsilon level to avoid overly aggressive cutoff
         alpha_min.max(1e-15)
     }
 

@@ -366,6 +366,134 @@ pub fn compute_matching_scaling(csc: &CscMatrix, max_iter: usize) -> ScalingFact
     ScalingFactors { d }
 }
 
+/// MC64-style scaling for KKT systems.
+///
+/// For a KKT matrix [H J^T; J -D], computes symmetric scaling D such that:
+/// - Each dual variable's strongest Jacobian coupling to a primal variable becomes ~1
+/// - Primal block entries are equilibrated
+///
+/// This approximates MUMPS's MC64 JOB=5 (maximum product matching + scaling).
+/// The matching is computed greedily (each dual pairs with its largest |J_ij| primal),
+/// and the scaling makes the matched entries = 1 after D*A*D.
+///
+/// After matching-based scaling, applies Ruiz equilibration for fine-tuning.
+pub fn compute_mc64_kkt_scaling(csc: &CscMatrix, n_primal: usize) -> ScalingFactors {
+    let n = csc.n;
+    let m_dual = n - n_primal;
+
+    if m_dual == 0 || n_primal == 0 {
+        return compute_ruiz_scaling(csc, 10);
+    }
+
+    let mut d = vec![1.0; n];
+
+    // Step 1: For each dual variable, find its strongest coupling to a primal variable.
+    // This is the "matching" part of MC64. We use a greedy approach: each dual picks
+    // the primal with largest |J_ij|, breaking ties by column order.
+    let mut dual_match: Vec<Option<(usize, f64)>> = vec![None; m_dual]; // (primal_idx, |J_ij|)
+    for dual_idx in 0..m_dual {
+        let col = n_primal + dual_idx;
+        for idx in csc.col_ptr[col]..csc.col_ptr[col + 1] {
+            let row = csc.row_idx[idx];
+            if row < n_primal {
+                let abs_val = csc.vals[idx].abs();
+                if abs_val > dual_match[dual_idx].map_or(0.0, |(_, v)| v) {
+                    dual_match[dual_idx] = Some((row, abs_val));
+                }
+            }
+        }
+        // Also check entries where the dual is a row (symmetric storage: row < col)
+        for primal_col in 0..n_primal {
+            for idx in csc.col_ptr[primal_col]..csc.col_ptr[primal_col + 1] {
+                let row = csc.row_idx[idx];
+                if row == col {
+                    let abs_val = csc.vals[idx].abs();
+                    if abs_val > dual_match[dual_idx].map_or(0.0, |(_, v)| v) {
+                        dual_match[dual_idx] = Some((primal_col, abs_val));
+                    }
+                }
+            }
+        }
+    }
+
+    // Step 2: Compute scaling from the matching.
+    // For matched pair (dual_i, primal_j) with coupling |J_ij|:
+    //   d[dual_i] * d[primal_j] * |J_ij| = 1
+    // For symmetric scaling: d[dual_i] = d[primal_j] = 1/sqrt(|J_ij|)
+    // But a primal can be matched by multiple duals. Use geometric mean of
+    // all matchings involving each primal.
+    let mut primal_product = vec![1.0f64; n_primal];
+    let mut primal_count = vec![0u32; n_primal];
+    for dual_idx in 0..m_dual {
+        if let Some((primal_idx, coupling)) = dual_match[dual_idx] {
+            if coupling > 1e-30 {
+                // Scale dual so that its matched entry becomes 1
+                d[n_primal + dual_idx] = 1.0 / coupling.sqrt();
+                primal_product[primal_idx] *= coupling;
+                primal_count[primal_idx] += 1;
+            }
+        }
+    }
+    // Scale primals that were matched: geometric mean of their couplings
+    for j in 0..n_primal {
+        if primal_count[j] > 0 {
+            let geo_mean = primal_product[j].powf(1.0 / primal_count[j] as f64);
+            d[j] = 1.0 / geo_mean.sqrt();
+        }
+    }
+
+    // Step 3: Ruiz equilibration on the scaled matrix for fine-tuning
+    let mut scaled_vals = csc.vals.clone();
+    for j in 0..n {
+        let dj = d[j];
+        for idx in csc.col_ptr[j]..csc.col_ptr[j + 1] {
+            let i = csc.row_idx[idx];
+            scaled_vals[idx] *= d[i] * dj;
+        }
+    }
+
+    for _ in 0..10 {
+        let mut norms = vec![0.0f64; n];
+        for j in 0..n {
+            for idx in csc.col_ptr[j]..csc.col_ptr[j + 1] {
+                let i = csc.row_idx[idx];
+                let abs_val = scaled_vals[idx].abs();
+                norms[i] = norms[i].max(abs_val);
+                if i != j {
+                    norms[j] = norms[j].max(abs_val);
+                }
+            }
+        }
+
+        let mut max_deviation = 0.0f64;
+        let mut iter_d = vec![1.0; n];
+        for i in 0..n {
+            if norms[i] > 0.0 {
+                iter_d[i] = 1.0 / norms[i].sqrt();
+                max_deviation = max_deviation.max((norms[i] - 1.0).abs());
+            }
+        }
+
+        if max_deviation < 1e-2 {
+            break;
+        }
+
+        for i in 0..n {
+            d[i] *= iter_d[i];
+        }
+
+        for j in 0..n {
+            let dj = iter_d[j];
+            for idx in csc.col_ptr[j]..csc.col_ptr[j + 1] {
+                let i = csc.row_idx[idx];
+                scaled_vals[idx] *= iter_d[i] * dj;
+            }
+        }
+    }
+
+    ScalingFactors { d }
+}
+
 /// Compute scaling factors for the given method.
 pub fn compute_scaling(csc: &CscMatrix, method: Scaling) -> Option<ScalingFactors> {
     match method {

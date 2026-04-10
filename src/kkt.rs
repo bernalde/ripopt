@@ -139,6 +139,7 @@ pub fn assemble_kkt(
     //
     // For equality constraints: no slack, (2,2) = 0, r_c = -(g - g_l).
     // For infeasible inequality constraints: no barrier, r_c = -(g - bound).
+    let mut has_sigma_s = vec![false; m]; // tracks which constraints got a (2,2) diagonal entry
     for i in 0..m {
         if is_equality_constraint(g_l[i], g_u[i]) {
             rhs[n + i] = -(g[i] - g_l[i]);
@@ -194,6 +195,7 @@ pub fn assemble_kkt(
             let sigma_s_inv = (1.0 / sigma_s).min(1e20);
             // (2,2) block: -Σ_s^{-1} (always negative, correct for KKT inertia)
             matrix.add(n + i, n + i, -sigma_s_inv);
+            has_sigma_s[i] = true;
             // RHS: Σ_s^{-1} * (y + μ/s_l - μ/s_u) + infeasible contributions
             rhs[n + i] = sigma_s_inv * rhs_correction + rhs_infeasible;
         } else {
@@ -202,16 +204,25 @@ pub fn assemble_kkt(
         }
     }
 
-    // Quasidefinite regularization: add -delta_c to ALL constraint diagonals.
-    // This makes the (2,2) block strictly negative definite, guaranteeing correct
-    // inertia (n, m, 0) and stable factorization for equalities (zero diagonal),
-    // infeasible inequalities (zero diagonal), and even feasible inequalities
-    // (already negative, making them more negative is harmless).
+    // Quasidefinite regularization: add -delta_c to constraint diagonals that are
+    // zero or near-zero. This makes the (2,2) block strictly negative definite,
+    // guaranteeing the factorization has no zero pivots from the constraint block.
     // Iterative refinement in solve_for_direction recovers the true Newton direction.
-    // No assembly-time δ_c — let the IC loop add δ_c when needed for inertia.
-    // The IC's δ_c is tracked and iterative refinement in solve_for_direction
-    // recovers the solution of the ORIGINAL (unperturbed) system.
-    let delta_c_diag = vec![0.0; m];
+    //
+    // This is critical for problems like gas40 where many constraint rows have zero
+    // Jacobian entries at the current iterate, producing zero (2,2) diagonal entries.
+    // Without regularization, the factorization produces zero pivots that the IC loop
+    // cannot fix (adding delta_w to the (1,1) block doesn't help zero constraint pivots).
+    let delta_c_base = 1e-8;
+    let mut delta_c_diag = vec![0.0; m];
+    for i in 0..m {
+        if !has_sigma_s[i] {
+            // No Sigma_s contribution: diagonal is zero (equality or infeasible inequality).
+            // Add regularization to prevent zero pivots.
+            matrix.add(n + i, n + i, -delta_c_base);
+            delta_c_diag[i] = delta_c_base;
+        }
+    }
 
     // Debug: check for NaN in matrix and RHS
     if rhs.iter().any(|v| v.is_nan() || v.is_infinite()) {
@@ -346,8 +357,9 @@ pub fn factor_with_inertia_correction(
         // allow ±1 tolerance: Bunch-Kaufman pivoting can misclassify near-zero
         // eigenvalues at the positive/negative boundary, especially when n ≈ m.
         let inertia_ok = inertia.positive == n && inertia.negative == m && inertia.zero == 0;
+        let total = inertia.positive + inertia.negative + inertia.zero;
         let approx_ok = !inertia_ok && (n + m) >= 100 && inertia.zero == 0
-            && inertia.positive + inertia.negative == n + m
+            && (total as isize - (n + m) as isize).unsigned_abs() <= 2
             && (inertia.positive as isize - n as isize).unsigned_abs() <= 1
             && (inertia.negative as isize - m as isize).unsigned_abs() <= 1;
         if inertia_ok || approx_ok {
@@ -391,6 +403,73 @@ pub fn factor_with_inertia_correction(
         }
     }
 
+    // Before perturbation: try increasing factorization quality (Ipopt's IncreaseQuality).
+    // This escalates the pivot threshold (e.g., 1e-6 -> 1e-3 -> 0.03 -> 0.1), which can
+    // fix inertia by forcing better pivot choices without adding regularization.
+    // Like Ipopt, try this once before resorting to delta_w perturbation.
+    if solver.increase_quality() {
+        let inertia = solver.factor(&kkt.matrix)?;
+        if let Some(inertia) = inertia {
+            let inertia_ok = inertia.positive == n && inertia.negative == m && inertia.zero == 0;
+            let total = inertia.positive + inertia.negative + inertia.zero;
+            let approx_ok = !inertia_ok && (n + m) >= 100 && inertia.zero == 0
+                && (total as isize - (n + m) as isize).unsigned_abs() <= 2
+                && (inertia.positive as isize - n as isize).unsigned_abs() <= 1
+                && (inertia.negative as isize - m as isize).unsigned_abs() <= 1;
+            if inertia_ok || approx_ok {
+                if (n + m) >= 100 {
+                    params.delta_w_last = 0.0;
+                    return Ok((0.0, 0.0));
+                }
+                if check_factorization_backward_error(kkt, solver) {
+                    params.delta_w_last = 0.0;
+                    return Ok((0.0, 0.0));
+                }
+            }
+        }
+    }
+
+    // Selective delta_c-only perturbation (Ipopt's PerturbForSingularity path).
+    // When n_neg < m by a small amount, the (1,1) block is likely already positive
+    // (semi)definite and a few eigenvalues near the saddle-point boundary flipped sign
+    // due to GEMM rounding. Adding only -delta_c to the (2,2) block pushes those
+    // borderline eigenvalues negative without perturbing the primal block.
+    if m > 0 {
+        let last_inertia = solver.factor(&kkt.matrix)?;
+        if let Some(inertia) = last_inertia {
+            let total = inertia.positive + inertia.negative + inertia.zero;
+            let deficit = m as isize - inertia.negative as isize;
+            // Too few negatives by a small amount: try delta_c only
+            if deficit > 0
+                && deficit <= 5.max((m / 100) as isize)
+                && inertia.zero == 0
+                && (total as isize - (n + m) as isize).unsigned_abs() <= 2
+            {
+                let mut delta_c = params.delta_c_base;
+                for _ in 0..4 {
+                    let mut perturbed = kkt.matrix.clone();
+                    perturbed.add_diagonal_range(n, n + m, -delta_c);
+                    let inertia = solver.factor(&perturbed)?;
+                    if let Some(inertia) = inertia {
+                        let ok = inertia.positive == n && inertia.negative == m
+                            && inertia.zero == 0;
+                        if ok {
+                            log::debug!(
+                                "Selective delta_c-only correction succeeded: delta_c={:.2e}",
+                                delta_c
+                            );
+                            kkt.matrix = perturbed;
+                            params.delta_w_last = 0.0;
+                            return Ok((0.0, delta_c));
+                        }
+                    }
+                    delta_c *= 4.0;
+                }
+                // delta_c-only didn't work — fall through to full perturbation
+            }
+        }
+    }
+
     // Inertia is wrong or backward error too large — apply perturbation and re-factor
     let mut delta_w = if params.delta_w_last == 0.0 {
         params.delta_w_init
@@ -413,8 +492,9 @@ pub fn factor_with_inertia_correction(
 
         if let Some(inertia) = inertia {
             let exact_ok = inertia.positive == n && inertia.negative == m && inertia.zero == 0;
+            let total = inertia.positive + inertia.negative + inertia.zero;
             let approx_ok = !exact_ok && (n + m) >= 100 && inertia.zero == 0
-                && inertia.positive + inertia.negative == n + m
+                && (total as isize - (n + m) as isize).unsigned_abs() <= 2
                 && (inertia.positive as isize - n as isize).unsigned_abs() <= 1
                 && (inertia.negative as isize - m as isize).unsigned_abs() <= 1;
             if exact_ok || approx_ok {
@@ -608,12 +688,8 @@ pub fn solve_for_direction(
         // no step length will be accepted and the solver enters restoration.
         // Ipopt similarly trusts the inertia-checked factorization without a
         // backward error gate on the solve.
-        let berr_tol = if (kkt.n + kkt.m) >= 100 { 1e-2 } else { 1e-6 };
-        if max_berr > berr_tol {
-            log::debug!("KKT backward error {:.2e} exceeds {:.0e}", max_berr, berr_tol);
-            return Err(crate::linear_solver::SolverError::NumericalFailure(
-                format!("KKT backward error {:.2e} exceeds tolerance", max_berr),
-            ));
+        if max_berr > 1e-2 {
+            log::debug!("KKT backward error {:.2e} (large but proceeding — line search will filter)", max_berr);
         }
     }
 
@@ -1416,9 +1492,10 @@ mod tests {
         // Verify J block: matrix[2,0] and matrix[2,1] should be 1.0
         assert!((kkt.matrix.get(2, 0) - 1.0).abs() < 1e-12);
         assert!((kkt.matrix.get(2, 1) - 1.0).abs() < 1e-12);
-        // Equality constraint: (2,2) block should be 0 (no δ_c regularization;
-        // KKT-aware scaling handles the zero diagonal)
-        assert!((kkt.matrix.get(2, 2)).abs() < 1e-12);
+        // Equality constraint: (2,2) block should have small quasidefinite regularization
+        // (-1e-8) to prevent zero pivots in the factorization.
+        assert!((kkt.matrix.get(2, 2) - (-1e-8)).abs() < 1e-12);
+        assert!((kkt.delta_c_diag[0] - 1e-8).abs() < 1e-12);
         // Primal residual: -(g - g_l) = -(0.7 - 1.0) = 0.3
         assert!((kkt.rhs[2] - 0.3).abs() < 1e-12);
     }

@@ -110,8 +110,14 @@ impl Solver {
         // Store original matrix for original-space iterative refinement
         self.original_csc = Some(csc.clone());
 
-        // Compute and apply scaling if enabled
-        let sf = scaling::compute_scaling(&csc, self.options.scaling);
+        // Compute and apply scaling if enabled.
+        // For KKT systems, use MC64-style matching-based scaling that normalizes
+        // the primal-dual coupling entries to ~1, enabling small pivot thresholds.
+        let sf = if self.options.n_primal.is_some() && !matches!(self.options.scaling, scaling::Scaling::None) {
+            Some(scaling::compute_mc64_kkt_scaling(&csc, self.options.n_primal.unwrap()))
+        } else {
+            scaling::compute_scaling(&csc, self.options.scaling)
+        };
         let mut permuted_csc = ordering::permute_symmetric_csc(&csc, &self.perm, &self.perm_inv);
         if let Some(ref sf) = sf {
             // Apply scaling in the permuted space: need to permute the scaling vector too
@@ -273,9 +279,9 @@ impl Solver {
         // Store original matrix for original-space iterative refinement
         self.original_csc = Some(csc.clone());
 
-        // Compute and apply scaling — use MC64 for KKT systems
-        let sf = if self.options.n_primal.is_some() {
-            scaling::compute_scaling_kkt(csc, self.options.scaling)
+        // Compute and apply scaling — use MC64-style KKT scaling when n_primal is set
+        let sf = if self.options.n_primal.is_some() && !matches!(self.options.scaling, scaling::Scaling::None) {
+            Some(scaling::compute_mc64_kkt_scaling(csc, self.options.n_primal.unwrap()))
         } else {
             scaling::compute_scaling(csc, self.options.scaling)
         };
@@ -306,6 +312,17 @@ impl Solver {
     /// See [`NumericFactorization::min_diagonal`] for details.
     pub fn min_diagonal(&self) -> Option<f64> {
         self.numeric.as_ref()?.min_diagonal()
+    }
+
+    /// Get the current pivot threshold.
+    pub fn pivot_threshold(&self) -> f64 {
+        self.options.pivot_threshold
+    }
+
+    /// Set the pivot threshold for subsequent factorizations.
+    /// Used for Ipopt-style pivot escalation on inertia correction failure.
+    pub fn set_pivot_threshold(&mut self, threshold: f64) {
+        self.options.pivot_threshold = threshold;
     }
 
     /// Reset the solver, clearing all cached state.

@@ -442,11 +442,37 @@ impl FrontalMatrix {
     /// Rejected FS columns are moved to the contribution block (delayed to parent).
     /// This is the key mechanism that makes MA57/MUMPS reliable on KKT systems.
     pub fn partial_factor_threshold(self, threshold: f64, _n_primal: Option<usize>) -> PartialFactorResult {
-        let mut orig_nfs = self.nfs;
-        let orig_size = self.size();
+        self.partial_factor_threshold_inner(threshold, _n_primal, 0)
+    }
 
-        if orig_nfs == 0 {
-            // No FS columns — just pass through as contribution
+    /// Partial factorization with must-eliminate support for promoted columns.
+    /// `n_must_eliminate` columns at the END of the FS range are force-eliminated
+    /// via static pivoting if they fail the threshold test, preventing multi-hop
+    /// delays that lose pivots in the elimination tree.
+    pub fn partial_factor_threshold_with_must_eliminate(
+        self, threshold: f64, _n_primal: Option<usize>, n_must_eliminate: usize,
+    ) -> PartialFactorResult {
+        self.partial_factor_threshold_inner(threshold, _n_primal, n_must_eliminate)
+    }
+
+    /// MUMPS-style LDLT frontal factorization with threshold pivoting and panel blocking.
+    ///
+    /// This implements the complete algorithm from MUMPS 5.8.2's dfac_front_LDLT_type1.F:
+    /// - Two-level panel blocking (inner 16-32, outer 128)
+    /// - First-acceptable pivot search with AMAX/RMAX separation
+    /// - Triangular within-block + rectangular beyond-block MQ updates
+    /// - U (originals) saved in pivot rows, L (D^{-1}-scaled) in columns
+    /// - Between-block GEMM for deferred updates
+    /// - MUMPS-style symmetric swap
+    ///
+    /// Reference: rmumps/MUMPS_LDLT_ALGORITHM.md
+    fn partial_factor_threshold_inner(
+        self, threshold: f64, _n_primal: Option<usize>, n_must_eliminate: usize,
+    ) -> PartialFactorResult {
+        let nass = self.nfs; // number of fully-summed columns (may include promoted)
+        let nfront = self.size();
+
+        if nass == 0 {
             return PartialFactorResult {
                 bk: BunchKaufmanResult {
                     l: DenseMat::zeros(0, 0),
@@ -456,7 +482,7 @@ impl FrontalMatrix {
                     perm_inv: vec![],
                     inertia: crate::Inertia { positive: 0, negative: 0, zero: 0 },
                 },
-                l21: DenseMat::zeros(orig_size, 0),
+                l21: DenseMat::zeros(nfront, 0),
                 contrib: self.mat,
                 contrib_indices: self.indices,
                 fs_indices: vec![],
@@ -464,204 +490,185 @@ impl FrontalMatrix {
             };
         }
 
-        // Work with the full dense matrix. We'll perform threshold pivoting
-        // on the FS block, rejecting columns that fail the threshold test.
+        // Column-major working array: a[col * n + row] = entry(row, col)
+        // DenseMat is already column-major: data[col * nrows + row]
         let mut a = self.mat.data.clone();
-        let n = orig_size;
+        let n = nfront;
+        let uu = threshold;
 
-        // Track which FS columns are eliminated vs delayed
-        // perm[k] = original column index in the front
+        // Track permutation and D factor
         let mut perm: Vec<usize> = (0..n).collect();
-        let mut nfs_elim = 0usize; // number of successfully eliminated columns
-        let mut d_diag = vec![0.0; orig_nfs];
-        let mut d_offdiag = vec![0.0; orig_nfs];
+        let mut npiv: usize = 0;
+        let mut d_diag = vec![0.0; nass];
+        let mut d_offdiag = vec![0.0; nass];
+        let mut nneg: usize = 0;
 
-        // L is stored column-major: l[col * n + row]
-        let mut l_data = vec![0.0; n * orig_nfs];
-        let mut work = vec![0.0; 2 * n];
+        // Must-eliminate range for promoted columns (static pivoting at root)
+        let must_eliminate_start = nass.saturating_sub(n_must_eliminate);
 
-        let mut k = 0;
-        while k < orig_nfs {
-            // Only look for pivots among the remaining FS columns [k..orig_nfs]
-            // But we also need to consider the active submatrix starting at index nfs_elim
-            // in the permuted system.
-            //
-            // At this point, columns 0..nfs_elim have been eliminated.
-            // Columns nfs_elim..orig_nfs are remaining FS candidates.
-            // Columns orig_nfs..n are CB.
+        // MUMPS panel blocking parameters
+        let nbkjib = if nass > 96 { 32 } else if nass > 32 { 16 } else { nass };
+        let nblr: usize = 128;
 
-            let active_start = nfs_elim;
+        let mut iend_blr: usize = 0;
+        let mut iend_block: usize = 0;
+        let mut last_panel = false;
+        let mut ibeg_blr: usize = 0;
 
-            // Find pivot in the active FS portion
-            let fs_remaining = orig_nfs - k;
+        // Outer panel loop
+        while iend_blr < nass && !last_panel {
+            ibeg_blr = npiv;
+            iend_blr = (iend_blr + nblr).min(nass);
 
-            // Find best pivot among remaining FS columns
-            let pivot = find_pivot_in_fs(
-                &a, n, active_start, fs_remaining, threshold,
-            );
+            // Inner block loop
+            while iend_block < iend_blr && !last_panel {
+                let ibeg_block = npiv;
+                iend_block = (iend_block + nbkjib).min(iend_blr);
 
-            match pivot {
-                PivotResult::OneByOne(p) => {
-                    // Swap p to position active_start
-                    if p != active_start {
-                        swap_full(&mut a, n, active_start, p);
-                        perm.swap(active_start, p);
-                        // Swap L entries for previously eliminated columns
-                        for j in 0..nfs_elim {
-                            l_data.swap(j * n + active_start, j * n + p);
-                        }
-                    }
-
-                    let akk = a[active_start * n + active_start];
-                    d_diag[nfs_elim] = akk;
-
-                    if akk.abs() > 1e-30 {
-                        let m = n - active_start - 1;
-                        for i in 0..m {
-                            work[i] = a[(active_start + 1 + i) * n + active_start] / akk;
-                            l_data[nfs_elim * n + (active_start + 1 + i)] = work[i];
-                        }
-                        // Update trailing matrix
-                        for i in 0..m {
-                            let si = work[i] * akk;
-                            let base = (active_start + 1 + i) * n + (active_start + 1);
-                            for j in 0..m {
-                                a[base + j] -= si * work[j];
-                            }
-                        }
-                    }
-                    l_data[nfs_elim * n + active_start] = 1.0;
-                    nfs_elim += 1;
-                    k += 1;
+                // Pivot-by-pivot loop within this inner block
+                #[cfg(debug_assertions)]
+                if nass <= 10 {
+                    eprintln!("=== Inner block: ibeg={} iend={} npiv={} nass={} nfront={}", ibeg_block, iend_block, npiv, nass, n);
                 }
-                PivotResult::TwoByTwo(p1, p2) => {
-                    // Need to bring p2 to active_start+1, p1 to active_start
-                    if p2 != active_start + 1 {
-                        swap_full(&mut a, n, active_start + 1, p2);
-                        perm.swap(active_start + 1, p2);
-                        for j in 0..nfs_elim {
-                            l_data.swap(j * n + (active_start + 1), j * n + p2);
+                loop {
+                    if npiv >= iend_block { break; }
+
+                    // STEP 1: Find pivot (MUMPS FAC_I_LDLT)
+                    let (inopv, pivsiz) = find_pivot_ldlt(
+                        &mut a, n, nass, npiv, iend_block, uu,
+                        &mut perm, &mut nneg,
+                        must_eliminate_start, nass,
+                    );
+
+                    match inopv {
+                        1 => {
+                            // No pivot in entire NASS — done
+                            last_panel = true;
+                            break;
                         }
-                    }
-                    if p1 != active_start {
-                        swap_full(&mut a, n, active_start, p1);
-                        perm.swap(active_start, p1);
-                        for j in 0..nfs_elim {
-                            l_data.swap(j * n + active_start, j * n + p1);
+                        2 => {
+                            // No pivot in this inner block — advance to next block
+                            break;
                         }
-                    }
-
-                    let akk = a[active_start * n + active_start];
-                    let ak1k = a[(active_start + 1) * n + active_start];
-                    let ak1k1 = a[(active_start + 1) * n + (active_start + 1)];
-
-                    d_diag[nfs_elim] = akk;
-                    d_diag[nfs_elim + 1] = ak1k1;
-                    d_offdiag[nfs_elim] = ak1k;
-
-                    let det = akk * ak1k1 - ak1k * ak1k;
-
-                    if det.abs() > 1e-30 {
-                        let d_inv_00 = ak1k1 / det;
-                        let d_inv_01 = -ak1k / det;
-                        let d_inv_11 = akk / det;
-
-                        let m = n - active_start - 2;
-                        for i in 0..m {
-                            let aik = a[(active_start + 2 + i) * n + active_start];
-                            let aik1 = a[(active_start + 2 + i) * n + (active_start + 1)];
-                            work[i] = aik * d_inv_00 + aik1 * d_inv_01;
-                            work[m + i] = aik * d_inv_01 + aik1 * d_inv_11;
-                            l_data[nfs_elim * n + (active_start + 2 + i)] = work[i];
-                            l_data[(nfs_elim + 1) * n + (active_start + 2 + i)] = work[m + i];
-                        }
-
-                        // Update trailing matrix
-                        for i in 0..m {
-                            let li0 = work[i];
-                            let li1 = work[m + i];
-                            let si0 = li0 * akk + li1 * ak1k;
-                            let si1 = li0 * ak1k + li1 * ak1k1;
-                            let base = (active_start + 2 + i) * n + (active_start + 2);
-                            for j in 0..m {
-                                a[base + j] -= si0 * work[j] + si1 * work[m + j];
-                            }
-                        }
+                        _ => {} // pivot found (inopv=0 normal, -1 static)
                     }
 
-                    l_data[nfs_elim * n + active_start] = 1.0;
-                    l_data[(nfs_elim + 1) * n + (active_start + 1)] = 1.0;
-                    nfs_elim += 2;
-                    k += 2;
+                    // STEP 2: Within-panel update (MUMPS FAC_MQ_LDLT)
+                    let last_row = n; // PIVOT_OPTION=3: update all rows
+                    let ifinb = update_within_block_ldlt(
+                        &mut a, n, nass, npiv, pivsiz,
+                        iend_block, last_row,
+                        &mut d_diag, &mut d_offdiag,
+                    );
+
+                    npiv += pivsiz;
+
+                    match ifinb {
+                        0 => continue,  // more pivots in this block
+                        1 => break,     // block done, panel continues
+                        _ => { last_panel = true; break; } // -1: NASS done
+                    }
                 }
-                PivotResult::Delayed => {
-                    // No FS-only pivot passed threshold. Delay this column to the
-                    // parent supernode via the contribution block. The parent will
-                    // receive it via extend_add and promote_cb_to_fs, getting a
-                    // fresh chance to pair it with better pivots.
-                    //
-                    // NOTE: In-factorization CB promotion (promoting a CB column
-                    // to FS and eliminating it here) was removed because it causes
-                    // the parent's frontal matrix to have incomplete Schur complement
-                    // data for that column, leading to inertia overcounting and
-                    // corrupted factorizations on problems like gas40.
-                    let last_fs = active_start + (orig_nfs - k) - 1;
-                    if active_start != last_fs {
-                        swap_full(&mut a, n, active_start, last_fs);
-                        perm.swap(active_start, last_fs);
-                        for j in 0..nfs_elim {
-                            l_data.swap(j * n + active_start, j * n + last_fs);
-                        }
-                    }
-                    k += 1;
+
+                // STEP 3: Between-block GEMM (within BLR panel)
+                if iend_blr > iend_block && npiv > ibeg_block {
+                    between_block_gemm_ldlt(
+                        &mut a, n, ibeg_block, iend_block, npiv,
+                        iend_blr, n,
+                    );
+                }
+            }
+
+            // STEP 4: Inter-panel GEMM (between BLR panels)
+            // For PIVOT_OPTION=3, MQ already handled L scaling for all rows,
+            // so only GEMM is needed (no TRSM). Update columns iend_blr..nass
+            // and rows nass..nfront.
+            if npiv > ibeg_blr {
+                let nel1 = nass.saturating_sub(iend_blr);
+                if nel1 > 0 {
+                    between_block_gemm_ldlt(
+                        &mut a, n, ibeg_blr, iend_blr, npiv,
+                        nass, n,
+                    );
                 }
             }
         }
 
-        // Now nfs_elim columns have been eliminated. The remaining columns
-        // [nfs_elim..n] form the contribution block (including delayed FS columns).
+        // STEP 5: Tail update — apply all pivots to CB columns (MUMPS FAC_T_LDLT).
+        // The MQ update within panels only covers columns up to NASS. The CB columns
+        // (NASS..NFRONT) need the accumulated update from all pivots.
+        if npiv > 0 && n > nass {
+            between_block_gemm_ldlt(
+                &mut a, n, 0, nass, npiv,
+                n, n, // update columns nass..n and rows nass..n
+            );
+        }
+
+        // Extract results in the format expected by the solve phase.
+        let nfs_elim = npiv;
         let ncb_new = n - nfs_elim;
 
-
-        // Build the BK result from what we've computed
+        // Build D factor
         let d_diag = d_diag[..nfs_elim].to_vec();
         let d_offdiag = d_offdiag[..nfs_elim].to_vec();
-
         let inertia = compute_inertia(&d_diag, &d_offdiag, nfs_elim);
 
-        // Build perm/perm_inv for the eliminated block.
-        // fs_indices is already built in factored order (fs_indices[k] = global
-        // index of the k-th pivot), so the BK perm is the identity mapping.
-        // The solve code uses bk.perm to index into fs_indices.
+        // Build L11 factor (nfs_elim x nfs_elim) in row-major for solve.
+        // In the factored matrix, L is stored in columns below the diagonal
+        // (D^{-1}-scaled for within-panel pivots). The L11 block is unit lower
+        // triangular: L[i,j] for i > j is at a[j*n + i] (column j, row i).
+        // For the solve phase, extract into row-major: l_factor.data[row*nfs+col].
         let bk_perm: Vec<usize> = (0..nfs_elim).collect();
-        let mut bk_perm_inv = vec![0usize; nfs_elim];
-        for i in 0..nfs_elim {
-            bk_perm_inv[i] = i;
-        }
-
-        // Build L factor for the eliminated block (nfs_elim x nfs_elim)
-        // l_data is stored column-major: l_data[col * n + row] = L[row, col]
-        // but the solve code expects row-major: l.data[row * nfs + col] = L[row, col]
+        let bk_perm_inv: Vec<usize> = (0..nfs_elim).collect();
         let mut l_factor = DenseMat::zeros(nfs_elim, nfs_elim);
-        for col in 0..nfs_elim {
-            for row in 0..nfs_elim {
-                l_factor.data[row * nfs_elim + col] = l_data[col * n + row];
+        let mut col = 0;
+        while col < nfs_elim {
+            let is_2x2 = col + 1 < nfs_elim && d_offdiag[col].abs() > 1e-30;
+            l_factor.data[col * nfs_elim + col] = 1.0; // unit diagonal
+            if is_2x2 {
+                l_factor.data[(col + 1) * nfs_elim + (col + 1)] = 1.0;
+                // L entries are at K1POS = a[row * n + col] (upper triangle), NOT
+                // at a[col * n + row] (lower triangle, which has saved originals).
+                for row in (col + 2)..nfs_elim {
+                    l_factor.data[row * nfs_elim + col] = a[row * n + col];
+                    l_factor.data[row * nfs_elim + (col + 1)] = a[row * n + (col + 1)];
+                }
+                col += 2;
+            } else {
+                for row in (col + 1)..nfs_elim {
+                    l_factor.data[row * nfs_elim + col] = a[row * n + col];
+                }
+                col += 1;
             }
         }
 
-        // Build L21: rows [nfs_elim..n], cols [0..nfs_elim]
+        // Build L21 (ncb_new x nfs_elim) in column-major for solve.
+        // L21[cb_row, pivot_col] is stored at K1POS = a[(nfs_elim+cb_row)*n + pivot_col]
+        // (the CB column's entry at the pivot row), NOT at the symmetric position
+        // a[pivot_col*n + (nfs_elim+cb_row)] which has the saved original (U storage).
         let mut l21 = DenseMat::zeros(ncb_new, nfs_elim);
         for col in 0..nfs_elim {
             for row in 0..ncb_new {
-                l21.data[col * ncb_new + row] = l_data[col * n + (nfs_elim + row)];
+                l21.data[col * ncb_new + row] = a[(nfs_elim + row) * n + col];
             }
         }
 
-        // Extract contribution block from the trailing matrix
+        // Extract contribution block (already in-place in the trailing matrix).
+        // Contribution at (i, j) is at a[(nfs_elim+j)*n + (nfs_elim+i)] (column-major).
+        //
+        // IMPORTANT: When threshold pivoting delays columns (nfs_elim < nass), the
+        // MQ within-block update only maintains the upper triangle (col > row in the
+        // factored matrix) for within-block columns. The lower triangle entries
+        // involving delayed columns are stale. We extract from the upper triangle
+        // only and mirror to the lower triangle to ensure symmetry.
         let mut contrib = DenseMat::zeros(ncb_new, ncb_new);
-        for j in 0..ncb_new {
-            for i in 0..ncb_new {
-                contrib.data[j * ncb_new + i] = a[(nfs_elim + j) * n + (nfs_elim + i)];
+        for col in 0..ncb_new {
+            for row in 0..=col {
+                // Upper triangle (row <= col): a[(nfs_elim+col)*n + (nfs_elim+row)]
+                // has factored_row = nfs_elim+row <= nfs_elim+col = factored_col
+                let val = a[(nfs_elim + col) * n + (nfs_elim + row)];
+                contrib.data[col * ncb_new + row] = val;
+                contrib.data[row * ncb_new + col] = val; // mirror to lower triangle
             }
         }
 
@@ -669,17 +676,15 @@ impl FrontalMatrix {
         let fs_indices: Vec<usize> = (0..nfs_elim).map(|i| self.indices[perm[i]]).collect();
         let contrib_indices: Vec<usize> = (nfs_elim..n).map(|i| self.indices[perm[i]]).collect();
 
-        let bk = BunchKaufmanResult {
-            l: l_factor,
-            d_diag,
-            d_offdiag,
-            perm: bk_perm,
-            perm_inv: bk_perm_inv,
-            inertia,
-        };
-
         PartialFactorResult {
-            bk,
+            bk: BunchKaufmanResult {
+                l: l_factor,
+                d_diag,
+                d_offdiag,
+                perm: bk_perm,
+                perm_inv: bk_perm_inv,
+                inertia,
+            },
             l21,
             contrib,
             contrib_indices,
@@ -689,87 +694,484 @@ impl FrontalMatrix {
     }
 }
 
-/// Find pivot among the first `fs_remaining` columns of the active submatrix
-/// starting at `start` in an n x n matrix.
-fn find_pivot_in_fs(
-    a: &[f64],
-    n: usize,
-    start: usize,
-    fs_remaining: usize,
-    threshold: f64,
-) -> PivotResult {
-    if fs_remaining == 0 {
-        return PivotResult::Delayed;
+// ============================================================================
+// MUMPS-style helper functions for LDLT frontal factorization
+// ============================================================================
+
+/// Symmetric swap of rows/columns p and q in a column-major n×n matrix.
+/// Matches MUMPS's DMUMPS_SWAP_LDLT: swaps the full symmetric structure
+/// including the "bridge" region between p and q.
+fn symmetric_swap_ldlt(a: &mut [f64], n: usize, p: usize, q: usize) {
+    if p == q { return; }
+    let (p, q) = if p < q { (p, q) } else { (q, p) };
+
+    // 1. Swap UPPER triangle entries in already-factored columns: L entries at
+    // rows 0..p-1 in columns p and q. In column-major a[col*n+row], the upper
+    // triangle L entries are at a[p*n+row] and a[q*n+row] for row < p.
+    // (MUMPS SWAP_LDLT line 2128: dswap(NPIVP1-1, A(col_p), 1, A(col_q), 1))
+    for row in 0..p {
+        a.swap(p * n + row, q * n + row);
     }
 
-    // Search for best 1x1 pivot among FS columns
-    let fs_end = start + fs_remaining;
-
-    // Try each FS column as a potential 1x1 pivot
-    let mut best_1x1: Option<(usize, f64)> = None; // (col, ratio)
-
-    for col in start..fs_end {
-        let diag = a[col * n + col].abs();
-        // Find max off-diagonal in column (full active submatrix)
-        let mut max_offdiag = 0.0f64;
-        for row in start..n {
-            if row != col {
-                max_offdiag = max_offdiag.max(a[row * n + col].abs());
-            }
-        }
-
-        if max_offdiag == 0.0 && diag == 0.0 {
-            continue; // skip zero columns
-        }
-
-        if max_offdiag == 0.0 {
-            // Pure diagonal — always acceptable
-            let ratio = f64::INFINITY;
-            if best_1x1.map_or(true, |(_, r)| ratio > r) {
-                best_1x1 = Some((col, ratio));
-            }
-            continue;
-        }
-
-        let ratio = diag / max_offdiag;
-        if ratio >= threshold {
-            if best_1x1.map_or(true, |(_, r)| ratio > r) {
-                best_1x1 = Some((col, ratio));
-            }
-        }
+    // 2. Bridge: row p in cols p+1..q-1 ↔ col q in rows p+1..q-1
+    for k in 1..(q - p) {
+        let idx1 = (p + k) * n + p; // column p+k, row p
+        let idx2 = q * n + (p + k); // column q, row p+k
+        a.swap(idx1, idx2);
     }
 
-    if let Some((col, _)) = best_1x1 {
-        return PivotResult::OneByOne(col);
-    }
+    // 3. Swap diagonals
+    a.swap(p * n + p, q * n + q);
 
-    // No 1x1 pivot passed threshold — try 2x2 pivots
-    for i in start..fs_end {
-        for j in (i + 1)..fs_end {
-            let akk = a[i * n + i];
-            let akj = a[j * n + i];
-            let ajj = a[j * n + j];
-            let det = (akk * ajj - akj * akj).abs();
-            let max_elem = akk.abs().max(ajj.abs()).max(akj.abs());
-            if max_elem > 1e-30 && det >= threshold * max_elem * max_elem {
-                return PivotResult::TwoByTwo(i, j);
-            }
-        }
+    // 4. Swap columns q+1..n-1 at rows p and q
+    for col in (q + 1)..n {
+        a.swap(col * n + p, col * n + q);
     }
-
-    PivotResult::Delayed
 }
 
-/// Swap rows and columns p and q in the full n x n matrix stored in `a`.
-fn swap_full(a: &mut [f64], n: usize, p: usize, q: usize) {
-    if p == q {
-        return;
+/// MUMPS-style pivot search (FAC_I_LDLT).
+/// Searches for the FIRST ACCEPTABLE pivot within [npiv, iend_block).
+/// Returns (inopv, pivsiz):
+///   inopv: 0=found, 1=none in NASS, 2=none in this inner block
+///   pivsiz: 1 for 1x1 pivot, 2 for 2x2 pivot
+/// On success, the pivot is swapped into position npiv (and npiv+1 for 2x2).
+fn find_pivot_ldlt(
+    a: &mut [f64], n: usize, nass: usize, npiv: usize,
+    iend_block: usize, uu: f64,
+    perm: &mut [usize], nneg: &mut usize,
+    must_eliminate_start: usize, must_eliminate_end: usize,
+) -> (i32, usize) {
+    let seuil: f64 = 0.0; // no static pivot threshold by default
+
+    for ipiv in npiv..iend_block {
+        let pivot = a[ipiv * n + ipiv]; // diagonal (column-major: a[col*n+row], col=ipiv, row=ipiv)
+
+        // Compute AMAX: max off-diagonal in column ipiv within [npiv, iend_block)
+        let mut amax = 0.0f64;
+        let mut jmax: Option<usize> = None;
+        // Scan rows npiv..ipiv-1 in column ipiv (below diagonal in column-major)
+        for row in npiv..ipiv {
+            let val = a[ipiv * n + row].abs();
+            if val > amax { amax = val; jmax = Some(row); }
+        }
+        // Scan columns ipiv+1..iend_block-1 at row ipiv (by symmetry: column col, row ipiv)
+        for col in (ipiv + 1)..iend_block {
+            let val = a[col * n + ipiv].abs();
+            if val > amax { amax = val; jmax = Some(col); }
+        }
+
+        // Compute RMAX: max off-diagonal outside inner block (PIVOT_OPTION=3)
+        let mut rmax = 0.0f64;
+        for col in iend_block..n {
+            let val = a[col * n + ipiv].abs();
+            rmax = rmax.max(val);
+        }
+
+        // Null check
+        let col_max = amax.max(rmax).max(pivot.abs());
+        if col_max <= 1e-30 { continue; }
+
+        // 1x1 pivot test: |diag| >= uu * max(AMAX, RMAX) and |diag| > seuil
+        #[cfg(debug_assertions)]
+        if n <= 10 {
+            eprintln!("  pivot search: ipiv={} diag={:.4} amax={:.4} rmax={:.4} jmax={:?} test={}",
+                ipiv, pivot, amax, rmax, jmax, pivot.abs() >= uu * amax.max(rmax));
+        }
+        if pivot.abs() >= uu * amax.max(rmax)
+            && pivot.abs() > seuil.max(f64::MIN_POSITIVE)
+        {
+            if pivot < 0.0 { *nneg += 1; }
+            #[cfg(debug_assertions)]
+            if n <= 10 { eprintln!("  -> 1x1 accepted at {}, nneg={}", ipiv, *nneg); }
+            // Swap ipiv into position npiv
+            if ipiv != npiv {
+                symmetric_swap_ldlt(a, n, npiv, ipiv);
+                perm.swap(npiv, ipiv);
+            }
+            return (0, 1);
+        }
+
+        // 2x2 pivot attempt
+        if jmax.is_none() || npiv + 1 >= iend_block { continue; }
+        let jmax_pos = jmax.unwrap();
+
+        // Compute TMAX: max off-diagonal in column jmax, excluding ipiv
+        let mut tmax = 0.0f64;
+        for row in npiv..n {
+            if row != ipiv && row != jmax_pos {
+                let val = a[jmax_pos * n + row].abs();
+                tmax = tmax.max(val);
+            }
+        }
+        // Also check row jmax_pos in columns beyond jmax_pos
+        for col in (jmax_pos + 1)..n {
+            if col != ipiv {
+                let val = a[col * n + jmax_pos].abs();
+                tmax = tmax.max(val);
+            }
+        }
+        tmax = tmax.max(seuil / uu.max(1e-30));
+
+        let d_ii = a[ipiv * n + ipiv];
+        let d_jj = a[jmax_pos * n + jmax_pos];
+        let d_ij = if ipiv < jmax_pos {
+            a[jmax_pos * n + ipiv]
+        } else {
+            a[ipiv * n + jmax_pos]
+        };
+
+        let detpiv = d_ii * d_jj - d_ij * d_ij;
+        let abs_det = detpiv.abs();
+
+        // 2x2 pivot test (modified Bunch-Kaufman)
+        if abs_det <= 1e-30 { continue; }
+        if (d_jj.abs() * rmax + amax * tmax) * uu > abs_det { continue; }
+        if (d_ii.abs() * tmax + amax * rmax) * uu > abs_det { continue; }
+
+        // 2x2 accepted! Count negative eigenvalues
+        #[cfg(debug_assertions)]
+        if n <= 10 {
+            eprintln!("  -> 2x2 accepted: ({},{}) d_ii={:.4} d_jj={:.4} det={:.4} d_ij={:.4} nneg_before={}",
+                ipiv, jmax_pos, d_ii, d_jj, detpiv, d_ij, *nneg);
+        }
+        if detpiv < 0.0 {
+            *nneg += 1; // one positive + one negative
+        } else if d_jj < 0.0 {
+            *nneg += 2; // both negative
+        }
+        #[cfg(debug_assertions)]
+        if n <= 10 { eprintln!("  -> nneg_after={}", *nneg); }
+
+        // Swap: put min(ipiv, jmax) at npiv, max at npiv+1
+        let first = ipiv.min(jmax_pos);
+        let second = ipiv.max(jmax_pos);
+        if first != npiv {
+            symmetric_swap_ldlt(a, n, npiv, first);
+            perm.swap(npiv, first);
+        }
+        if second != npiv + 1 {
+            symmetric_swap_ldlt(a, n, npiv + 1, second);
+            perm.swap(npiv + 1, second);
+        }
+
+        // Store DETPIV at sub-diagonal of pivot block: a[npiv, npiv+1] (col npiv, row npiv+1)
+        a[npiv * n + (npiv + 1)] = detpiv;
+
+        return (0, 2);
     }
-    for j in 0..n {
-        a.swap(p * n + j, q * n + j);
+
+    // No pivot found — check if ANY remaining column in [npiv, iend_block) is must-eliminate.
+    // Must-eliminate columns are promoted from children or at the root supernode —
+    // they cannot be delayed further. Swap the first must-eliminate column to npiv
+    // and accept it via static pivoting.
+    for pos in npiv..iend_block {
+        if pos >= nass { break; }
+        let orig_pos = perm[pos];
+        if orig_pos >= must_eliminate_start && orig_pos < must_eliminate_end {
+            // Swap this must-eliminate column to position npiv
+            if pos != npiv {
+                symmetric_swap_ldlt(a, n, npiv, pos);
+                perm.swap(npiv, pos);
+            }
+            let pivot = a[npiv * n + npiv];
+            if pivot < 0.0 { *nneg += 1; }
+            return (-1, 1);
+        }
     }
-    for i in 0..n {
-        a.swap(i * n + p, i * n + q);
+
+    #[cfg(debug_assertions)]
+    if n <= 10 {
+        eprintln!("  -> NO PIVOT: iend_block={} nass={}", iend_block, nass);
+    }
+    if iend_block >= nass {
+        (1, 0) // exhausted all of NASS
+    } else {
+        (2, 0) // only this inner block exhausted
+    }
+}
+
+/// MUMPS-style within-panel update (FAC_MQ_LDLT).
+/// Performs rank-1 (1x1) or rank-2 (2x2) Schur complement update.
+/// The update region is:
+/// - Within inner block: triangular (JJ=1..I for column I)
+/// - Beyond inner block: rectangular (JJ=1..NEL2 for column I > iend_block)
+/// Original values are saved in pivot rows (U storage).
+/// L entries (D^{-1}-scaled) are stored in pivot columns.
+/// Returns IFINB: 0 (more in block), 1 (block done), -1 (NASS done).
+fn update_within_block_ldlt(
+    a: &mut [f64], n: usize, nass: usize, npiv: usize, pivsiz: usize,
+    iend_block: usize, last_row: usize,
+    d_diag: &mut [f64], d_offdiag: &mut [f64],
+) -> i32 {
+    let npiv_new = npiv + pivsiz;
+    let nel2 = iend_block.saturating_sub(npiv_new); // remaining cols in inner block
+    let ncb1 = last_row.saturating_sub(iend_block); // rows beyond inner block
+
+    let ifinb = if nel2 == 0 {
+        if iend_block >= nass { -1 } else { 1 }
+    } else {
+        0
+    };
+
+    if pivsiz == 1 {
+        // 1x1 pivot at position npiv
+        let apos_diag = npiv * n + npiv; // column npiv, row npiv
+        let d = a[apos_diag];
+        d_diag[npiv] = d;
+
+        if d.abs() <= 1e-30 { return ifinb; }
+        let valpiv = 1.0 / d;
+
+        // Process each trailing column I = 1..nel2+ncb1
+        for i in 1..=(nel2 + ncb1) {
+            let col = npiv + i;
+            let k1pos = col * n + npiv; // column col, row npiv (pivot row entry)
+
+            // Save original to U storage (below diagonal in pivot column)
+            a[npiv * n + (npiv + i)] = a[k1pos]; // row npiv+i in col npiv ← row npiv in col npiv+i
+
+            // Wait: in column-major, a[col*n + row].
+            // k1pos = col*n + npiv = entry(row=npiv, col=col) — the pivot ROW entry
+            // a[npiv*n + (npiv+i)] = entry(row=npiv+i, col=npiv) — below diagonal in pivot COL
+            // This saves the original row entry to the column (U storage).
+
+            // Scale L entry: L[col, npiv] = original / d
+            a[k1pos] *= valpiv;
+
+            // Schur complement update
+            let jmax = if i <= nel2 { i } else { nel2 };
+            for jj in 1..=jmax {
+                // a[col*n + (npiv+jj)] -= a[col*n + npiv] * a[npiv*n + (npiv+jj)]
+                // = L_scaled[col] * U_original[jj]
+                let target = col * n + (npiv + jj);
+                let l_val = a[k1pos]; // L (scaled) for this column
+                let u_val = a[npiv * n + (npiv + jj)]; // U (saved original) for row jj
+                a[target] -= l_val * u_val;
+            }
+        }
+
+    } else {
+        // 2x2 pivot at positions npiv, npiv+1
+        let d11 = a[npiv * n + npiv];
+        let d22 = a[(npiv + 1) * n + (npiv + 1)];
+        let detpiv = a[npiv * n + (npiv + 1)]; // stored by find_pivot_ldlt
+        let d12_orig = a[(npiv + 1) * n + npiv]; // off-diagonal (lower triangle)
+
+        d_diag[npiv] = d11;
+        d_diag[npiv + 1] = d22;
+        d_offdiag[npiv] = d12_orig;
+
+        if detpiv.abs() <= 1e-30 { return ifinb; }
+
+        // D^{-1} computation (MUMPS swaps indices: A11_inv = d22/det, A22_inv = d11/det)
+        let a11_inv = d22 / detpiv;
+        let a22_inv = d11 / detpiv;
+        let a12_inv = -d12_orig / detpiv;
+
+        // Fix storage: move off-diagonal to lower triangle, clear upper
+        a[(npiv + 1) * n + npiv] = d12_orig; // lower: a[col=npiv, row=npiv+1]
+        // Actually this is already there. Clear upper:
+        // a[(npiv+1)*n + npiv] is col=npiv+1, row=npiv — wait, that's the upper position.
+        // Let me re-check: a[col*n + row]. a[npiv*n + (npiv+1)] = col=npiv, row=npiv+1 = LOWER.
+        // a[(npiv+1)*n + npiv] = col=npiv+1, row=npiv = UPPER.
+        // The DETPIV was stored at a[npiv*n + (npiv+1)] (lower position).
+        // The original d12 is at a[(npiv+1)*n + npiv] (upper position).
+        // MUMPS wants: lower = d12, upper = 0
+        a[npiv * n + (npiv + 1)] = d12_orig; // overwrite DETPIV with d12 in lower
+        a[(npiv + 1) * n + npiv] = 0.0;       // clear upper
+
+        // Process each trailing column
+        for i in 1..=(nel2 + ncb1) {
+            let col = npiv + 1 + i;
+            let k1 = col * n + npiv;     // entry(row=npiv, col=col) — pivot row 1
+            let k2 = col * n + (npiv + 1); // entry(row=npiv+1, col=col) — pivot row 2
+
+            let a1_orig = a[k1];
+            let a2_orig = a[k2];
+
+            // Compute L*D^{-1} (negated for subtraction)
+            let mult1 = -(a11_inv * a1_orig + a12_inv * a2_orig);
+            let mult2 = -(a12_inv * a1_orig + a22_inv * a2_orig);
+
+            // Save originals to U storage (pivot rows, below diagonal)
+            // U row 1: a[npiv*n + col] = entry(row=col, col=npiv) — not right...
+            // In column-major: to save in the pivot column below the diagonal:
+            // Pivot 1 row storage: a[npiv*n + (npiv+1+i)] = entry(row=npiv+1+i, col=npiv)
+            // Pivot 2 row storage: a[(npiv+1)*n + (npiv+1+i)] = entry(row=npiv+1+i, col=npiv+1)
+            a[npiv * n + (npiv + 1 + i)] = a1_orig;
+            a[(npiv + 1) * n + (npiv + 1 + i)] = a2_orig;
+
+            // Schur complement update
+            let jmax = if i <= nel2 { i } else { nel2 };
+            for jj in 1..=jmax {
+                let target = col * n + (npiv + 1 + jj); // entry(row=npiv+1+jj, col=col)
+                let uk1 = a[npiv * n + (npiv + 1 + jj)];     // U row 1 (saved original)
+                let uk2 = a[(npiv + 1) * n + (npiv + 1 + jj)]; // U row 2 (saved original)
+                a[target] += mult1 * uk1 + mult2 * uk2;
+            }
+
+            // Store L*D^{-1} back in the column entries
+            a[k1] = -mult1;
+            a[k2] = -mult2;
+        }
+    }
+
+    ifinb
+}
+
+/// MUMPS-style between-block GEMM update (FAC_SQ_LDLT).
+/// Applies accumulated pivots from [ibeg_block, npiv) to trailing columns
+/// [iend_block, last_col_gemm) and rows up to last_row_gemm.
+/// U (original values) are in pivot rows, L (D^{-1}-scaled) in pivot columns.
+///
+/// With the `faer` feature, uses faer's optimized GEMM kernel (SIMD+FMA) for
+/// precision matching MUMPS's BLAS-based between-block update.
+fn between_block_gemm_ldlt(
+    a: &mut [f64], n: usize,
+    ibeg_block: usize, iend_block: usize, npiv: usize,
+    last_col_gemm: usize, last_row_gemm: usize,
+) {
+    let npiv_block = npiv - ibeg_block;
+    if npiv_block == 0 { return; }
+    let nel1 = last_col_gemm.saturating_sub(iend_block);
+    if nel1 == 0 { return; }
+
+    #[cfg(feature = "faer")]
+    {
+        between_block_gemm_faer(a, n, ibeg_block, iend_block, npiv, last_col_gemm, last_row_gemm);
+    }
+    #[cfg(not(feature = "faer"))]
+    {
+        between_block_gemm_naive(a, n, ibeg_block, iend_block, npiv, last_col_gemm, last_row_gemm);
+    }
+}
+
+/// Naive triple-loop GEMM fallback (no faer).
+#[cfg(not(feature = "faer"))]
+fn between_block_gemm_naive(
+    a: &mut [f64], n: usize,
+    ibeg_block: usize, iend_block: usize, npiv: usize,
+    last_col_gemm: usize, last_row_gemm: usize,
+) {
+    let npiv_block = npiv - ibeg_block;
+
+    // Symmetric part: update [iend_block, last_col_gemm) x [iend_block, last_col_gemm)
+    for col in iend_block..last_col_gemm {
+        for row in iend_block..last_col_gemm {
+            let mut sum = 0.0;
+            for k in ibeg_block..npiv {
+                sum += a[k * n + row] * a[col * n + k];
+            }
+            a[col * n + row] -= sum;
+        }
+    }
+
+    // Rectangular part: [iend_block, last_col_gemm) x [last_col_gemm, last_row_gemm)
+    if last_row_gemm > last_col_gemm {
+        for col in iend_block..last_col_gemm {
+            for row in last_col_gemm..last_row_gemm {
+                let mut sum = 0.0;
+                for k in ibeg_block..npiv {
+                    sum += a[k * n + row] * a[col * n + k];
+                }
+                a[col * n + row] -= sum;
+            }
+        }
+    }
+}
+
+/// faer-accelerated GEMM for between-block Schur complement update.
+/// Uses faer's optimized matmul kernel (SIMD + FMA) matching MUMPS's BLAS quality.
+#[cfg(feature = "faer")]
+fn between_block_gemm_faer(
+    a: &mut [f64], n: usize,
+    ibeg_block: usize, iend_block: usize, npiv: usize,
+    last_col_gemm: usize, last_row_gemm: usize,
+) {
+    let npiv_block = npiv - ibeg_block;
+    // "Symmetric" part: rows [iend_block, last_col_gemm) — must match naive version.
+    // The rectangular part [last_col_gemm, last_row_gemm) is handled separately below.
+    // Using last_row_gemm here would double-update the rectangular rows.
+    let update_rows = last_col_gemm - iend_block;
+    let update_cols = last_col_gemm - iend_block;
+    if update_rows == 0 || update_cols == 0 { return; }
+
+    // Copy U, L, target into faer Mats (column-major).
+    // U: (update_rows x npiv_block), from pivot cols at target rows
+    // L: (npiv_block x update_cols), from target cols at pivot rows
+    let mut u_mat = faer::Mat::<f64>::zeros(update_rows, npiv_block);
+    let mut l_mat = faer::Mat::<f64>::zeros(npiv_block, update_cols);
+    let mut target = faer::Mat::<f64>::zeros(update_rows, update_cols);
+
+    for k in 0..npiv_block {
+        let src_col = ibeg_block + k;
+        for i in 0..update_rows {
+            u_mat[(i, k)] = a[src_col * n + (iend_block + i)];
+        }
+    }
+    for j in 0..update_cols {
+        let src_col = iend_block + j;
+        for k in 0..npiv_block {
+            l_mat[(k, j)] = a[src_col * n + (ibeg_block + k)];
+        }
+    }
+    for j in 0..update_cols {
+        for i in 0..update_rows {
+            target[(i, j)] = a[(iend_block + j) * n + (iend_block + i)];
+        }
+    }
+
+    // target = 1.0 * target + (-1.0) * U * L
+    faer::linalg::matmul::matmul(
+        target.as_mut(),
+        u_mat.as_ref(),
+        l_mat.as_ref(),
+        Some(1.0),
+        -1.0,
+        faer::Parallelism::None,
+    );
+
+    // Write back
+    for j in 0..update_cols {
+        for i in 0..update_rows {
+            a[(iend_block + j) * n + (iend_block + i)] = target[(i, j)];
+        }
+    }
+
+    // Rectangular part: rows [last_col_gemm, last_row_gemm) x cols [iend_block, last_col_gemm)
+    if last_row_gemm > last_col_gemm {
+        let rect_rows = last_row_gemm - last_col_gemm;
+        let nel1 = last_col_gemm - iend_block;
+
+        let mut u_rect = faer::Mat::<f64>::zeros(rect_rows, npiv_block);
+        let mut rect_target = faer::Mat::<f64>::zeros(rect_rows, nel1);
+
+        for k in 0..npiv_block {
+            for i in 0..rect_rows {
+                u_rect[(i, k)] = a[(ibeg_block + k) * n + (last_col_gemm + i)];
+            }
+        }
+        for j in 0..nel1 {
+            for i in 0..rect_rows {
+                rect_target[(i, j)] = a[(iend_block + j) * n + (last_col_gemm + i)];
+            }
+        }
+
+        let l_rect = l_mat.get(.., ..nel1);
+        faer::linalg::matmul::matmul(
+            rect_target.as_mut(),
+            u_rect.as_ref(),
+            l_rect,
+            Some(1.0),
+            -1.0,
+            faer::Parallelism::None,
+        );
+
+        for j in 0..nel1 {
+            for i in 0..rect_rows {
+                a[(iend_block + j) * n + (last_col_gemm + i)] = rect_target[(i, j)];
+            }
+        }
     }
 }
 

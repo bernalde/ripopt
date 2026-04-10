@@ -164,7 +164,7 @@ pub fn multifrontal_factor_threshold(
         }
     }
 
-    // Compute inertia from completed factorizations (no locks needed)
+    // Compute inertia from completed factorizations (no locks needed).
     let mut total_inertia = Inertia { positive: 0, negative: 0, zero: 0 };
     let node_factors: Vec<NodeFactor> = node_factors
         .into_iter()
@@ -288,14 +288,23 @@ unsafe fn factor_supernode(
     // Promote delayed child FS columns from CB to FS in the parent front.
     // These columns were not eliminated by their child and need to be eliminated
     // by this (parent) supernode. We increase nfs to include them.
-    if !delayed_cols.is_empty() && pivot_threshold > 0.0 {
+    let n_promoted = if !delayed_cols.is_empty() && pivot_threshold > 0.0 {
         delayed_cols.sort_unstable();
+        let count = delayed_cols.len();
         front.promote_cb_to_fs(&delayed_cols);
-    }
+        count
+    } else {
+        0
+    };
 
-    // Partial factorization — use threshold pivoting if enabled
+    // Partial factorization — use threshold pivoting if enabled.
+    // n_must_eliminate = columns that CANNOT be delayed:
+    //   - Promoted columns from children (prevents multi-hop delay losses)
+    //   - At root supernodes: ALL FS columns (no parent to receive delays)
+    let is_root = sym.snode_parent[s].is_none();
+    let n_must_eliminate = if is_root { front.nfs } else { n_promoted };
     let result = if pivot_threshold > 0.0 {
-        front.partial_factor_threshold(pivot_threshold, n_primal)
+        front.partial_factor_threshold_with_must_eliminate(pivot_threshold, n_primal, n_must_eliminate)
     } else {
         front.partial_factor()
     };
