@@ -209,4 +209,20 @@ impl LinearSolver for MultifrontalLdl {
     fn min_diagonal(&self) -> Option<f64> {
         self.solver.min_diagonal()
     }
+
+    fn increase_quality(&mut self) -> bool {
+        let pivtol = self.solver.pivot_threshold();
+        let pivtolmax = 0.1;
+        if pivtol >= pivtolmax {
+            return false;
+        }
+        // Ipopt escalation: pivtol = min(pivtolmax, sqrt(pivtol))
+        let new_pivtol = pivtolmax.min(pivtol.sqrt());
+        log::debug!(
+            "MultifrontalLdl: escalating pivot threshold {:.2e} -> {:.2e}",
+            pivtol, new_pivtol
+        );
+        self.solver.set_pivot_threshold(new_pivtol);
+        true
+    }
 }

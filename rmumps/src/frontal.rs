@@ -442,6 +442,22 @@ impl FrontalMatrix {
     /// Rejected FS columns are moved to the contribution block (delayed to parent).
     /// This is the key mechanism that makes MA57/MUMPS reliable on KKT systems.
     pub fn partial_factor_threshold(self, threshold: f64, _n_primal: Option<usize>) -> PartialFactorResult {
+        self.partial_factor_threshold_inner(threshold, _n_primal, 0)
+    }
+
+    /// Partial factorization with must-eliminate support for promoted columns.
+    /// `n_must_eliminate` columns at the END of the FS range are force-eliminated
+    /// via static pivoting if they fail the threshold test, preventing multi-hop
+    /// delays that lose pivots in the elimination tree.
+    pub fn partial_factor_threshold_with_must_eliminate(
+        self, threshold: f64, _n_primal: Option<usize>, n_must_eliminate: usize,
+    ) -> PartialFactorResult {
+        self.partial_factor_threshold_inner(threshold, _n_primal, n_must_eliminate)
+    }
+
+    fn partial_factor_threshold_inner(
+        self, threshold: f64, _n_primal: Option<usize>, n_must_eliminate: usize,
+    ) -> PartialFactorResult {
         let mut orig_nfs = self.nfs;
         let orig_size = self.size();
 
@@ -475,6 +491,10 @@ impl FrontalMatrix {
         let mut nfs_elim = 0usize; // number of successfully eliminated columns
         let mut d_diag = vec![0.0; orig_nfs];
         let mut d_offdiag = vec![0.0; orig_nfs];
+
+        // Track promoted columns that MUST be eliminated (cannot be delayed).
+        // Promoted columns are at positions (orig_nfs - n_must_eliminate)..orig_nfs.
+        let must_eliminate_start = orig_nfs.saturating_sub(n_must_eliminate);
 
         // L is stored column-major: l[col * n + row]
         let mut l_data = vec![0.0; n * orig_nfs];
@@ -595,25 +615,44 @@ impl FrontalMatrix {
                     k += 2;
                 }
                 PivotResult::Delayed => {
-                    // No FS-only pivot passed threshold. Delay this column to the
-                    // parent supernode via the contribution block. The parent will
-                    // receive it via extend_add and promote_cb_to_fs, getting a
-                    // fresh chance to pair it with better pivots.
-                    //
-                    // NOTE: In-factorization CB promotion (promoting a CB column
-                    // to FS and eliminating it here) was removed because it causes
-                    // the parent's frontal matrix to have incomplete Schur complement
-                    // data for that column, leading to inertia overcounting and
-                    // corrupted factorizations on problems like gas40.
-                    let last_fs = active_start + (orig_nfs - k) - 1;
-                    if active_start != last_fs {
-                        swap_full(&mut a, n, active_start, last_fs);
-                        perm.swap(active_start, last_fs);
-                        for j in 0..nfs_elim {
-                            l_data.swap(j * n + active_start, j * n + last_fs);
+                    // No FS-only pivot passed threshold.
+                    // Check if this is a "must-eliminate" promoted column from a child.
+                    // Promoted columns cannot be delayed again (multi-hop delays lose
+                    // pivots in the elimination tree). Force-eliminate via static pivoting.
+                    let orig_pos = perm[active_start];
+                    if orig_pos >= must_eliminate_start && orig_pos < orig_nfs {
+                        // Static pivoting: accept the diagonal as-is
+                        let akk = a[active_start * n + active_start];
+                        d_diag[nfs_elim] = akk;
+                        if akk.abs() > 1e-30 {
+                            let m = n - active_start - 1;
+                            for i in 0..m {
+                                work[i] = a[(active_start + 1 + i) * n + active_start] / akk;
+                                l_data[nfs_elim * n + (active_start + 1 + i)] = work[i];
+                            }
+                            for i in 0..m {
+                                let si = work[i] * akk;
+                                let base = (active_start + 1 + i) * n + (active_start + 1);
+                                for j in 0..m {
+                                    a[base + j] -= si * work[j];
+                                }
+                            }
                         }
+                        l_data[nfs_elim * n + active_start] = 1.0;
+                        nfs_elim += 1;
+                        k += 1;
+                    } else {
+                        // Normal delay: pass to parent via contribution block
+                        let last_fs = active_start + (orig_nfs - k) - 1;
+                        if active_start != last_fs {
+                            swap_full(&mut a, n, active_start, last_fs);
+                            perm.swap(active_start, last_fs);
+                            for j in 0..nfs_elim {
+                                l_data.swap(j * n + active_start, j * n + last_fs);
+                            }
+                        }
+                        k += 1;
                     }
-                    k += 1;
                 }
             }
         }

@@ -109,11 +109,12 @@ const BK_ALPHA: f64 = 0.6404;
 const ZERO_PIVOT_TOL: f64 = 1e-12;
 
 /// Default threshold for pivot acceptance in multifrontal factorization.
-/// A moderate threshold (1e-4) balances factorization quality against
-/// pivot acceptance for regularized zero-diagonal rows. With delta_c = 1e-4
-/// regularization, a -1e-4 diagonal vs O(1) off-diagonals gives ratio 1e-4,
-/// which just passes this threshold.
-pub const DEFAULT_PIVOT_THRESHOLD: f64 = 1e-4;
+/// Matches MUMPS CNTL(1) = 0.01 for SYM=2 (general symmetric indefinite).
+/// This threshold ensures constraint rows with tiny/zero diagonals are
+/// paired via 2x2 pivots rather than accepted as catastrophic 1x1 pivots.
+/// Ipopt uses 1e-6 with full MC64 scaling; until rmumps scaling reaches
+/// that quality, 0.01 provides more robust pivot decisions.
+pub const DEFAULT_PIVOT_THRESHOLD: f64 = 0.01;
 
 /// Pivot selection result.
 #[derive(Debug, Clone, Copy, PartialEq)]

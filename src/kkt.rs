@@ -346,8 +346,9 @@ pub fn factor_with_inertia_correction(
         // allow ±1 tolerance: Bunch-Kaufman pivoting can misclassify near-zero
         // eigenvalues at the positive/negative boundary, especially when n ≈ m.
         let inertia_ok = inertia.positive == n && inertia.negative == m && inertia.zero == 0;
+        let total = inertia.positive + inertia.negative + inertia.zero;
         let approx_ok = !inertia_ok && (n + m) >= 100 && inertia.zero == 0
-            && inertia.positive + inertia.negative == n + m
+            && (total as isize - (n + m) as isize).unsigned_abs() <= 2
             && (inertia.positive as isize - n as isize).unsigned_abs() <= 1
             && (inertia.negative as isize - m as isize).unsigned_abs() <= 1;
         if inertia_ok || approx_ok {
@@ -391,6 +392,32 @@ pub fn factor_with_inertia_correction(
         }
     }
 
+    // Before perturbation: try increasing factorization quality (Ipopt's IncreaseQuality).
+    // This escalates the pivot threshold (e.g., 1e-6 -> 1e-3 -> 0.03 -> 0.1), which can
+    // fix inertia by forcing better pivot choices without adding regularization.
+    // Like Ipopt, try this once before resorting to delta_w perturbation.
+    if solver.increase_quality() {
+        let inertia = solver.factor(&kkt.matrix)?;
+        if let Some(inertia) = inertia {
+            let inertia_ok = inertia.positive == n && inertia.negative == m && inertia.zero == 0;
+            let total = inertia.positive + inertia.negative + inertia.zero;
+            let approx_ok = !inertia_ok && (n + m) >= 100 && inertia.zero == 0
+                && (total as isize - (n + m) as isize).unsigned_abs() <= 2
+                && (inertia.positive as isize - n as isize).unsigned_abs() <= 1
+                && (inertia.negative as isize - m as isize).unsigned_abs() <= 1;
+            if inertia_ok || approx_ok {
+                if (n + m) >= 100 {
+                    params.delta_w_last = 0.0;
+                    return Ok((0.0, 0.0));
+                }
+                if check_factorization_backward_error(kkt, solver) {
+                    params.delta_w_last = 0.0;
+                    return Ok((0.0, 0.0));
+                }
+            }
+        }
+    }
+
     // Inertia is wrong or backward error too large — apply perturbation and re-factor
     let mut delta_w = if params.delta_w_last == 0.0 {
         params.delta_w_init
@@ -413,8 +440,9 @@ pub fn factor_with_inertia_correction(
 
         if let Some(inertia) = inertia {
             let exact_ok = inertia.positive == n && inertia.negative == m && inertia.zero == 0;
+            let total = inertia.positive + inertia.negative + inertia.zero;
             let approx_ok = !exact_ok && (n + m) >= 100 && inertia.zero == 0
-                && inertia.positive + inertia.negative == n + m
+                && (total as isize - (n + m) as isize).unsigned_abs() <= 2
                 && (inertia.positive as isize - n as isize).unsigned_abs() <= 1
                 && (inertia.negative as isize - m as isize).unsigned_abs() <= 1;
             if exact_ok || approx_ok {

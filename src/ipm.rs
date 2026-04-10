@@ -4430,7 +4430,12 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
         timings.line_search += t_ls.elapsed();
 
-        // Update dual variables (with damping for oscillating components)
+        // Update dual variables.
+        // Ipopt default: alpha_for_y = "primal" — use the accepted primal step length
+        // for the y (constraint multiplier) update. This prevents dual divergence on
+        // feasibility problems where y is undetermined and dy can be arbitrarily large.
+        // z_l/z_u/v_l/v_u still use alpha_dual (fraction-to-boundary on bound multipliers).
+        let alpha_y = state.alpha_primal;
         let alpha_d = alpha_dual_max;
         let near_convergence = state.consecutive_acceptable >= 1;
         for i in 0..m {
@@ -4450,7 +4455,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             } else {
                 state.dy[i]
             };
-            state.y[i] += alpha_d * dy_i;
+            state.y[i] += alpha_y * dy_i;
         }
         prev_dy = Some(state.dy.clone());
         // Ipopt kappa_sigma safeguard: keep z*s in [mu_ks/kappa_sigma, kappa_sigma*mu_ks]
