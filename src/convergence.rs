@@ -154,6 +154,24 @@ pub fn primal_infeasibility(g: &[f64], g_l: &[f64], g_u: &[f64]) -> f64 {
     sum_viol
 }
 
+/// Compute primal infeasibility using max-norm (infinity norm).
+///
+/// Returns the maximum absolute constraint violation across all constraints.
+/// Used for convergence testing where per-constraint satisfaction matters,
+/// while the 1-norm variant is used for filter line search decisions.
+pub fn primal_infeasibility_max(g: &[f64], g_l: &[f64], g_u: &[f64]) -> f64 {
+    let mut max_viol = 0.0f64;
+    for i in 0..g.len() {
+        if g[i] < g_l[i] {
+            max_viol = max_viol.max(g_l[i] - g[i]);
+        }
+        if g[i] > g_u[i] {
+            max_viol = max_viol.max(g[i] - g_u[i]);
+        }
+    }
+    max_viol
+}
+
 /// Compute dual infeasibility: ||grad_f - J^T * lambda - z_l + z_u||_inf.
 ///
 /// `grad_f`: gradient of objective

@@ -257,6 +257,8 @@ struct MuState {
     consecutive_restoration_failures: usize,
     /// Count of consecutive insufficient-progress iterations in Free mode.
     consecutive_insufficient: usize,
+    /// Sliding window of dual infeasibility values for stagnation detection.
+    dual_inf_window: Vec<f64>,
 }
 
 impl MuState {
@@ -270,6 +272,7 @@ impl MuState {
             first_iter_in_mode: true,
             consecutive_restoration_failures: 0,
             consecutive_insufficient: 0,
+            dual_inf_window: Vec::with_capacity(4),
         }
     }
 
@@ -2477,7 +2480,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
 
         // Compute optimality measures.
+        // Use 1-norm for filter/iteration log, max-norm for convergence testing.
         let primal_inf = state.constraint_violation();
+        let primal_inf_max = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
 
         // Compute z_opt from stationarity for the scaled convergence check.
         // At optimality, grad_f + J^T y - z_l + z_u = 0.
@@ -2587,9 +2592,10 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
         let multiplier_count = m + 2 * n;
 
-        // Check convergence (use best complementarity: min of iterative z and z_opt)
+        // Check convergence (use best complementarity: min of iterative z and z_opt).
+        // Use max-norm primal_inf for convergence testing (per-constraint satisfaction).
         let conv_info = ConvergenceInfo {
-            primal_inf,
+            primal_inf: primal_inf_max,
             dual_inf,
             dual_inf_unscaled,
             dual_inf_unscaled_opt,
@@ -2661,7 +2667,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         state.z_l.copy_from_slice(&avg_zl);
                         state.z_u.copy_from_slice(&avg_zu);
                         state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-                        let avg_pr = convergence::primal_infeasibility(&state.g, &state.g_l, &state.g_u);
+                        let avg_pr = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
                         let avg_du = convergence::dual_infeasibility(
                             &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
                             &avg_y, &avg_zl, &avg_zu, n,
@@ -2905,10 +2911,10 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         // for 30 iterations regardless of step size.
         // Only activate after 50 iterations to avoid tripping during early phases.
         if iteration > 50 && options.stall_iter_limit > 0 {
-            let pr_improved = primal_inf < 0.99 * stall_best_pr;
+            let pr_improved = primal_inf_max < 0.99 * stall_best_pr;
             let du_improved = dual_inf < 0.99 * stall_best_du;
             if pr_improved {
-                stall_best_pr = primal_inf;
+                stall_best_pr = primal_inf_max;
             }
             if du_improved {
                 stall_best_du = dual_inf;
@@ -2925,10 +2931,32 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     // Before declaring NumericalError, check if the current point
                     // is near-tolerance (1000x tol). Such points are close but not optimal.
                     let stall_near_tol = options.tol * 1000.0;
-                    let stall_pr_ok = primal_inf <= stall_near_tol.max(10.0 * options.constr_viol_tol);
+                    let stall_pr_ok = primal_inf_max <= stall_near_tol.max(10.0 * options.constr_viol_tol);
                     let stall_du_ok = dual_inf <= (stall_near_tol * s_d_for_acc).max(1e-2);
                     let stall_co_ok = compl_inf_best <= (stall_near_tol * s_d_for_acc).max(1e-2);
                     if stall_pr_ok && stall_du_ok && stall_co_ok {
+                        // Near tolerance stall: try boosting mu if it's very small
+                        // relative to primal_inf. This restores KKT regularization
+                        // when mu has outrun feasibility.
+                        if state.mu < primal_inf_max * 0.01 && primal_inf_max > options.constr_viol_tol {
+                            let new_mu = (primal_inf_max * 0.1).max(1e-6);
+                            if options.print_level >= 3 {
+                                rip_log!(
+                                    "ripopt: Near-tolerance stall: boosting mu {:.2e} -> {:.2e} (pr_max={:.2e})",
+                                    state.mu, new_mu, primal_inf_max
+                                );
+                            }
+                            state.mu = new_mu;
+                            filter.reset();
+                            let theta_new = state.constraint_violation();
+                            filter.set_theta_min_from_initial(theta_new);
+                            stall_no_progress_count = 0;
+                            stall_best_pr = f64::INFINITY;
+                            stall_best_du = f64::INFINITY;
+                            mu_state.mode = MuMode::Fixed;
+                            mu_state.first_iter_in_mode = true;
+                            continue;
+                        }
                         // In Fixed (monotone) mode, stalling near tolerance means the barrier
                         // subproblem is solved at the current mu — force a mu decrease to
                         // continue toward the NLP optimum instead of returning NumericalError.
@@ -3007,8 +3035,8 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         let stall_fdu_tol = (stall_near_tol * fsd).max(1e-2);
                         let stall_fco_tol = (stall_near_tol * fsd).max(1e-2);
                         let stall_fpr_tol = stall_near_tol.max(10.0 * options.constr_viol_tol);
-                        // Scaled gate with optimal duals
-                        let sc = primal_inf <= stall_fpr_tol
+                        // Scaled gate with optimal duals (use max-norm for primal)
+                        let sc = primal_inf_max <= stall_fpr_tol
                             && opt_du <= stall_fdu_tol
                             && opt_co_best <= stall_fco_tol;
                         // Unscaled gate with original duals (component-wise scaled)
@@ -3016,7 +3044,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
                             &state.y, &state.z_l, &state.z_u, n,
                         );
-                        let usc = primal_inf <= 10.0 * options.constr_viol_tol
+                        let usc = primal_inf_max <= 10.0 * options.constr_viol_tol
                             && du_u <= 10.0 * options.dual_inf_tol
                             && opt_co_best <= 10.0 * options.compl_inf_tol;
                         if sc && usc {
@@ -3028,6 +3056,30 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             }
                             return make_result(&state, SolveStatus::NumericalError);
                         }
+                    }
+                    // Before terminating: if primal is close but mu is very small,
+                    // boost mu to restore KKT regularization for dual convergence.
+                    // This addresses the "mu outrunning feasibility" pattern where
+                    // mu=1e-11 while primal_inf=O(1e-3) causes the Newton system
+                    // to lose the barrier contribution needed to close the dual gap.
+                    if primal_inf_max < 0.1 && state.mu < primal_inf_max * 0.01 {
+                        let new_mu = (primal_inf_max * 0.1).max(1e-6);
+                        if options.print_level >= 3 {
+                            rip_log!(
+                                "ripopt: Stall recovery: boosting mu {:.2e} -> {:.2e} (pr_max={:.2e})",
+                                state.mu, new_mu, primal_inf_max
+                            );
+                        }
+                        state.mu = new_mu;
+                        filter.reset();
+                        let theta_new = state.constraint_violation();
+                        filter.set_theta_min_from_initial(theta_new);
+                        stall_no_progress_count = 0;
+                        stall_best_pr = f64::INFINITY;
+                        stall_best_du = f64::INFINITY;
+                        mu_state.mode = MuMode::Fixed;
+                        mu_state.first_iter_in_mode = true;
+                        continue;
                     }
                     if options.print_level >= 3 {
                         rip_log!(
@@ -3653,7 +3705,37 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 }
             }
 
-            let dir_result = kkt::solve_for_direction(kkt_system_opt.as_ref().unwrap(), lin_solver.as_mut(), ic_delta_w, ic_delta_c);
+            // Solve with pretend-singular retry: if backward error is too large,
+            // increase delta_w and re-factorize (Ipopt's PerturbForSingularity path).
+            let mut dir_result = kkt::solve_for_direction(kkt_system_opt.as_ref().unwrap(), lin_solver.as_mut(), ic_delta_w, ic_delta_c);
+            for _ps_retry in 0..2 {
+                if !matches!(dir_result, Err(crate::linear_solver::SolverError::PretendSingular)) {
+                    break;
+                }
+                log::debug!("Pretend-singular retry: increasing delta_w from {:.2e}", ic_delta_w);
+                ic_delta_w = if ic_delta_w == 0.0 { inertia_params.delta_w_init } else { ic_delta_w * inertia_params.delta_w_growth };
+                if ic_delta_c == 0.0 && m > 0 { ic_delta_c = inertia_params.delta_c_base; }
+                // Also activate scaling if not already
+                if !inertia_params.use_scaling {
+                    inertia_params.use_scaling = true;
+                }
+                if let Some(ref mut kkt_system) = kkt_system_opt {
+                    let mut perturbed = kkt_system.matrix.clone();
+                    perturbed.add_diagonal_range(0, n, ic_delta_w);
+                    if m > 0 {
+                        perturbed.add_diagonal_range(n, n + m, -ic_delta_c);
+                    }
+                    if lin_solver.factor(&perturbed).is_ok() {
+                        kkt_system.matrix = perturbed;
+                        inertia_params.delta_w_last = ic_delta_w;
+                        dir_result = kkt::solve_for_direction(kkt_system, lin_solver.as_mut(), ic_delta_w, ic_delta_c);
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
             let (mut dx_dir, mut dy_dir) = match dir_result {
                 Ok(d) => d,
                 Err(e) => {
@@ -4619,6 +4701,20 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
             let sufficient = mu_state.check_sufficient_progress(kkt_error);
 
+            // Track dual infeasibility for stagnation detection.
+            // If du is not decreasing over 3 consecutive iterations in Free mode,
+            // force switch to Fixed mode with mu = 0.8 * avg_compl.
+            {
+                let du_now = convergence::dual_infeasibility(
+                    &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+                    &state.y, &state.z_l, &state.z_u, n,
+                );
+                if mu_state.dual_inf_window.len() >= 3 {
+                    mu_state.dual_inf_window.remove(0);
+                }
+                mu_state.dual_inf_window.push(du_now);
+            }
+
             match mu_state.mode {
                 MuMode::Free => {
                     // Consume Mehrotra sigma for use as quality function candidate
@@ -4690,9 +4786,23 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         let theta_new = state.constraint_violation();
                         filter.set_theta_min_from_initial(theta_new);
                     } else {
+                        // Also check dual infeasibility stagnation: if du is not improving
+                        // over 3 consecutive iterations, force the switch to Fixed mode
+                        // even if consecutive_insufficient < 2.
+                        let du_stagnant = if mu_state.dual_inf_window.len() >= 3 {
+                            let w = &mu_state.dual_inf_window;
+                            let recent = w[w.len()-1];
+                            let oldest = w[w.len()-3];
+                            // Stagnant if recent du is >=90% of oldest (not improving)
+                            // and du is still large relative to tolerance
+                            recent >= 0.9 * oldest && recent > options.tol * 100.0
+                        } else {
+                            false
+                        };
                         mu_state.consecutive_insufficient += 1;
-                        if mu_state.consecutive_insufficient >= 2 {
+                        if mu_state.consecutive_insufficient >= 2 || du_stagnant {
                             // Switch to fixed mode after 2 consecutive insufficient iterations
+                            // or when dual infeasibility is stagnant
                             mu_state.consecutive_insufficient = 0;
                             log::debug!("Switching to fixed mu mode (insufficient progress or tiny step)");
                             state.diagnostics.mu_mode_switches += 1;
@@ -4824,7 +4934,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
     // At max_iter: log convergence diagnostics using same z_opt as convergence check (with gate)
     {
-        let final_primal_inf = state.constraint_violation();
+        let final_primal_inf = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
         let (z_l_opt_final, z_u_opt_final) = {
             let mut grad_jty = state.grad_f.clone();
             for (idx, (&row, &col)) in
@@ -5806,7 +5916,16 @@ fn compute_barrier_error(state: &SolverState) -> f64 {
     // Primal infeasibility
     let primal_err = state.constraint_violation();
 
-    dual_err.max(compl_err).max(primal_err)
+    // Dual infeasibility safeguard: prevent the barrier subproblem from being
+    // declared "solved" when the NLP dual infeasibility is still large.
+    // This prevents mu from collapsing to 1e-11 while du remains huge (issue #8 Class 2).
+    let unscaled_du = convergence::dual_infeasibility(
+        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+        &state.y, &state.z_l, &state.z_u, n,
+    );
+    let du_floor = unscaled_du * 0.1; // 10% of unscaled du as floor on barrier error
+
+    dual_err.max(compl_err).max(primal_err).max(du_floor)
 }
 
 /// Strategy 3: Try active set identification + reduced KKT solve.
@@ -5994,8 +6113,8 @@ fn try_active_set_solve<P: NlpProblem>(
         }
     }
 
-    // Check strict convergence
-    let primal_inf = state.constraint_violation();
+    // Check strict convergence (use max-norm for primal infeasibility)
+    let primal_inf = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
     let dual_inf = convergence::dual_infeasibility(
         &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
         &state.y, &state.z_l, &state.z_u, n,
@@ -6133,7 +6252,7 @@ fn make_result(state: &SolverState, status: SolveStatus) -> SolveResult {
     // Fill in final convergence measures for diagnostics
     let mut diag = state.diagnostics.clone();
     diag.final_mu = state.mu;
-    diag.final_primal_inf = state.constraint_violation();
+    diag.final_primal_inf = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
     diag.final_dual_inf = convergence::dual_infeasibility(
         &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
         &state.y, &state.z_l, &state.z_u, n,
