@@ -3705,37 +3705,8 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 }
             }
 
-            // Solve with pretend-singular retry: if backward error is too large,
-            // increase delta_w and re-factorize (Ipopt's PerturbForSingularity path).
-            let mut dir_result = kkt::solve_for_direction(kkt_system_opt.as_ref().unwrap(), lin_solver.as_mut(), ic_delta_w, ic_delta_c);
-            for _ps_retry in 0..2 {
-                if !matches!(dir_result, Err(crate::linear_solver::SolverError::PretendSingular)) {
-                    break;
-                }
-                log::debug!("Pretend-singular retry: increasing delta_w from {:.2e}", ic_delta_w);
-                ic_delta_w = if ic_delta_w == 0.0 { inertia_params.delta_w_init } else { ic_delta_w * inertia_params.delta_w_growth };
-                if ic_delta_c == 0.0 && m > 0 { ic_delta_c = inertia_params.delta_c_base; }
-                // Also activate scaling if not already
-                if !inertia_params.use_scaling {
-                    inertia_params.use_scaling = true;
-                }
-                if let Some(ref mut kkt_system) = kkt_system_opt {
-                    let mut perturbed = kkt_system.matrix.clone();
-                    perturbed.add_diagonal_range(0, n, ic_delta_w);
-                    if m > 0 {
-                        perturbed.add_diagonal_range(n, n + m, -ic_delta_c);
-                    }
-                    if lin_solver.factor(&perturbed).is_ok() {
-                        kkt_system.matrix = perturbed;
-                        inertia_params.delta_w_last = ic_delta_w;
-                        dir_result = kkt::solve_for_direction(kkt_system, lin_solver.as_mut(), ic_delta_w, ic_delta_c);
-                    } else {
-                        break;
-                    }
-                } else {
-                    break;
-                }
-            }
+            // Solve for the search direction using the factored KKT system.
+            let dir_result = kkt::solve_for_direction(kkt_system_opt.as_ref().unwrap(), lin_solver.as_mut(), ic_delta_w, ic_delta_c);
             let (mut dx_dir, mut dy_dir) = match dir_result {
                 Ok(d) => d,
                 Err(e) => {
