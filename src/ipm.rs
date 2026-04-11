@@ -3705,16 +3705,42 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 }
             }
 
-            // Solve with pretend-singular retry (Ipopt's PerturbForSingularity path):
-            // If residual ratio > 1e-5 after iterative refinement, the system is
-            // numerically singular despite correct inertia. Try delta_c first
-            // (Jacobian singularity), then delta_w (Hessian singularity).
+            // Solve with Ipopt-style quality escalation and pretend-singular retry.
+            // Chain (matching Ipopt's PDFullSpaceSolver):
+            //   1. solve + iterative refinement
+            //   2. if poor quality: IncreaseQuality (scaling, then pivot escalation) → re-factor → re-solve
+            //   3. if still poor: PerturbForSingularity (delta_c, then delta_w) → re-factor → re-solve
+            //   4. accept whatever we have
             let mut dir_result = kkt::solve_for_direction(kkt_system_opt.as_ref().unwrap(), lin_solver.as_mut(), ic_delta_w, ic_delta_c);
             if matches!(dir_result, Err(crate::linear_solver::SolverError::PretendSingular)) {
                 if let Some(ref mut kkt_system) = kkt_system_opt {
                     let mut ps_resolved = false;
+
+                    // Step 0 (Ipopt's IncreaseQuality): try improving factorization
+                    // quality WITHOUT perturbation. Activates scaling first, then
+                    // raises pivot tolerance — matching Ipopt's TSymLinearSolver chain.
+                    if !ps_resolved {
+                        // First: activate Ruiz scaling if not already on
+                        if !inertia_params.use_scaling && kkt_system.scale_factors.is_none() {
+                            inertia_params.use_scaling = true;
+                            let scale = kkt::ruiz_equilibrate(&mut kkt_system.matrix, &mut kkt_system.rhs);
+                            kkt_system.scale_factors = Some(scale);
+                            if lin_solver.factor(&kkt_system.matrix).is_ok() {
+                                dir_result = kkt::solve_for_direction(kkt_system, lin_solver.as_mut(), ic_delta_w, ic_delta_c);
+                                ps_resolved = !matches!(dir_result, Err(crate::linear_solver::SolverError::PretendSingular));
+                            }
+                        }
+                        // Second: raise pivot tolerance (if scaling alone wasn't enough)
+                        if !ps_resolved && lin_solver.increase_quality() {
+                            if lin_solver.factor(&kkt_system.matrix).is_ok() {
+                                dir_result = kkt::solve_for_direction(kkt_system, lin_solver.as_mut(), ic_delta_w, ic_delta_c);
+                                ps_resolved = !matches!(dir_result, Err(crate::linear_solver::SolverError::PretendSingular));
+                            }
+                        }
+                    }
+
                     // Step 1: try delta_c only (constraint perturbation) if constrained
-                    if m > 0 && ic_delta_c == 0.0 {
+                    if !ps_resolved && m > 0 && ic_delta_c == 0.0 {
                         let dc = inertia_params.delta_c_base;
                         let mut perturbed = kkt_system.matrix.clone();
                         perturbed.add_diagonal_range(n, n + m, -dc);

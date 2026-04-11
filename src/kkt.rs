@@ -276,20 +276,36 @@ pub fn compute_sigma(
 /// Apply Ruiz iterative equilibration to a KKT matrix and RHS.
 ///
 /// Computes diagonal scaling D such that the scaled matrix D*A*D has
-/// approximately equal row/column infinity norms. This improves pivot
-/// selection quality and factorization accuracy.
+/// approximately equal row/column norms. This improves pivot selection
+/// quality and factorization accuracy.
 ///
 /// Returns the cumulative scaling factors. After solving the scaled system,
 /// the solution must be unscaled: x_original[i] = scale[i] * x_scaled[i].
 ///
-/// Algorithm (Ruiz & Ucar, 2001): 3 iterations of inf-norm equilibration.
+/// Matches MUMPS SimScale schedule (KEEP(52)=7 for SYM=2):
+/// 1 iteration of inf-norm equilibration + 3 iterations of one-norm equilibration.
+/// Reference: Ruiz & Ucar, "A symmetry preserving algorithm for matrix scaling".
 pub fn ruiz_equilibrate(matrix: &mut KktMatrix, rhs: &mut [f64]) -> Vec<f64> {
     let dim = matrix.n();
     let mut cumulative = vec![1.0; dim];
-    let n_iters = 3;
 
-    for _ in 0..n_iters {
+    // Phase 1: 1 iteration of inf-norm equilibration (row max-norm)
+    {
         let norms = matrix.row_abs_max();
+        for k in 0..dim {
+            let norm_k = norms[k];
+            if norm_k > 1e-30 {
+                let s = 1.0 / norm_k.sqrt();
+                matrix.scale_row_col(k, s);
+                rhs[k] *= s;
+                cumulative[k] *= s;
+            }
+        }
+    }
+
+    // Phase 2: 3 iterations of one-norm equilibration (row sum-norm)
+    for _ in 0..3 {
+        let norms = matrix.row_abs_sum();
         for k in 0..dim {
             let norm_k = norms[k];
             if norm_k > 1e-30 {
@@ -707,7 +723,8 @@ pub fn solve_for_direction(
     // a preconditioner. This converges to the solution of the original system.
     // Use more refinement iterations for large systems where factorization accuracy
     // may be limited, and for IC-refinement where we're solving a different system.
-    let max_refinements = if use_ic_refinement || (kkt.n + kkt.m) >= 100 { 10 } else { 5 };
+    // Ipopt's default: max_refinement_steps = 10, min_refinement_steps = 1.
+    let max_refinements = 10;
     let mut residual = vec![0.0; dim];
     let mut prev_res_norm = f64::MAX;
     for _ref_iter in 0..max_refinements {
@@ -728,9 +745,12 @@ pub fn solve_for_direction(
             break;
         }
 
-        // Stagnation detection: stop if not improving (only for IC-regularized path
-        // where refinement against the original may stagnate due to preconditioning mismatch)
-        if use_ic_refinement && res_norm > 0.9 * prev_res_norm {
+        // Stagnation detection: stop if not improving.
+        // IC path: 0.9 (aggressive, preconditioning mismatch expected).
+        // Non-IC path: 1.0 - 1e-6 (Ipopt uses 1 - 1e-9; stop only if
+        // refinement makes no progress, allowing slow but steady convergence).
+        let stagnation_factor = if use_ic_refinement { 0.9 } else { 1.0 - 1e-6 };
+        if res_norm > stagnation_factor * prev_res_norm {
             break;
         }
         prev_res_norm = res_norm;

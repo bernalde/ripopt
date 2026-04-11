@@ -168,6 +168,23 @@ impl SymmetricMatrix {
         norms
     }
 
+    /// Compute the one-norm (absolute sum) of each row/column (identical for symmetric matrices).
+    /// Returns a vector of length n where entry k = sum_j |A_{k,j}|.
+    pub fn row_abs_sum(&self) -> Vec<f64> {
+        let n = self.n;
+        let mut norms = vec![0.0f64; n];
+        for j in 0..n {
+            let ajj = self.data[Self::packed_index(n, j, j)].abs();
+            norms[j] += ajj;
+            for i in (j + 1)..n {
+                let aij = self.data[Self::packed_index(n, i, j)].abs();
+                norms[i] += aij;
+                norms[j] += aij;
+            }
+        }
+        norms
+    }
+
     /// Scale row k and column k by alpha (symmetric scaling: A' = D*A*D where D\[k\]=alpha).
     /// Diagonal (k,k) is scaled by alpha^2, off-diagonals by alpha.
     pub fn scale_row_col(&mut self, k: usize, alpha: f64) {
@@ -392,6 +409,21 @@ impl SparseSymmetricMatrix {
         norms
     }
 
+    /// Compute the one-norm (absolute sum) of each row/column (identical for symmetric matrices).
+    pub fn row_abs_sum(&self) -> Vec<f64> {
+        let mut norms = vec![0.0f64; self.n];
+        for k in 0..self.triplet_rows.len() {
+            let i = self.triplet_rows[k];
+            let j = self.triplet_cols[k];
+            let v = self.triplet_vals[k].abs();
+            norms[i] += v;
+            if i != j {
+                norms[j] += v;
+            }
+        }
+        norms
+    }
+
     /// Scale row k and column k by alpha (symmetric scaling).
     /// For triplet (i, j, v): if i==k or j==k, multiply v by alpha.
     /// If both i==k and j==k (diagonal), multiply by alpha^2.
@@ -512,6 +544,14 @@ impl KktMatrix {
         match self {
             KktMatrix::Dense(d) => d.row_abs_max(),
             KktMatrix::Sparse(s) => s.row_abs_max(),
+        }
+    }
+
+    /// Compute the one-norm (absolute sum) of each row/column.
+    pub fn row_abs_sum(&self) -> Vec<f64> {
+        match self {
+            KktMatrix::Dense(d) => d.row_abs_sum(),
+            KktMatrix::Sparse(s) => s.row_abs_sum(),
         }
     }
 
