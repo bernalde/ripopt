@@ -42,6 +42,9 @@ pub enum SolverError {
     NumericalFailure(String),
     /// Dimension mismatch.
     DimensionMismatch { expected: usize, got: usize },
+    /// Factorization has correct inertia but solve residual ratio is too large.
+    /// Signals the caller to increase perturbation and re-factorize (Ipopt's pretend_singular).
+    PretendSingular,
 }
 
 impl fmt::Display for SolverError {
@@ -52,6 +55,7 @@ impl fmt::Display for SolverError {
             SolverError::DimensionMismatch { expected, got } => {
                 write!(f, "dimension mismatch: expected {}, got {}", expected, got)
             }
+            SolverError::PretendSingular => write!(f, "pretend singular (residual ratio too large)"),
         }
     }
 }
@@ -145,6 +149,23 @@ impl SymmetricMatrix {
                 y[j] += aij * x[i];
             }
         }
+    }
+
+    /// Compute the infinity norm of each row/column (identical for symmetric matrices).
+    /// Returns a vector of length n where entry k = max_j |A_{k,j}|.
+    pub fn row_abs_max(&self) -> Vec<f64> {
+        let n = self.n;
+        let mut norms = vec![0.0f64; n];
+        for j in 0..n {
+            let ajj = self.data[Self::packed_index(n, j, j)].abs();
+            norms[j] = norms[j].max(ajj);
+            for i in (j + 1)..n {
+                let aij = self.data[Self::packed_index(n, i, j)].abs();
+                norms[i] = norms[i].max(aij);
+                norms[j] = norms[j].max(aij);
+            }
+        }
+        norms
     }
 
     /// Scale row k and column k by alpha (symmetric scaling: A' = D*A*D where D\[k\]=alpha).
@@ -356,6 +377,21 @@ impl SparseSymmetricMatrix {
         }
     }
 
+    /// Compute the infinity norm of each row/column (identical for symmetric matrices).
+    pub fn row_abs_max(&self) -> Vec<f64> {
+        let mut norms = vec![0.0f64; self.n];
+        for k in 0..self.triplet_rows.len() {
+            let i = self.triplet_rows[k];
+            let j = self.triplet_cols[k];
+            let v = self.triplet_vals[k].abs();
+            norms[i] = norms[i].max(v);
+            if i != j {
+                norms[j] = norms[j].max(v);
+            }
+        }
+        norms
+    }
+
     /// Scale row k and column k by alpha (symmetric scaling).
     /// For triplet (i, j, v): if i==k or j==k, multiply v by alpha.
     /// If both i==k and j==k (diagonal), multiply by alpha^2.
@@ -471,6 +507,14 @@ impl KktMatrix {
     }
 
     /// Scale row k and column k by alpha (symmetric scaling).
+    /// Compute the infinity norm of each row/column.
+    pub fn row_abs_max(&self) -> Vec<f64> {
+        match self {
+            KktMatrix::Dense(d) => d.row_abs_max(),
+            KktMatrix::Sparse(s) => s.row_abs_max(),
+        }
+    }
+
     pub fn scale_row_col(&mut self, k: usize, alpha: f64) {
         match self {
             KktMatrix::Dense(d) => d.scale_row_col(k, alpha),

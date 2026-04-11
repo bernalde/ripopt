@@ -3705,8 +3705,49 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 }
             }
 
-            // Solve for the search direction using the factored KKT system.
-            let dir_result = kkt::solve_for_direction(kkt_system_opt.as_ref().unwrap(), lin_solver.as_mut(), ic_delta_w, ic_delta_c);
+            // Solve with pretend-singular retry (Ipopt's PerturbForSingularity path):
+            // If residual ratio > 1e-5 after iterative refinement, the system is
+            // numerically singular despite correct inertia. Try delta_c first
+            // (Jacobian singularity), then delta_w (Hessian singularity).
+            let mut dir_result = kkt::solve_for_direction(kkt_system_opt.as_ref().unwrap(), lin_solver.as_mut(), ic_delta_w, ic_delta_c);
+            if matches!(dir_result, Err(crate::linear_solver::SolverError::PretendSingular)) {
+                if let Some(ref mut kkt_system) = kkt_system_opt {
+                    let mut ps_resolved = false;
+                    // Step 1: try delta_c only (constraint perturbation) if constrained
+                    if m > 0 && ic_delta_c == 0.0 {
+                        let dc = inertia_params.delta_c_base;
+                        let mut perturbed = kkt_system.matrix.clone();
+                        perturbed.add_diagonal_range(n, n + m, -dc);
+                        if lin_solver.factor(&perturbed).is_ok() {
+                            kkt_system.matrix = perturbed;
+                            ic_delta_c = dc;
+                            dir_result = kkt::solve_for_direction(kkt_system, lin_solver.as_mut(), ic_delta_w, ic_delta_c);
+                            ps_resolved = !matches!(dir_result, Err(crate::linear_solver::SolverError::PretendSingular));
+                        }
+                    }
+                    // Step 2: if delta_c didn't help, try delta_w (Hessian perturbation)
+                    if !ps_resolved && matches!(dir_result, Err(crate::linear_solver::SolverError::PretendSingular)) {
+                        let dw = if ic_delta_w == 0.0 { inertia_params.delta_w_init } else { ic_delta_w * inertia_params.delta_w_growth };
+                        let dc = if m > 0 && ic_delta_c == 0.0 { inertia_params.delta_c_base } else { ic_delta_c };
+                        let mut perturbed = kkt_system.matrix.clone();
+                        perturbed.add_diagonal_range(0, n, dw);
+                        if m > 0 && dc > ic_delta_c {
+                            perturbed.add_diagonal_range(n, n + m, -(dc - ic_delta_c));
+                        }
+                        if lin_solver.factor(&perturbed).is_ok() {
+                            kkt_system.matrix = perturbed;
+                            ic_delta_w = dw;
+                            ic_delta_c = dc;
+                            inertia_params.delta_w_last = dw;
+                            dir_result = kkt::solve_for_direction(kkt_system, lin_solver.as_mut(), ic_delta_w, ic_delta_c);
+                        }
+                    }
+                    // Activate scaling for future iterations
+                    if !inertia_params.use_scaling {
+                        inertia_params.use_scaling = true;
+                    }
+                }
+            }
             let (mut dx_dir, mut dy_dir) = match dir_result {
                 Ok(d) => d,
                 Err(e) => {

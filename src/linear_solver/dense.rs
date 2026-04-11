@@ -26,6 +26,9 @@ pub struct DenseLdl {
     factored: bool,
     /// Tolerance for determining zero pivots.
     zero_pivot_tol: f64,
+    /// Bunch-Kaufman pivot threshold alpha. Default = (1+sqrt(17))/8 ≈ 0.64.
+    /// Higher values give more numerical pivoting (better accuracy, more fill).
+    pivot_alpha: f64,
 }
 
 impl Default for DenseLdl {
@@ -45,6 +48,7 @@ impl DenseLdl {
             perm_inv: Vec::new(),
             factored: false,
             zero_pivot_tol: 1e-12,
+            pivot_alpha: (1.0 + 17.0_f64.sqrt()) / 8.0,
         }
     }
 
@@ -86,8 +90,8 @@ impl DenseLdl {
             }
         }
 
-        // Bunch-Kaufman alpha parameter
-        let alpha = (1.0 + 17.0_f64.sqrt()) / 8.0;
+        // Bunch-Kaufman alpha parameter (configurable for quality escalation)
+        let alpha = self.pivot_alpha;
 
         let mut k = 0;
         while k < n {
@@ -476,6 +480,22 @@ impl LinearSolver for DenseLdl {
 
     fn min_diagonal(&self) -> Option<f64> {
         DenseLdl::min_diagonal(self)
+    }
+
+    fn increase_quality(&mut self) -> bool {
+        // Escalate pivot threshold: 0.64 → 0.8 → 0.95 → 1.0 (full pivoting).
+        // Higher alpha means more numerical pivoting (better accuracy at cost of fill).
+        let next = if self.pivot_alpha < 0.7 {
+            0.8
+        } else if self.pivot_alpha < 0.9 {
+            0.95
+        } else if self.pivot_alpha < 0.99 {
+            1.0
+        } else {
+            return false; // Already at maximum
+        };
+        self.pivot_alpha = next;
+        true
     }
 }
 

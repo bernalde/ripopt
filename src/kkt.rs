@@ -17,6 +17,9 @@ pub struct KktSystem {
     /// Stored as positive values; the matrix gets -delta_c_diag\[i\] on diagonal (n+i, n+i).
     /// Used by iterative refinement to recover the original (unregularized) matvec.
     pub delta_c_diag: Vec<f64>,
+    /// Ruiz equilibration scaling factors. When active, the factored system is
+    /// D*A*D and the solution must be unscaled: x[i] = scale[i] * x_scaled[i].
+    pub scale_factors: Option<Vec<f64>>,
 }
 
 /// Assemble the augmented KKT matrix:
@@ -241,6 +244,7 @@ pub fn assemble_kkt(
         matrix,
         rhs,
         delta_c_diag,
+        scale_factors: None,
     }
 }
 
@@ -269,6 +273,37 @@ pub fn compute_sigma(
     sigma
 }
 
+/// Apply Ruiz iterative equilibration to a KKT matrix and RHS.
+///
+/// Computes diagonal scaling D such that the scaled matrix D*A*D has
+/// approximately equal row/column infinity norms. This improves pivot
+/// selection quality and factorization accuracy.
+///
+/// Returns the cumulative scaling factors. After solving the scaled system,
+/// the solution must be unscaled: x_original[i] = scale[i] * x_scaled[i].
+///
+/// Algorithm (Ruiz & Ucar, 2001): 3 iterations of inf-norm equilibration.
+pub fn ruiz_equilibrate(matrix: &mut KktMatrix, rhs: &mut [f64]) -> Vec<f64> {
+    let dim = matrix.n();
+    let mut cumulative = vec![1.0; dim];
+    let n_iters = 3;
+
+    for _ in 0..n_iters {
+        let norms = matrix.row_abs_max();
+        for k in 0..dim {
+            let norm_k = norms[k];
+            if norm_k > 1e-30 {
+                let s = 1.0 / norm_k.sqrt();
+                matrix.scale_row_col(k, s);
+                rhs[k] *= s;
+                cumulative[k] *= s;
+            }
+        }
+    }
+
+    cumulative
+}
+
 /// Parameters for inertia correction.
 pub struct InertiaCorrectionParams {
     /// Initial primal regularization.
@@ -281,6 +316,13 @@ pub struct InertiaCorrectionParams {
     pub max_attempts: usize,
     /// Last successful delta_w (for warm-starting perturbation).
     pub delta_w_last: f64,
+    /// Whether scaling is active (activated on demand when backward error is poor).
+    pub use_scaling: bool,
+    /// Count of consecutive iterations that needed perturbation (delta_w > 0).
+    pub degeneracy_count: usize,
+    /// True when the Hessian is structurally degenerate (always needs delta_w > 0).
+    /// Skips the unperturbed factorization trial to save wasted work.
+    pub structurally_degenerate: bool,
 }
 
 impl Default for InertiaCorrectionParams {
@@ -291,6 +333,9 @@ impl Default for InertiaCorrectionParams {
             delta_w_growth: 4.0,
             max_attempts: 15,
             delta_w_last: 0.0,
+            use_scaling: false,
+            degeneracy_count: 0,
+            structurally_degenerate: false,
         }
     }
 }
@@ -349,7 +394,16 @@ pub fn factor_with_inertia_correction(
     let n = kkt.n;
     let m = kkt.m;
 
-    // First attempt: factor without perturbation
+    // Apply Ruiz equilibration when scaling is active (activated on demand).
+    if params.use_scaling {
+        let scale = ruiz_equilibrate(&mut kkt.matrix, &mut kkt.rhs);
+        kkt.scale_factors = Some(scale);
+    }
+
+    // First attempt: factor without perturbation.
+    // Skip when structurally degenerate (Hessian always needs delta_w > 0) —
+    // jump directly to perturbation loop to save a wasted factorization.
+    if !params.structurally_degenerate {
     let inertia = solver.factor(&kkt.matrix)?;
 
     if let Some(inertia) = inertia {
@@ -369,14 +423,30 @@ pub fn factor_with_inertia_correction(
             // recovers solve accuracy; the factorization just needs correct inertia.
             if (n + m) >= 100 {
                 params.delta_w_last = 0.0;
+                params.degeneracy_count = 0;
                 return Ok((0.0, 0.0));
             }
             // For small systems: verify backward error is acceptable
             if check_factorization_backward_error(kkt, solver) {
                 params.delta_w_last = 0.0;
+                params.degeneracy_count = 0;
                 return Ok((0.0, 0.0));
             }
-            // Backward error too large — fall through to regularization
+            // Backward error too large — try activating scaling before regularization
+            if !params.use_scaling && kkt.scale_factors.is_none() {
+                params.use_scaling = true;
+                let scale = ruiz_equilibrate(&mut kkt.matrix, &mut kkt.rhs);
+                kkt.scale_factors = Some(scale);
+                let inertia2 = solver.factor(&kkt.matrix)?;
+                if let Some(inertia2) = inertia2 {
+                    let inertia_ok2 = inertia2.positive == n && inertia2.negative == m && inertia2.zero == 0;
+                    if inertia_ok2 && check_factorization_backward_error(kkt, solver) {
+                        params.delta_w_last = 0.0;
+                        params.degeneracy_count = 0;
+                        return Ok((0.0, 0.0));
+                    }
+                }
+            }
         }
     }
 
@@ -396,6 +466,8 @@ pub fn factor_with_inertia_correction(
                     if inertia.positive == n && inertia.negative == 0 && inertia.zero == 0 {
                         kkt.matrix = perturbed;
                         params.delta_w_last = delta_w_direct;
+                        params.degeneracy_count += 1;
+                        if params.degeneracy_count >= 3 { params.structurally_degenerate = true; }
                         return Ok((delta_w_direct, 0.0));
                     }
                 }
@@ -470,6 +542,8 @@ pub fn factor_with_inertia_correction(
         }
     }
 
+    } // end if !structurally_degenerate
+
     // Inertia is wrong or backward error too large — apply perturbation and re-factor
     let mut delta_w = if params.delta_w_last == 0.0 {
         params.delta_w_init
@@ -502,12 +576,16 @@ pub fn factor_with_inertia_correction(
                 if (n + m) >= 100 {
                     kkt.matrix = perturbed;
                     params.delta_w_last = delta_w;
+                    params.degeneracy_count += 1;
+                    if params.degeneracy_count >= 3 { params.structurally_degenerate = true; }
                     return Ok((delta_w, delta_c));
                 }
                 // For small systems: verify backward error is acceptable
                 if check_factorization_backward_error_with_matrix(&perturbed, &kkt.rhs, solver) {
                     kkt.matrix = perturbed;
                     params.delta_w_last = delta_w;
+                    params.degeneracy_count += 1;
+                    if params.degeneracy_count >= 3 { params.structurally_degenerate = true; }
                     return Ok((delta_w, delta_c));
                 }
                 // Backward error too large — increase regularization
@@ -548,6 +626,8 @@ pub fn factor_with_inertia_correction(
     solver.factor(&perturbed)?;
     kkt.matrix = perturbed;
     params.delta_w_last = best_delta_w;
+    params.degeneracy_count += 1;
+    if params.degeneracy_count >= 3 { params.structurally_degenerate = true; }
     Ok((best_delta_w, delta_c))
 }
 
@@ -627,7 +707,7 @@ pub fn solve_for_direction(
     // a preconditioner. This converges to the solution of the original system.
     // Use more refinement iterations for large systems where factorization accuracy
     // may be limited, and for IC-refinement where we're solving a different system.
-    let max_refinements = if use_ic_refinement || (kkt.n + kkt.m) >= 100 { 5 } else { 3 };
+    let max_refinements = if use_ic_refinement || (kkt.n + kkt.m) >= 100 { 10 } else { 5 };
     let mut residual = vec![0.0; dim];
     let mut prev_res_norm = f64::MAX;
     for _ref_iter in 0..max_refinements {
@@ -667,29 +747,40 @@ pub fn solve_for_direction(
         }
     }
 
-    // Backward error monitoring against the ORIGINAL system
-    // berr_i = |r_i| / (||x||_∞ + |b_i|)
-    // If max berr > 1e-6, the linear solve is unreliable
+    // Pretend-singular check using Ipopt's normwise residual ratio.
+    // ratio = ||resid||_inf / (min(||sol||_inf, 1e6 * ||rhs||_inf) + ||rhs||_inf)
+    // If ratio > 1e-5 after iterative refinement, the system is numerically singular.
     {
         if use_ic_refinement {
             matvec_original(kkt, &solution, &mut residual, delta_w, delta_c_ic);
         } else {
             kkt.matrix.matvec(&solution, &mut residual);
         }
-        let x_norm: f64 = solution.iter().map(|v| v.abs()).fold(0.0f64, f64::max).max(1.0);
-        let mut max_berr: f64 = 0.0;
-        for i in 0..dim {
-            let abs_res = (kkt.rhs[i] - residual[i]).abs();
-            let denom = x_norm + kkt.rhs[i].abs().max(1e-30);
-            max_berr = max_berr.max(abs_res / denom);
+        let nrm_rhs: f64 = kkt.rhs.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+        let nrm_res: f64 = solution.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+        let nrm_resid: f64 = (0..dim).map(|i| (kkt.rhs[i] - residual[i]).abs()).fold(0.0f64, f64::max);
+        let max_cond = 1e6;
+        let residual_ratio = if nrm_rhs + nrm_res == 0.0 {
+            nrm_resid
+        } else {
+            nrm_resid / (nrm_res.min(max_cond * nrm_rhs) + nrm_rhs)
+        };
+
+        if residual_ratio > 1e-5 {
+            log::debug!("KKT residual ratio {:.2e} > 1e-5 — pretend singular", residual_ratio);
+            return Err(SolverError::PretendSingular);
         }
-        // Log backward error for diagnostics but don't reject the solve.
-        // The line search is the natural quality filter: if the direction is poor,
-        // no step length will be accepted and the solver enters restoration.
-        // Ipopt similarly trusts the inertia-checked factorization without a
-        // backward error gate on the solve.
-        if max_berr > 1e-2 {
-            log::debug!("KKT backward error {:.2e} (large but proceeding — line search will filter)", max_berr);
+        if residual_ratio > 1e-10 {
+            log::debug!("KKT residual ratio {:.2e} (above target 1e-10, proceeding)", residual_ratio);
+        }
+    }
+
+    // Unscale solution when Ruiz equilibration was applied.
+    // The scaled system solves (D*A*D)*(D^{-1}*x) = D*b, so x_scaled = D^{-1}*x_original.
+    // To recover the original solution: x_original[i] = scale[i] * x_scaled[i].
+    if let Some(ref scale) = kkt.scale_factors {
+        for i in 0..dim {
+            solution[i] *= scale[i];
         }
     }
 
@@ -1592,6 +1683,7 @@ mod tests {
             matrix: KktMatrix::Dense(matrix),
             rhs: vec![1.0, 2.0, 3.0],
             delta_c_diag: vec![0.0; m],
+            scale_factors: None,
         };
         let mut solver = DenseLdl::new();
         let mut params = InertiaCorrectionParams::default();
@@ -1618,6 +1710,7 @@ mod tests {
             matrix: KktMatrix::Dense(matrix),
             rhs: vec![1.0, 2.0, 3.0],
             delta_c_diag: vec![0.0; m],
+            scale_factors: None,
         };
         let mut solver = DenseLdl::new();
         let mut params = InertiaCorrectionParams::default();
@@ -1643,6 +1736,7 @@ mod tests {
             matrix: KktMatrix::Dense(matrix),
             rhs: vec![1.0, 2.0, 3.0],
             delta_c_diag: vec![0.0; m],
+            scale_factors: None,
         };
         let mut solver = DenseLdl::new();
         let mut params = InertiaCorrectionParams::default();
@@ -1670,6 +1764,7 @@ mod tests {
             matrix: KktMatrix::Dense(matrix.clone()),
             rhs: rhs.clone(),
             delta_c_diag: vec![0.0; m],
+            scale_factors: None,
         };
 
         let mut solver = DenseLdl::new();
