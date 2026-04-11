@@ -38,10 +38,11 @@ impl MultifrontalLdl {
     /// Create a new solver configured for KKT systems with n_primal primal variables.
     /// Uses KKT matching + AMD ordering to place primal-dual pairs adjacent,
     /// enabling stable 2x2 pivots for zero-diagonal equality constraint rows.
-    pub fn new_kkt(n_primal: usize) -> Self {
+    pub fn new_kkt(_n_primal: usize) -> Self {
         let options = rmumps::solver::SolverOptions {
-            n_primal: Some(n_primal),
-            ordering: rmumps::ordering::Ordering::KktMatchingAmd,
+            // Use standard AMD ordering and Ruiz scaling (matching MUMPS defaults).
+            // KktMatchingAmd and MC64 scaling are disabled — they can produce
+            // different null-space components on near-singular KKT systems.
             ..rmumps::solver::SolverOptions::default()
         };
         Self {
