@@ -134,19 +134,24 @@ pub fn check_convergence(
     ConvergenceStatus::NotConverged
 }
 
-/// Compute primal infeasibility (constraint violation).
-/// Takes constraint values g(x), and constraint bounds g_l, g_u.
+/// Compute primal infeasibility (constraint violation) using 1-norm.
+///
+/// Returns the sum of absolute constraint violations, matching Ipopt's default
+/// `constraint_violation_norm_type = "1-norm"`. The 1-norm is critical for the
+/// filter line search: with max-norm, theta values are much smaller for problems
+/// with many constraints, making the filter thresholds (theta_min, theta_max,
+/// gamma_phi * theta) too tight and causing step rejection.
 pub fn primal_infeasibility(g: &[f64], g_l: &[f64], g_u: &[f64]) -> f64 {
-    let mut max_viol = 0.0f64;
+    let mut sum_viol = 0.0f64;
     for i in 0..g.len() {
         if g[i] < g_l[i] {
-            max_viol = max_viol.max(g_l[i] - g[i]);
+            sum_viol += g_l[i] - g[i];
         }
         if g[i] > g_u[i] {
-            max_viol = max_viol.max(g[i] - g_u[i]);
+            sum_viol += g[i] - g_u[i];
         }
     }
-    max_viol
+    sum_viol
 }
 
 /// Compute dual infeasibility: ||grad_f - J^T * lambda - z_l + z_u||_inf.
@@ -315,7 +320,8 @@ mod tests {
         let g = vec![0.5, 5.0];
         let g_l = vec![1.0, 2.0];
         let g_u = vec![2.0, 4.0];
-        assert_eq!(primal_infeasibility(&g, &g_l, &g_u), 1.0);
+        // 1-norm: |1.0 - 0.5| + |5.0 - 4.0| = 0.5 + 1.0 = 1.5
+        assert_eq!(primal_infeasibility(&g, &g_l, &g_u), 1.5);
     }
 
     #[test]
