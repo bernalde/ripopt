@@ -108,65 +108,95 @@ pub fn compute_diagonal_scaling(csc: &CscMatrix) -> ScalingFactors {
 }
 
 /// Compute Ruiz iterative equilibration scaling.
-/// Iteratively applies diagonal equilibration until row/column norms
-/// are approximately 1 (or max_iter is reached).
+///
+/// Uses the MUMPS SimScale schedule: 1 infinity-norm iteration followed by
+/// 3 one-norm iterations. This matches MUMPS's ICNTL(8)=77 default for
+/// symmetric indefinite (SYM=2) matrices. The infinity-norm pass brings
+/// all row/column max entries to the same order; the one-norm passes
+/// further equalize the total weight of entries across rows, which is
+/// critical for KKT systems with wildly different block scales.
+///
+/// Reference: Ruiz & Ucar, "A symmetry preserving algorithm for matrix scaling"
 pub fn compute_ruiz_scaling(csc: &CscMatrix, max_iter: usize) -> ScalingFactors {
     let n = csc.n;
     let mut d = vec![1.0; n];
-
-    // Work on a copy of the values to track cumulative scaling
     let mut scaled_vals = csc.vals.clone();
 
-    for _ in 0..max_iter {
-        // Compute infinity norms of the current scaled matrix
-        let mut norms = vec![0.0f64; n];
-        for j in 0..n {
-            for idx in csc.col_ptr[j]..csc.col_ptr[j + 1] {
-                let i = csc.row_idx[idx];
-                let abs_val = scaled_vals[idx].abs();
-                if abs_val > norms[i] {
-                    norms[i] = abs_val;
-                }
-                if i != j && abs_val > norms[j] {
-                    norms[j] = abs_val;
-                }
-            }
-        }
+    // MUMPS SimScale schedule: 1 inf-norm + 3 one-norm iterations.
+    // Use at most max_iter total.
+    let n_inf = 1.min(max_iter);
+    let n_one = 3.min(max_iter.saturating_sub(n_inf));
 
-        // Compute this iteration's scaling factors
-        let mut max_deviation = 0.0f64;
-        let mut iter_d = vec![1.0; n];
-        for i in 0..n {
-            if norms[i] > 0.0 {
-                iter_d[i] = 1.0 / norms[i].sqrt();
-                let deviation = (norms[i] - 1.0).abs();
-                if deviation > max_deviation {
-                    max_deviation = deviation;
-                }
-            }
-        }
+    // Phase 1: infinity-norm iterations
+    for _ in 0..n_inf {
+        ruiz_iteration_inf(&csc, &mut scaled_vals, &mut d, n);
+    }
 
-        // Check convergence: all norms close to 1
-        if max_deviation < 1e-2 {
-            break;
-        }
+    // Phase 2: one-norm iterations
+    for _ in 0..n_one {
+        ruiz_iteration_one(&csc, &mut scaled_vals, &mut d, n);
+    }
 
-        // Accumulate into total scaling
-        for i in 0..n {
-            d[i] *= iter_d[i];
-        }
-
-        // Apply this iteration's scaling to the working values
-        for j in 0..n {
-            let dj = iter_d[j];
-            for idx in csc.col_ptr[j]..csc.col_ptr[j + 1] {
-                let i = csc.row_idx[idx];
-                scaled_vals[idx] *= iter_d[i] * dj;
-            }
-        }
+    // Phase 3: remaining iterations as infinity-norm (if max_iter > 4)
+    for _ in (n_inf + n_one)..max_iter {
+        let converged = ruiz_iteration_inf(&csc, &mut scaled_vals, &mut d, n);
+        if converged { break; }
     }
 
     ScalingFactors { d }
+}
+
+/// One iteration of infinity-norm Ruiz equilibration.
+/// Returns true if converged (max deviation < 1e-2).
+fn ruiz_iteration_inf(csc: &CscMatrix, scaled_vals: &mut [f64], d: &mut [f64], n: usize) -> bool {
+    let mut norms = vec![0.0f64; n];
+    for j in 0..n {
+        for idx in csc.col_ptr[j]..csc.col_ptr[j + 1] {
+            let i = csc.row_idx[idx];
+            let abs_val = scaled_vals[idx].abs();
+            if abs_val > norms[i] { norms[i] = abs_val; }
+            if i != j && abs_val > norms[j] { norms[j] = abs_val; }
+        }
+    }
+    apply_ruiz_update(csc, scaled_vals, d, &norms, n)
+}
+
+/// One iteration of one-norm Ruiz equilibration.
+/// Returns true if converged (max deviation < 1e-2).
+fn ruiz_iteration_one(csc: &CscMatrix, scaled_vals: &mut [f64], d: &mut [f64], n: usize) -> bool {
+    let mut norms = vec![0.0f64; n];
+    for j in 0..n {
+        for idx in csc.col_ptr[j]..csc.col_ptr[j + 1] {
+            let i = csc.row_idx[idx];
+            let abs_val = scaled_vals[idx].abs();
+            norms[i] += abs_val;
+            if i != j { norms[j] += abs_val; }
+        }
+    }
+    apply_ruiz_update(csc, scaled_vals, d, &norms, n)
+}
+
+/// Apply one Ruiz scaling update: D(i) /= sqrt(norm(i)), and update scaled values.
+/// Returns true if converged.
+fn apply_ruiz_update(csc: &CscMatrix, scaled_vals: &mut [f64], d: &mut [f64], norms: &[f64], n: usize) -> bool {
+    let mut max_deviation = 0.0f64;
+    let mut iter_d = vec![1.0; n];
+    for i in 0..n {
+        if norms[i] > 0.0 {
+            iter_d[i] = 1.0 / norms[i].sqrt();
+            let deviation = (norms[i] - 1.0).abs();
+            if deviation > max_deviation { max_deviation = deviation; }
+        }
+    }
+    for i in 0..n { d[i] *= iter_d[i]; }
+    for j in 0..n {
+        let dj = iter_d[j];
+        for idx in csc.col_ptr[j]..csc.col_ptr[j + 1] {
+            let i = csc.row_idx[idx];
+            scaled_vals[idx] *= iter_d[i] * dj;
+        }
+    }
+    max_deviation < 1e-2
 }
 
 /// Compute KKT-aware two-phase scaling.
