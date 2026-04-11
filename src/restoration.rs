@@ -435,34 +435,91 @@ impl RestorationPhase {
             }
         }
 
-        let mut jjt = SymmetricMatrix::zeros(m_active);
-        for col_ents in &col_entries {
-            for &(ai, val_i) in col_ents {
-                for &(aj, val_j) in col_ents {
-                    if ai >= aj {
-                        jjt.add(ai, aj, val_i * val_j);
+        // Build J_a * J_a^T. For small problems use dense BK, for large use sparse.
+        let v_active: Vec<f64> = active_indices.iter().map(|&i| violation[i]).collect();
+        let mut w = vec![0.0; m_active];
+
+        if m_active <= 500 {
+            // Dense path: J_a * J_a^T as dense SymmetricMatrix
+            let mut jjt = SymmetricMatrix::zeros(m_active);
+            for col_ents in &col_entries {
+                for &(ai, val_i) in col_ents {
+                    for &(aj, val_j) in col_ents {
+                        if ai >= aj {
+                            jjt.add(ai, aj, val_i * val_j);
+                        }
                     }
                 }
             }
-        }
+            let jjt_diag_max = (0..m_active)
+                .map(|i| jjt.get(i, i).abs())
+                .fold(0.0f64, f64::max);
+            let eps = eps_factor * jjt_diag_max.max(1.0);
+            jjt.add_diagonal(eps);
 
-        // Add Levenberg-Marquardt regularization for numerical stability
-        let jjt_diag_max = (0..m_active)
-            .map(|i| jjt.get(i, i).abs())
-            .fold(0.0f64, f64::max);
-        let eps = eps_factor * jjt_diag_max.max(1.0);
-        jjt.add_diagonal(eps);
+            let mut solver = DenseLdl::new();
+            if solver.bunch_kaufman_factor(&jjt).is_err() {
+                return None;
+            }
+            if solver.solve(&v_active, &mut w).is_err() {
+                return None;
+            }
+        } else {
+            // Sparse path: build J_a * J_a^T in COO triplet format for large problems.
+            // Uses a HashMap to accumulate entries, then factors with sparse solver.
+            use std::collections::HashMap;
+            use crate::linear_solver::{KktMatrix, SparseSymmetricMatrix};
+            let mut triplet_map: HashMap<(usize, usize), f64> = HashMap::new();
+            for col_ents in &col_entries {
+                for &(ai, val_i) in col_ents {
+                    for &(aj, val_j) in col_ents {
+                        if aj <= ai {
+                            // Upper triangle: row <= col
+                            *triplet_map.entry((aj, ai)).or_insert(0.0) += val_i * val_j;
+                        }
+                    }
+                }
+            }
+            // Compute regularization from diagonal
+            let jjt_diag_max: f64 = (0..m_active)
+                .map(|i| triplet_map.get(&(i, i)).copied().unwrap_or(0.0).abs())
+                .fold(0.0f64, f64::max);
+            let eps = eps_factor * jjt_diag_max.max(1.0);
+            // Add regularization and ensure all diagonal entries exist
+            for i in 0..m_active {
+                *triplet_map.entry((i, i)).or_insert(0.0) += eps;
+            }
 
-        // Solve (J_a * J_a^T + eps*I) * w = violation_a
-        let mut solver = DenseLdl::new();
-        if solver.bunch_kaufman_factor(&jjt).is_err() {
-            return None;
-        }
+            let nnz = triplet_map.len();
+            let mut ssm = SparseSymmetricMatrix {
+                n: m_active,
+                triplet_rows: Vec::with_capacity(nnz),
+                triplet_cols: Vec::with_capacity(nnz),
+                triplet_vals: Vec::with_capacity(nnz),
+            };
+            for (&(r, c), &v) in &triplet_map {
+                ssm.triplet_rows.push(r);
+                ssm.triplet_cols.push(c);
+                ssm.triplet_vals.push(v);
+            }
+            let matrix = KktMatrix::Sparse(ssm);
 
-        let v_active: Vec<f64> = active_indices.iter().map(|&i| violation[i]).collect();
-        let mut w = vec![0.0; m_active];
-        if solver.solve(&v_active, &mut w).is_err() {
-            return None;
+            #[cfg(feature = "rmumps")]
+            {
+                use crate::linear_solver::multifrontal::MultifrontalLdl;
+                let mut sparse_solver = MultifrontalLdl::new();
+                if sparse_solver.factor(&matrix).is_err() {
+                    return None;
+                }
+                if sparse_solver.solve(&v_active, &mut w).is_err() {
+                    return None;
+                }
+            }
+            #[cfg(not(feature = "rmumps"))]
+            {
+                // Fall back to dense if no sparse solver available
+                return None;
+            }
         }
 
         // step = -J_a^T * w

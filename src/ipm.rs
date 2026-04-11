@@ -621,9 +621,11 @@ impl SolverState {
 
         // Initialize constraint multipliers via least-squares estimate if enabled.
         // Solves min ||∇f + J^T y||^2  ⟹  (J J^T) y = -J ∇f
-        // Gate LS mult init on problem size: dense J*J^T is O(m^2*n), too slow for large problems
-        let ls_init_dim_limit = 500;
-        let y = if options.least_squares_mult_init && m > 0 && (m + n) <= ls_init_dim_limit {
+        // LS mult init: use dense path for small problems only.
+        // Large problems skip init LS (sparse J*J^T is expensive and initial point
+        // is often far from feasible where LS multipliers are meaningless).
+        // The sparse LS path is available for post-restoration recovery.
+        let y = if options.least_squares_mult_init && m > 0 && m <= 500 {
             let mut grad_f_init = vec![0.0; n];
             problem.gradient(&x, &mut grad_f_init);
 
@@ -2156,6 +2158,10 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     } else {
         false
     };
+    // Flag set by bandwidth detection: when the sparse condensed Schur complement
+    // is essentially dense, switch to dense condensed KKT (n×n) for all subsequent
+    // iterations. This avoids the catastrophic rmumps fill-in on PDE problems.
+    let mut use_dense_condensed_fallback = false;
 
     // Initialize filter
     let mut filter = Filter::new(1e4);
@@ -3133,7 +3139,8 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         // Compute sigma (barrier diagonal)
         let sigma = kkt::compute_sigma(&state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u);
 
-        // Use dense condensed KKT (Schur complement) when m >> n and n is small.
+        // Use dense condensed KKT (Schur complement) when m >> n and n is small,
+        // OR when the bandwidth detection (iteration 0) triggered a dense fallback.
         // Condensed cost is O(n^2*m + n^3) vs O((n+m)^3) — strictly better when m >> n.
         // Allow this even for "sparse" problems when n is tiny — an n×n dense solve
         // is always faster than an (n+m)×(n+m) sparse solve for small n.
@@ -3144,7 +3151,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         let use_sparse_condensed = use_sparse && m > 0 && !use_condensed && !disable_sparse_condensed;
 
         let t_kkt = Instant::now();
-        let condensed_system = if use_condensed {
+        let mut condensed_system = if use_condensed {
             Some(kkt::assemble_condensed_kkt(
                 n, m,
                 &state.hess_rows, &state.hess_cols, &state.hess_vals,
@@ -3199,16 +3206,21 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             });
             if let Some(bw) = sc_bw {
                 if bw > n / 2 {
-                    // Condensed Schur complement is essentially dense - switch to full
-                    // augmented KKT system which MUMPS can reorder efficiently.
+                    // Condensed Schur complement is essentially dense.
+                    // Switch to dense condensed KKT (n×n) instead of sparse augmented
+                    // ((n+m)×(n+m)) — the dense condensed system is always smaller.
+                    // For PDE problems with scrambled variable ordering, rmumps on
+                    // the augmented system has catastrophic fill-in.
                     if options.print_level >= 3 {
                         rip_log!(
-                            "ripopt: Sparse condensed S has bandwidth {} for n={}, switching to full augmented KKT",
+                            "ripopt: Sparse condensed S has bandwidth {} for n={}, switching to dense condensed KKT",
                             bw, n
                         );
                     }
                     disable_sparse_condensed = true;
                     sparse_condensed_system = None;
+                    // Switch to full augmented KKT with sparse solver.
+                    // rmumps with AMD/ND ordering should handle this efficiently.
                     kkt_system_opt = Some(kkt::assemble_kkt(
                         n, m,
                         &state.hess_rows, &state.hess_cols, &state.hess_vals,
@@ -3218,6 +3230,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         &state.x, &state.x_l, &state.x_u, state.mu,
                         use_sparse, &state.v_l, &state.v_u,
                     ));
+                    // DO NOT use dense condensed — BK on n=2542 takes ~6s per factor.
+                    // The sparse solver on the augmented system should be fast with
+                    // proper ordering. If rmumps is slow, the fix belongs in rmumps.
                 } else if bw * bw <= n {
                     if options.print_level >= 5 {
                         rip_log!("ripopt: Sparse condensed S has bandwidth {} for n={}, using banded solver", bw, n);
@@ -3235,8 +3250,23 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         let mut ic_delta_c = 0.0f64;
         if let Some(ref mut kkt_system) = kkt_system_opt {
         let t_fact = Instant::now();
+        if options.print_level >= 5 {
+            let dim = match &kkt_system.matrix {
+                KktMatrix::Dense(d) => d.n,
+                KktMatrix::Sparse(s) => s.n,
+            };
+            let nnz = match &kkt_system.matrix {
+                KktMatrix::Dense(d) => d.n * (d.n + 1) / 2,
+                KktMatrix::Sparse(s) => s.triplet_rows.len(),
+            };
+            rip_log!("ripopt: Factoring KKT dim={} nnz={}...", dim, nnz);
+        }
         let inertia_result =
             kkt::factor_with_inertia_correction(kkt_system, lin_solver.as_mut(), &mut inertia_params);
+        if options.print_level >= 5 {
+            rip_log!("ripopt: KKT factorization took {:.3}s (ok={})",
+                t_fact.elapsed().as_secs_f64(), inertia_result.is_ok());
+        }
         timings.factorization += t_fact.elapsed();
 
         match &inertia_result {
@@ -3452,7 +3482,12 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         let (dx, dy) = if let Some(ref cond) = condensed_system {
             // Try condensed solve first (faster for m >> n)
             let mut cond_solver = DenseLdl::new();
+            let t_cond_bk = Instant::now();
             let cond_ok = cond_solver.bunch_kaufman_factor(&cond.matrix).is_ok();
+            if options.print_level >= 5 {
+                rip_log!("ripopt: Dense condensed BK factor n={}: {:.3}s (ok={})",
+                    n, t_cond_bk.elapsed().as_secs_f64(), cond_ok);
+            }
             let cond_result = if cond_ok {
                 kkt::solve_condensed(cond, &mut cond_solver).ok()
             } else {
@@ -4191,6 +4226,16 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 alpha,
             );
 
+            // Diagnostic: log first few line search rejections
+            if !acceptable && options.print_level >= 7 && ls_steps < 5 {
+                let sw = filter.switching_condition(theta_current, grad_phi_step, alpha);
+                let ar = filter.armijo_condition(phi_current, phi_trial, grad_phi_step, alpha);
+                let sr = filter.sufficient_infeasibility_reduction(theta_current, theta_trial);
+                let fa = filter.is_acceptable(theta_trial, phi_trial);
+                rip_log!("  LS reject: alpha={:.2e} theta_t={:.2e} phi_t={:.2e} switch={} armijo={} suff_red={} filter_ok={}",
+                    alpha, theta_trial, phi_trial, sw, ar, sr, fa);
+            }
+
             if acceptable {
                 // Accept step
                 state.x = x_trial;
@@ -4762,14 +4807,10 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         mu_state.remember_accepted(kkt_error);
                         let avg_compl = compute_avg_complementarity(&state);
                         if options.mu_oracle_quality_function && avg_compl > 0.0 {
-                            // Quality function: evaluate Q(mu) for explicit candidates and
-                            // pick the one with lowest barrier KKT error.
-                            let mu_loqo = avg_compl / options.kappa;
-                            let mu_linear = options.mu_linear_decrease_factor * state.mu;
-                            let mu_third = state.mu / 3.0;
-                            let mu_tenth = state.mu / 10.0;
-
-                            // Only allow aggressive decrease if barrier subproblem is solved
+                            // Loqo mu oracle (IpLoqoMuOracle.cpp).
+                            // Uses centrality measure to set the centering parameter sigma.
+                            // When well-centered (xi≈1), sigma is tiny → aggressive mu decrease.
+                            // When off-center (xi≈0), sigma→0.8 → conservative mu decrease.
                             let barrier_err = compute_barrier_error(&state);
                             let mu_floor = if barrier_err <= options.barrier_tol_factor * state.mu {
                                 options.mu_min
@@ -4777,34 +4818,38 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                                 (state.mu / 5.0).max(options.mu_min)
                             };
 
-                            // Build candidate list, optionally including Mehrotra sigma
-                            let mut candidates = vec![mu_loqo, mu_linear, mu_third, mu_tenth];
-                            if let Some(sigma) = sigma_mu {
-                                candidates.push((sigma * state.mu).max(options.mu_min));
-                            }
-
-                            let pi = state.constraint_violation();
-                            let di = convergence::dual_infeasibility(
-                                &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-                                &state.y, &state.z_l, &state.z_u, state.n,
-                            );
-                            let fixed_q = pi * pi + di * di;
-
-                            let mut best_mu = mu_loqo;
-                            let mut best_q = f64::INFINITY;
-                            for &mu_c in &candidates {
-                                let mu_c = mu_c.clamp(mu_floor, state.mu);
-                                let ci = convergence::complementarity_error(
-                                    &state.x, &state.x_l, &state.x_u,
-                                    &state.z_l, &state.z_u, mu_c,
-                                );
-                                let q = fixed_q + ci * ci;
-                                if q < best_q {
-                                    best_q = q;
-                                    best_mu = mu_c;
+                            // Compute centrality measure: xi = min(z_i*s_i) / avg_compl
+                            let mut min_compl = f64::INFINITY;
+                            for i in 0..n {
+                                if state.x_l[i].is_finite() {
+                                    let s = (state.x[i] - state.x_l[i]).max(1e-20);
+                                    min_compl = min_compl.min(s * state.z_l[i]);
+                                }
+                                if state.x_u[i].is_finite() {
+                                    let s = (state.x_u[i] - state.x[i]).max(1e-20);
+                                    min_compl = min_compl.min(s * state.z_u[i]);
                                 }
                             }
-                            state.mu = best_mu.clamp(mu_floor, 1e5);
+                            let xi = if avg_compl > 0.0 && min_compl.is_finite() {
+                                (min_compl / avg_compl).clamp(0.0, 1.0)
+                            } else {
+                                1.0
+                            };
+
+                            // Loqo formula: sigma = 0.1 * min(0.05*(1-xi)/xi, 2)^3
+                            let ratio = if xi > 1e-20 {
+                                (0.05 * (1.0 - xi) / xi).min(2.0)
+                            } else {
+                                2.0
+                            };
+                            let sigma = 0.1 * ratio.powi(3);
+                            let new_mu = (sigma * avg_compl).clamp(mu_floor, 1e5);
+
+                            if options.print_level >= 5 {
+                                rip_log!("ripopt: mu loqo: xi={:.4} sigma={:.4} avg_compl={:.3e} -> mu={:.3e}",
+                                    xi, sigma, avg_compl, new_mu);
+                            }
+                            state.mu = new_mu;
                         } else if avg_compl > 0.0 {
                             // Loqo fallback with rate limit (at most 5x decrease if subproblem not solved)
                             let barrier_err = compute_barrier_error(&state);
@@ -5518,10 +5563,8 @@ fn apply_restoration_success<P: NlpProblem>(
     }
     // Compute least-squares multiplier estimate at the restored point.
     // This avoids the "dead start" (y=0) that causes the filter to reject every
-    // post-restoration step. Use a higher dimension limit than initialization since
-    // restoration runs infrequently.
-    let ls_restoration_dim_limit = 1000;
-    if m > 0 && (m + n) <= ls_restoration_dim_limit {
+    // post-restoration step. Uses sparse J*J^T for large problems.
+    if m > 0 {
         if let Some(y_ls) = compute_ls_multiplier_estimate(
             &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
             &state.g_l, &state.g_u, n, m, options.constr_mult_init_max,
@@ -5787,7 +5830,8 @@ fn quality_function_mu(state: &SolverState, mu_lower: f64, mu_upper: f64, n_cand
 }
 
 /// Compute least-squares multiplier estimate: min ||grad_f + J^T y||^2.
-/// Solves the normal equations (J J^T) y = -J grad_f using dense Bunch-Kaufman LDL.
+/// Solves the normal equations (J J^T) y = -J grad_f.
+/// Uses dense Bunch-Kaufman for small problems, sparse LDL^T for large ones.
 /// Returns Some(y) if successful and all estimates are within threshold; None otherwise.
 fn compute_ls_multiplier_estimate(
     grad_f: &[f64],
@@ -5800,6 +5844,12 @@ fn compute_ls_multiplier_estimate(
     m: usize,
     max_abs_threshold: f64,
 ) -> Option<Vec<f64>> {
+    // For large problems, use sparse J*J^T factorization
+    if m > 500 {
+        return compute_ls_multiplier_estimate_sparse(
+            grad_f, jac_rows, jac_cols, jac_vals, g_l, g_u, n, m, max_abs_threshold, None,
+        );
+    }
     if m == 0 {
         return None;
     }
@@ -5841,10 +5891,110 @@ fn compute_ls_multiplier_estimate(
         return None;
     }
 
-    // For inequality constraints, zero out multipliers with wrong sign.
-    // Ipopt convention (L = f + y^T g):
-    //   g >= g_l (lower bound only): y >= 0
-    //   g <= g_u (upper bound only): y <= 0
+    fix_inequality_mult_signs(&mut y_ls, g_l, g_u, m);
+    Some(y_ls)
+}
+
+/// Sparse variant of LS multiplier estimate for large problems.
+/// Builds sparse J*J^T in COO format and factors with the sparse solver.
+/// If `solver` is Some, reuses the solver (for recalc_y caching).
+fn compute_ls_multiplier_estimate_sparse(
+    grad_f: &[f64],
+    jac_rows: &[usize],
+    jac_cols: &[usize],
+    jac_vals: &[f64],
+    g_l: &[f64],
+    g_u: &[f64],
+    n: usize,
+    m: usize,
+    max_abs_threshold: f64,
+    solver: Option<&mut Box<dyn LinearSolver>>,
+) -> Option<Vec<f64>> {
+    use crate::linear_solver::SparseSymmetricMatrix;
+    if m == 0 {
+        return None;
+    }
+
+    // Compute b = -J * grad_f  (m-vector)
+    let mut b = vec![0.0; m];
+    for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
+        b[row] -= jac_vals[idx] * grad_f[col];
+    }
+
+    // Build sparse J*J^T: group Jacobian entries by column, then for each
+    // column accumulate outer products into COO triplets.
+    // Use a HashMap to accumulate duplicates efficiently.
+    let mut col_entries: Vec<Vec<(usize, f64)>> = vec![vec![]; n];
+    for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
+        col_entries[col].push((row, jac_vals[idx]));
+    }
+
+    // Estimate nnz: for PDE Jacobians, each column has O(1) nonzeros
+    let total_col_nnz: usize = col_entries.iter().map(|c| c.len()).sum();
+    let nnz_est = total_col_nnz * 4; // rough upper bound
+
+    use std::collections::HashMap;
+    let mut triplet_map: HashMap<(usize, usize), f64> = HashMap::with_capacity(nnz_est);
+
+    for k in 0..n {
+        let entries = &col_entries[k];
+        for &(i, vi) in entries.iter() {
+            for &(j, vj) in entries.iter() {
+                if i >= j {
+                    // Upper triangle: row <= col, so store (j, i) since j <= i
+                    *triplet_map.entry((j, i)).or_insert(0.0) += vi * vj;
+                }
+            }
+        }
+    }
+
+    // Add small regularization to diagonal for numerical stability
+    let reg = 1e-12;
+    for i in 0..m {
+        *triplet_map.entry((i, i)).or_insert(0.0) += reg;
+    }
+
+    // Build SparseSymmetricMatrix (upper triangle: row <= col)
+    let nnz = triplet_map.len();
+    let mut ssm = SparseSymmetricMatrix {
+        n: m,
+        triplet_rows: Vec::with_capacity(nnz),
+        triplet_cols: Vec::with_capacity(nnz),
+        triplet_vals: Vec::with_capacity(nnz),
+    };
+    for (&(r, c), &v) in &triplet_map {
+        ssm.triplet_rows.push(r);
+        ssm.triplet_cols.push(c);
+        ssm.triplet_vals.push(v);
+    }
+
+    let matrix = KktMatrix::Sparse(ssm);
+
+    // Factor and solve
+    let mut y_ls = vec![0.0; m];
+    let solved = if let Some(ls) = solver {
+        ls.factor(&matrix).is_ok() && ls.solve(&b, &mut y_ls).is_ok()
+    } else {
+        let mut ls = new_sparse_solver();
+        ls.factor(&matrix).is_ok() && ls.solve(&b, &mut y_ls).is_ok()
+    };
+
+    if !solved {
+        return None;
+    }
+
+    let max_abs = y_ls.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+    if max_abs > max_abs_threshold {
+        return None;
+    }
+
+    fix_inequality_mult_signs(&mut y_ls, g_l, g_u, m);
+    Some(y_ls)
+}
+
+/// Fix signs of inequality constraint multipliers from LS estimate.
+/// Ipopt convention (L = f + y^T g): g >= g_l → y >= 0, g <= g_u → y <= 0.
+fn fix_inequality_mult_signs(y_ls: &mut [f64], g_l: &[f64], g_u: &[f64], m: usize) {
     for i in 0..m {
         if convergence::is_equality_constraint(g_l[i], g_u[i]) {
             continue;
@@ -5859,8 +6009,6 @@ fn compute_ls_multiplier_estimate(
             y_ls[i] = 0.0;
         }
     }
-
-    Some(y_ls)
 }
 
 fn compute_avg_complementarity(state: &SolverState) -> f64 {

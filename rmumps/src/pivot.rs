@@ -112,8 +112,9 @@ const ZERO_PIVOT_TOL: f64 = 1e-12;
 /// Matches MUMPS CNTL(1) = 0.01 for SYM=2 (general symmetric indefinite).
 /// This threshold ensures constraint rows with tiny/zero diagonals are
 /// paired via 2x2 pivots rather than accepted as catastrophic 1x1 pivots.
-/// Ipopt uses 1e-6 with full MC64 scaling; until rmumps scaling reaches
-/// that quality, 0.01 provides more robust pivot decisions.
+/// Ipopt uses 1e-6 with full MC64 scaling, but rmumps uses Ruiz scaling which
+/// doesn't provide the same quality. 0.01 gives more robust pivot decisions
+/// and matches MUMPS's own CNTL(1) default for SYM=2.
 pub const DEFAULT_PIVOT_THRESHOLD: f64 = 0.01;
 
 /// Pivot selection result.

@@ -241,7 +241,7 @@ impl Default for SolverOptions {
             linear_solver: LinearSolverChoice::default(),
             stall_iter_limit: 30,
             early_stall_timeout: 120.0,
-            mu_oracle_quality_function: false,
+            mu_oracle_quality_function: true,
             kkt_dump_dir: None,
             kkt_dump_name: "problem".to_string(),
         }

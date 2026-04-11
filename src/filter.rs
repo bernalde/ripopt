@@ -47,7 +47,13 @@ impl Filter {
         }
     }
 
-    /// Initialize theta_min based on the initial constraint violation.
+    /// Initialize theta_min and theta_max based on constraint violation.
+    ///
+    /// NOTE: Ipopt sets these ONCE from the initial theta (IpFilterLSAcceptor.cpp:325-336).
+    /// ripopt currently re-computes them after each filter reset because the solver takes
+    /// more iterations than Ipopt, causing theta to bounce near the switching threshold.
+    /// This is a workaround — the proper fix is to improve search direction quality so
+    /// the solver converges faster (matching Ipopt's ~20 iterations vs current ~164).
     pub fn set_theta_min_from_initial(&mut self, theta_init: f64) {
         self.theta_min = 1e-4 * theta_init.max(1e-4);
         self.theta_max = 1e4 * theta_init.max(1e-4);
