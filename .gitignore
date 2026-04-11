@@ -80,3 +80,9 @@ adversary/
 examples/adversary_*
 .crucible/
 research/
+
+# Python package build artifacts
+pyomo-ripopt/build/
+
+# Reference solver source (local copies for expert analysis)
+ref/
