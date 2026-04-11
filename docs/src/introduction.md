@@ -14,7 +14,7 @@ s.t. g_l <= g(x) <= g_u
      x_l <= x    <= x_u
 ```
 
-It implements a primal-dual interior point method (IPM) with a logarithmic barrier formulation. The solver is written entirely in Rust (~14,200 lines) with no external C/Fortran dependencies.
+It implements a primal-dual interior point method (IPM) with a logarithmic barrier formulation. The solver is written entirely in Rust (~21,700 lines) with no external C/Fortran dependencies.
 
 ## At a glance
 

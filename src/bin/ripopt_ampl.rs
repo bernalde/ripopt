@@ -129,7 +129,7 @@ fn print_help() {
     println!();
     println!("  Constraint & Dual Tolerances");
     println!("    constr_viol_tol=<float>              Constraint violation tolerance [1e-4]");
-    println!("    dual_inf_tol=<float>                 Dual infeasibility tolerance [100.0]");
+    println!("    dual_inf_tol=<float>                 Dual infeasibility tolerance [1.0]");
     println!("    compl_inf_tol=<float>                Complementarity tolerance [1e-4]");
     println!();
     println!("  Barrier Parameter");
@@ -149,8 +149,8 @@ fn print_help() {
     println!("    slack_bound_push=<float>             Slack variable bound push [1e-2]");
     println!("    slack_bound_frac=<float>             Slack variable bound fraction [1e-2]");
     println!("    tau_min=<float>                      Fraction-to-boundary minimum [0.99]");
-    println!("    nlp_lower_bound_inf=<float>          Treat bounds below this as -inf [-1e19]");
-    println!("    nlp_upper_bound_inf=<float>          Treat bounds above this as +inf [1e19]");
+    println!("    nlp_lower_bound_inf=<float>          Treat bounds below this as -inf [-1e20]");
+    println!("    nlp_upper_bound_inf=<float>          Treat bounds above this as +inf [1e20]");
     println!();
     println!("  Warm Start");
     println!("    warm_start_init_point=<bool>         Enable warm-start initialization [no]");
@@ -168,7 +168,7 @@ fn print_help() {
     println!("    watchdog_trial_iter_max=<int>        Max watchdog trial iterations [3]");
     println!();
     println!("  Constraint Handling");
-    println!("    constraint_slack_barrier=<bool>      Slack log-barriers in filter merit [no]");
+    println!("    constraint_slack_barrier=<bool>      Slack log-barriers in filter merit [yes]");
     println!("    detect_linear_constraints=<bool>     Detect linear constraints [yes]");
     println!("    restoration_max_iter=<int>           Max restoration subproblem iterations [200]");
     println!("    disable_nlp_restoration=<bool>       Disable NLP restoration [no]");
@@ -177,8 +177,8 @@ fn print_help() {
     println!("    hessian_approximation=<str>          exact or limited-memory (L-BFGS) [exact]");
     println!("    linear_solver=<str>                  direct, iterative (MINRES), or hybrid [direct]");
     println!("    sparse_threshold=<int>               Sparse solver if n+m >= threshold [110]");
-    println!("    mehrotra_pc=<bool>                   Mehrotra predictor-corrector [no]");
-    println!("    gondzio_mcc_max=<int>                Max Gondzio centrality corrections [0]");
+    println!("    mehrotra_pc=<bool>                   Mehrotra predictor-corrector [yes]");
+    println!("    gondzio_mcc_max=<int>                Max Gondzio centrality corrections [3]");
     println!();
     println!("  Fallback Strategies");
     println!("    enable_slack_fallback=<bool>         Retry with explicit slack variables [yes]");
@@ -191,7 +191,8 @@ fn print_help() {
     println!("    enable_preprocessing=<bool>          Eliminate fixed vars & redundant constraints [yes]");
     println!("    proactive_infeasibility_detection=<bool> Early infeasibility detection [no]");
     println!("    print_level=<int>                    Verbosity: 0=silent, 5=verbose [5]");
-    println!("    early_stall_timeout=<float>          Max seconds for first 3 iters (0=off) [10.0]");
+    println!("    early_stall_timeout=<float>          Max seconds for first 3 iters (0=off) [120.0]");
+    println!("    mu_oracle_quality_function=<bool>    Use quality function for mu selection [no]");
     println!();
     println!("  Boolean values accept: yes, true, 1 (anything else is false).");
 }
@@ -423,6 +424,9 @@ fn apply_option(opts: &mut SolverOptions, key: &str, value: &str) {
             if let Ok(v) = value.parse() {
                 opts.early_stall_timeout = v;
             }
+        }
+        "mu_oracle_quality_function" => {
+            opts.mu_oracle_quality_function = value == "yes" || value == "true" || value == "1";
         }
         _ => {
             eprintln!("Warning: unknown option '{}'", key);

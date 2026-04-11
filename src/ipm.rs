@@ -4146,22 +4146,25 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         x_soft[i] = x_soft[i].min(state.x_u[i] - 1e-14);
                     }
                 }
-                let obj_soft = problem.objective(&x_soft);
-                if obj_soft.is_finite() {
+                if let Ok(obj_soft) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    problem.objective(&x_soft)
+                })) {
                     let mut g_soft = vec![0.0; m];
                     problem.constraints(&x_soft, &mut g_soft);
-                    let theta_soft = convergence::primal_infeasibility(&g_soft, &state.g_l, &state.g_u);
-                    // Accept if constraint violation decreased sufficiently
-                    if theta_soft < (1.0 - 1e-4) * theta_current
-                        && filter.is_acceptable(theta_soft, obj_soft)
                     {
-                        log::debug!("Soft restoration accepted: theta {:.2e} -> {:.2e}", theta_current, theta_soft);
-                        state.x = x_soft;
-                        state.obj = obj_soft;
-                        state.g = g_soft;
-                        state.alpha_primal = soft_alpha;
-                        filter.add(theta_current, phi_current);
-                        step_accepted = true;
+                        let theta_soft = convergence::primal_infeasibility(&g_soft, &state.g_l, &state.g_u);
+                        // Accept if constraint violation decreased
+                        if theta_soft < (1.0 - 1e-4) * theta_current
+                            && filter.is_acceptable(theta_soft, obj_soft)
+                        {
+                            log::debug!("Soft restoration accepted: theta {:.2e} -> {:.2e}", theta_current, theta_soft);
+                            state.x = x_soft;
+                            state.obj = obj_soft;
+                            state.g = g_soft;
+                            state.alpha_primal = soft_alpha;
+                            filter.add(theta_current, phi_current);
+                            step_accepted = true;
+                        }
                     }
                 }
             }
@@ -5478,11 +5481,7 @@ fn attempt_nlp_restoration<P: NlpProblem>(
 
     // Configure inner solver options
     let mut inner_opts = options.clone();
-    // Cap restoration iterations: if restoration achieves feasibility quickly
-    // (common for problems near the feasibility boundary), spending hundreds of
-    // iterations reducing mu inside the restoration NLP is wasteful. The outer
-    // solver checks feasibility after return and can accept partial convergence.
-    inner_opts.max_iter = options.restoration_max_iter.max(50).min(200);
+    inner_opts.max_iter = options.restoration_max_iter.max(500);
     inner_opts.disable_nlp_restoration = true; // prevent recursion
     inner_opts.print_level = if options.print_level >= 5 { 3 } else { 0 };
     inner_opts.mu_init = state.mu.max(1e-2);

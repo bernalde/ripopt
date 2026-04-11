@@ -78,7 +78,7 @@ else
 RIPOPT 11 5 00010203040506070809 1 0 2 NLP DNLP RMINLP\
 gmsgenus.run\
 gmsgenux.out\
-libGamsRipopt.dylib rip 1 0\
+libGamsRipopt.$EXT rip 1 0\
 ' "$CMPTXT"
     echo "Done."
 fi

@@ -360,7 +360,7 @@ static void map_status_to_gams(int ripopt_status, int *model_stat, int *solve_st
         *model_stat = gmoModelStat_OptimalLocal;
         *solve_stat = gmoSolveStat_Normal;
         break;
-    case 1:  /* ACCEPTABLE_LEVEL */
+    case 1:  /* ACCEPTABLE_LEVEL — removed in v0.5.0, unreachable */
         *model_stat = gmoModelStat_Feasible;
         *solve_stat = gmoSolveStat_Normal;
         break;

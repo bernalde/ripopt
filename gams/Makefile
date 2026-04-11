@@ -65,7 +65,7 @@ ifeq ($(UNAME),Darwin)
 endif
 	@grep -q '^RIPOPT ' $(GAMS_PATH)/gmscmpun.txt 2>/dev/null || \
 		(cp $(GAMS_PATH)/gmscmpun.txt $(GAMS_PATH)/gmscmpun.txt.bak && \
-		awk '/^DEFAULTS$$/{print "RIPOPT 11 5 00010203040506070809 1 0 2 NLP DNLP RMINLP"; print "gmsgenus.run"; print "gmsgenux.out"; print "libGamsRipopt.dylib rip 1 0"}1' \
+		awk '/^DEFAULTS$$/{print "RIPOPT 11 5 00010203040506070809 1 0 2 NLP DNLP RMINLP"; print "gmsgenus.run"; print "gmsgenux.out"; print "libGamsRipopt.$(SHLIB_EXT) rip 1 0"}1' \
 		$(GAMS_PATH)/gmscmpun.txt.bak > $(GAMS_PATH)/gmscmpun.txt)
 	@echo "Installed to $(GAMS_PATH)"
 

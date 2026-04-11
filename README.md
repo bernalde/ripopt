@@ -17,7 +17,7 @@ s.t. g_l <= g(x) <= g_u
      x_l <= x    <= x_u
 ```
 
-It implements a primal-dual interior point method with a barrier formulation, similar to the algorithm described in the Ipopt papers. The solver is written entirely in Rust (~14,200 lines) with no external C/Fortran dependencies.
+It implements a primal-dual interior point method with a barrier formulation, similar to the algorithm described in the Ipopt papers. The solver is written entirely in Rust (~21,700 lines) with no external C/Fortran dependencies.
 
 ## Features
 
@@ -441,8 +441,6 @@ Key options (all have Ipopt-matching defaults):
 |---------------------------------|---------|------------------------------------------------------------|
 | `tol`                           | 1e-8    | Convergence tolerance                                      |
 | `max_iter`                      | 3000    | Maximum iterations                                         |
-| `acceptable_tol`                | 1e-4    | Acceptable (less strict) tolerance                         |
-| `acceptable_iter`               | 10      | Consecutive acceptable iterations needed                   |
 | `mu_init`                       | 0.1     | Initial barrier parameter                                  |
 | `print_level`                   | 5       | Output verbosity (0=silent, 5=verbose)                     |
 | `mu_strategy_adaptive`          | true    | Adaptive vs monotone barrier update                        |
@@ -458,7 +456,7 @@ Key options (all have Ipopt-matching defaults):
 | `enable_lbfgs_hessian_fallback` | true    | Auto-retry with L-BFGS Hessian when exact Hessian fails    |
 | `mehrotra_pc`                   | true    | Mehrotra predictor-corrector for better centering          |
 | `gondzio_mcc_max`               | 3       | Maximum Gondzio centrality corrections per iteration       |
-| `early_stall_timeout`           | 10.0    | Max seconds for first 3 iterations (0=off)                 |
+| `early_stall_timeout`           | 120.0   | Max seconds for first 3 iterations (0=off)                 |
 | `linear_solver`                 | direct  | KKT solver: direct, iterative (MINRES), or hybrid          |
 
 ### Result
@@ -470,7 +468,7 @@ Key options (all have Ipopt-matching defaults):
 - `constraint_multipliers` -- Lagrange multipliers for constraints (y)
 - `bound_multipliers_lower` / `bound_multipliers_upper` -- bound multipliers (z_L, z_U)
 - `constraint_values` -- constraint values g(x*)
-- `status` -- one of: `Optimal`, `Acceptable`, `Infeasible`, `LocalInfeasibility`, `MaxIterations`, `NumericalError`, `Unbounded`, `RestorationFailed`, `InternalError`
+- `status` -- one of: `Optimal`, `Infeasible`, `LocalInfeasibility`, `MaxIterations`, `NumericalError`, `Unbounded`, `RestorationFailed`, `InternalError`
 - `iterations` -- number of IPM iterations
 
 ## C API
@@ -492,7 +490,7 @@ Include `ripopt.h` (repo root) in your C project. It defines version macros, cal
 #include "ripopt.h"
 
 // Check version at compile time
-printf("ripopt %s\n", RIPOPT_VERSION);  // "0.3.0"
+printf("ripopt %s\n", RIPOPT_VERSION);  // "0.6.1"
 ```
 
 ### Callback signatures
@@ -586,7 +584,6 @@ The `user_data` pointer is forwarded to every callback unchanged — use it to p
 | Code | Enum constant                          | Meaning                                         |
 |------|----------------------------------------|-------------------------------------------------|
 | 0    | `RIPOPT_SOLVE_SUCCEEDED`               | Converged to optimal solution                   |
-| 1    | `RIPOPT_ACCEPTABLE_LEVEL`              | Converged to acceptable (less strict) tolerance |
 | 2    | `RIPOPT_INFEASIBLE_PROBLEM`            | Problem is locally infeasible                   |
 | 5    | `RIPOPT_MAXITER_EXCEEDED`              | Reached iteration limit                         |
 | 6    | `RIPOPT_RESTORATION_FAILED`            | Feasibility restoration failed                  |
@@ -595,7 +592,7 @@ The `user_data` pointer is forwarded to every callback unchanged — use it to p
 | 11   | `RIPOPT_INVALID_PROBLEM_DEFINITION`    | Problem appears unbounded                       |
 | -1   | `RIPOPT_INTERNAL_ERROR`                | Internal error                                  |
 
-Status 0 and 1 indicate a successful solve. All others indicate failure — check your problem formulation, initial point, or try adjusting options.
+Status 0 indicates a successful solve. All others indicate failure — check your problem formulation, initial point, or try adjusting options.
 
 ### Options reference
 
@@ -606,23 +603,19 @@ Option-setting functions return `1` on success, `0` if the keyword is unknown. A
 | Option                       | Default | Description                                     |
 |------------------------------|---------|-------------------------------------------------|
 | `tol`                        | 1e-8    | Convergence tolerance                           |
-| `acceptable_tol`             | 1e-4    | Acceptable convergence tolerance                |
-| `acceptable_constr_viol_tol` | 1e-2    | Acceptable constraint violation                 |
-| `acceptable_dual_inf_tol`    | 1e10    | Acceptable dual infeasibility                   |
-| `acceptable_compl_inf_tol`   | 1e-2    | Acceptable complementarity                      |
 | `mu_init`                    | 0.1     | Initial barrier parameter                       |
 | `mu_min`                     | 1e-11   | Minimum barrier parameter                       |
 | `bound_push`                 | 1e-2    | Initial bound push                              |
 | `bound_frac`                 | 1e-2    | Initial bound fraction                          |
 | `constr_viol_tol`            | 1e-4    | Constraint violation tolerance                  |
-| `dual_inf_tol`               | 100.0   | Dual infeasibility tolerance                    |
+| `dual_inf_tol`               | 1.0     | Dual infeasibility tolerance                    |
 | `compl_inf_tol`              | 1e-4    | Complementarity tolerance                       |
 | `max_wall_time`              | 0.0     | Wall-clock time limit in seconds (0 = no limit) |
 | `warm_start_bound_push`      | 1e-3    | Warm-start bound push                           |
 | `warm_start_bound_frac`      | 1e-3    | Warm-start bound fraction                       |
 | `warm_start_mult_bound_push` | 1e-3    | Warm-start multiplier push                      |
-| `nlp_lower_bound_inf`        | -1e19   | Threshold for -infinity bounds                  |
-| `nlp_upper_bound_inf`        | 1e19    | Threshold for +infinity bounds                  |
+| `nlp_lower_bound_inf`        | -1e20   | Threshold for -infinity bounds                  |
+| `nlp_upper_bound_inf`        | 1e20    | Threshold for +infinity bounds                  |
 | `kappa`                      | 10.0    | Adaptive mu divisor                             |
 | `constr_mult_init_max`       | 1000.0  | Max initial constraint multiplier               |
 | `barrier_tol_factor`         | 10.0    | Barrier tolerance factor                        |
@@ -633,7 +626,6 @@ Option-setting functions return `1` on success, `0` if the keyword is unknown. A
 |------------------------|---------|--------------------------------------------------------|
 | `max_iter`             | 3000    | Maximum iterations                                     |
 | `print_level`          | 5       | Output verbosity (0 = silent, 5 = verbose, 12 = debug) |
-| `acceptable_iter`      | 10      | Consecutive acceptable iterations for convergence      |
 | `max_soc`              | 4       | Maximum second-order correction steps                  |
 | `sparse_threshold`     | 110     | KKT dimension threshold for sparse solver              |
 | `restoration_max_iter` | 200     | Max iterations in NLP restoration subproblem           |
@@ -671,7 +663,7 @@ If you have existing Ipopt C code, the migration is straightforward:
 3. **Functions:** Rename `CreateIpoptProblem` → `ripopt_create`, `FreeIpoptProblem` → `ripopt_free`, `AddIpoptNumOption` → `ripopt_add_num_option`, etc.
 4. **Callbacks:** No changes required — signatures are identical
 5. **Status codes:** Similar semantics but different enum names (e.g., `Solve_Succeeded` → `RIPOPT_SOLVE_SUCCEEDED`)
-6. **Infinity:** Ipopt uses ±2e19 by default; ripopt uses ±1e30 in bounds and ±1e19 for `nlp_*_bound_inf`
+6. **Infinity:** Ipopt uses ±2e19 by default; ripopt uses ±1e30 in bounds and ±1e20 for `nlp_*_bound_inf`
 7. **Linking:** `-lipopt` → `-lripopt`
 
 ### Compile and run the examples

@@ -20,6 +20,8 @@ let opts = SolverOptions {
 | `compl_inf_tol` | `1e-4` | Complementarity tolerance |
 | `max_iter` | `3000` | Maximum iterations |
 | `max_wall_time` | `0.0` | Wall-clock limit in seconds (0 = unlimited) |
+| `stall_iter_limit` | `30` | Max iters without 1% improvement before stall detection (0 = off) |
+| `early_stall_timeout` | `120.0` | Max seconds for first 3 iterations (0 = off) |
 
 ## Barrier parameter
 
@@ -33,6 +35,7 @@ let opts = SolverOptions {
 | `mu_superlinear_decrease_power` | `1.5` | Monotone mode superlinear exponent |
 | `barrier_tol_factor` | `10.0` | Subproblem tol = `barrier_tol_factor * μ` |
 | `mu_allow_increase` | `true` | Allow μ to increase after restoration/stall recovery |
+| `adaptive_mu_monotone_init_factor` | `0.8` | Initial μ factor when entering Fixed (monotone) mode |
 | `mu_oracle_quality_function` | `false` | Use quality function for mu selection |
 
 ## Linear solver
@@ -55,6 +58,7 @@ let opts = SolverOptions {
 |---|---|---|
 | `max_soc` | `4` | Max second-order corrections per step |
 | `tau_min` | `0.99` | Fraction-to-boundary parameter (τ in step size rule) |
+| `constraint_slack_barrier` | `true` | Include constraint slack log-barriers in filter merit function |
 | `watchdog_shortened_iter_trigger` | `10` | Consecutive short steps before watchdog |
 | `watchdog_trial_iter_max` | `3` | Watchdog trial iterations |
 
@@ -96,8 +100,17 @@ let opts = SolverOptions {
 |---|---|---|
 | `bound_push` | `1e-2` | κ₁: push initial x away from bounds by max(κ₁, κ₂·(u−l)) |
 | `bound_frac` | `1e-2` | κ₂: fraction of bound gap used for push |
+| `slack_bound_push` | `1e-2` | Slack variable bound push |
+| `slack_bound_frac` | `1e-2` | Slack variable bound fraction |
 | `least_squares_mult_init` | `true` | Initialize y by least-squares on stationarity |
 | `constr_mult_init_max` | `1000.0` | Cap on LS multiplier init magnitude |
+
+## Bound thresholds
+
+| Option | Default | Description |
+|---|---|---|
+| `nlp_lower_bound_inf` | `-1e20` | Treat variable/constraint bounds below this as -∞ |
+| `nlp_upper_bound_inf` | `1e20` | Treat variable/constraint bounds above this as +∞ |
 
 ## Preprocessing and detection
 
@@ -105,6 +118,7 @@ let opts = SolverOptions {
 |---|---|---|
 | `enable_preprocessing` | `true` | Eliminate fixed variables and redundant constraints |
 | `detect_linear_constraints` | `true` | Skip Hessian for constraints with zero second derivatives |
+| `proactive_infeasibility_detection` | `false` | Early infeasibility detection during iterations |
 
 ## Diagnostics
 

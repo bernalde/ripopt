@@ -22,9 +22,9 @@
 
 /* Version information — keep in sync with Cargo.toml */
 #define RIPOPT_VERSION_MAJOR 0
-#define RIPOPT_VERSION_MINOR 2
-#define RIPOPT_VERSION_PATCH 0
-#define RIPOPT_VERSION "0.2.0"
+#define RIPOPT_VERSION_MINOR 6
+#define RIPOPT_VERSION_PATCH 1
+#define RIPOPT_VERSION "0.6.1"
 
 #ifdef __cplusplus
 extern "C" {
@@ -81,7 +81,6 @@ typedef int (*Eval_H_CB)(
  * ------------------------------------------------------------------------- */
 typedef enum {
     RIPOPT_SOLVE_SUCCEEDED              =  0,
-    RIPOPT_ACCEPTABLE_LEVEL             =  1,
     RIPOPT_INFEASIBLE_PROBLEM           =  2,
     RIPOPT_MAXITER_EXCEEDED             =  5,
     RIPOPT_RESTORATION_FAILED           =  6,
