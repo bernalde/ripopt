@@ -81,6 +81,14 @@ and Ipopt-only counts, electrolyte/grid results.
 - [ ] `benchmarks/grid/grid_benchmark_report.md` — same
 - [ ] `MEMORY.md` (in `~/.claude/projects/...ripopt/memory/`) —
   HS Benchmark Status section, CUTEst Benchmark Status section
+- [ ] `narrative-history.org` — append a new chapter in the same literary
+  style covering the work since the last narrative update. Find the prior
+  cutoff with `git log -1 --format=%H -- narrative-history.org`, then walk
+  `git log --first-parent <prev>..HEAD --format="%ai %h %s"` to gather
+  commit messages and dates. Group by theme/issue (not strict chronology),
+  cite specific commits and memory-file lessons where they sharpen the
+  story, and keep the honesty rule visible. Append after the existing final
+  section so prior chapters stay intact.
 
 ---
 

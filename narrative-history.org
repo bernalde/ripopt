@@ -242,3 +242,89 @@ The agents that generated the code had no memory between sessions. Each morning 
 The question of who made this — what it means to make something at all in this particular moment — is one that John asked himself explicitly, and did not fully answer. He is not sure if the work can be copyrighted. He is not sure if the optimization community will take it seriously. He is going to enjoy this while LLMs are available.
 
 The answer is mostly yes.
+
+* Chapter Seven: After the Post
+
+The LinkedIn post went up on March 29, 2026. The story it told had the shape of a finished thing — fifty days, two months, a working solver, the answer is mostly yes.
+
+Two hours after the post, John was committing again.
+
+He had written the closing line of the reflections that morning. The benchmarks were tagged. The manuscript was at v0.6.0. He could have stopped. He did not stop.
+
+At 4:14 PM on March 29, the agents pushed a fix for a monotone-mode stall: in certain configurations, the barrier parameter was failing to decrease and the solver was returning NumericalError instead of forcing mu down and continuing. Six minutes later, a /community note/ landed — a small acknowledgment of the open-source ecosystem the project was about to enter.
+
+Then a flurry. KKT matrix dump tooling. An mdBook tutorial site. A GitHub Pages workflow. Crate-level documentation with escaped rustdoc brackets. CI configured with cargo cache and nextest. The lib.rs doctest fixed for the current NlpProblem API. By 9:41 PM, fifteen commits past the post, the project had a documentation site, a regression-catching CI pipeline, and infrastructure for external solver benchmarking — a tool to dump KKT matrices to JSON so that other solvers could reproduce them.
+
+The tooling was deliberate. The post had named the bottleneck: /I think I need to learn more about the linear solvers to make another breakthrough in performance./ The KKT dump binary was the first move toward that learning. If you can extract the linear systems your solver chokes on, you can hand them to MUMPS or HSL or Pardiso and see what the experts do.
+
+** Going Public
+
+On March 31, the project left its private corner of GitHub.
+
+The code had been visible there for weeks, but there is a difference between /visible/ and /installable/. Late afternoon March 31: a repository URL added to Cargo.toml, the gitignore tightened to exclude ~.claude/~, version metadata polished. A README badge announced the new home on crates.io. April 4 closed a small loop with a convergence-check fallback: when the iterative bound multipliers ~z~ become corrupted on certain ill-conditioned problems, fall back to the stationarity-based ~z_opt~.
+
+April 5 was a release day. v0.6.1. Pyomo got PyPI packaging with bundled binary wheels, so a Python user could write ~pip install pyomo-ripopt~ and get a working interior point solver — the binary in the wheel, no compilation. The Crucible knowledge base — a tool John had been building for managing primary sources — was added to CLAUDE.md as a way to direct future agent sessions toward original literature rather than re-deriving everything from scratch each session. The tagged benchmark snapshots were saved as ~v0.6.1~ baselines. The solver was now installable; a user who had never heard of Rust could type two pip commands and use it.
+
+** gas40
+
+The next week was about a single problem.
+
+gas40 is a 40-stage gas pipeline optimization. It is the kind of problem chemical engineers care about: a steady-state flow network with compressors, pressure constraints, and an objective that trades off compressor power against throughput. Ipopt solved it. ripopt did not.
+
+The story of gas40 spans April 6 through April 10, and it becomes, in retrospect, the first answer to the question the LinkedIn post had ended with: /What is next?/
+
+April 6 brought nine commits. The work was in rmumps. A bug in ~expand_for_delayed~: when delayed pivot columns are added to a frontal matrix, the matrix data must be permuted along with the column indices, not just the indices alone. The agents had sorted the indices and forgotten to apply the same permutation to the values. A subtler bug in inertia counting: an in-factorization promotion of contribution-block columns was causing the eigenvalue counts to be off by one. Inertia correction would then fire on a phantom miscount, perturb the matrix until the false count matched the target, and return a worse direction. A new ordering — KktMatchingAmd — combined maximum-cardinality bipartite matching with AMD on the resulting structure. A KKT-system test suite landed alongside, with targeted problems and known inertia signatures, designed to catch the kinds of bugs that had just been fixed. The pivot threshold dropped to 1e-6 and the inertia-correction backward-error gate was relaxed: ill-conditioned KKT systems near optimality have small but real pivots that the previous threshold was rejecting as numerically zero.
+
+April 7 added iterative refinement in the original (un-permuted) space, so that residual computation was not contaminated by AMD's ordering effects, and Kahan summation and GEMV in the solve phase, to control rounding error in the back-substitution. These are the kinds of changes that move a solver from /works on textbook examples/ to /works on industrial problems./
+
+April 9 ran a full 727-problem CUTEst suite. Numbers shifted.
+
+April 10 brought the fix. Not in rmumps. In the dense path. A single line:
+
+/alpha_for_y = alpha_primal/
+
+Ripopt had been using the dual step length to update the dual variables — mathematically defensible, the choice that matches one reading of the primal-dual interior point algorithm. Ipopt's default is to use the /primal/ step length, which is more conservative and prevents dual divergence on certain problem structures. gas40 was one of those structures. Switching to Ipopt's default solved gas40 in 44 iterations.
+
+The memory file records the verdict with characteristic dryness: /gas40: SOLVED via dense solver in 44 iters. Key fix: alpha_for_y = alpha_primal. rmumps still can't solve gas40 directly — 3 eigenvalues flip sign during the Schur complement./
+
+The lesson here is not subtle. Ripopt had spent a week building bipartite matching, refining iterative refinement, fixing inertia miscounts in rmumps — and the actual blocker was a single solver option that had been quietly diverging from Ipopt for the entire history of the project. The rmumps work was not wasted; it fixed real bugs, added real capability, made the multifrontal solver substantially more correct. But the gas40 fix was elsewhere, and finding it required exhausting the obvious hypothesis first. This is what it means to debug a numerical solver: the obvious hypothesis is the linear solver, and sometimes the obvious hypothesis is wrong.
+
+** Issue #8: The Quality Chain
+
+April 11 was the most theoretically dense day in the project's history.
+
+It opened with a constraint-violation refactor: switch theta from the L∞ norm to the L1 norm. Ipopt's default is L1; ripopt had been L∞. The two are equivalent for convergence, but L1 produces a smoother filter line search and is what the published Ipopt algorithm assumes. The change touched the filter, the SOC machinery, the restoration triggers.
+
+Within an hour, a max-norm convergence check joined the existing weighted residual check, and a mu-boost mechanism was added for stalled-near-optimal points. Some problems were sitting at acceptable accuracy but not crossing the strict tolerance line; the boost gave them a kick.
+
+Then the largest single technical commit of the spring: /KKT scaling, pretend-singular, mu safeguards, degeneracy detection./ KKT scaling normalizes the linear system so that row and column scaling do not distort the inertia computation. Pretend-singular handling lets the solver treat near-singular pivots as if they were exactly singular and route them through the delayed-pivot machinery instead of declaring numerical failure. Mu safeguards prevent the barrier parameter from collapsing in pathological corners. Degeneracy detection catches the cases where the active set is geometrically singular and the multipliers are not unique.
+
+Mid-morning brought MUMPS parity work for rmumps: the SimScale schedule — one inf-norm Ruiz iteration followed by three one-norm Ruiz iterations, matching MUMPS's scaling pipeline exactly. An ordering revert: KktMatchingAmd had performed worse on real KKT systems than standard AMD, so AMD came back as the default. By afternoon, the IncreaseQuality machinery was in place: before perturbation triggers, ramp up the quality of the linear solve, and only perturb if quality fails to recover. This matches what MUMPS does internally.
+
+Late evening, issue #12: sparse GN restoration, the Loqo mu oracle, and a KKT diagnostics module. The Loqo update — from Vanderbei's Loqo solver — is yet another option for the mu update dispatcher that already supported Free, Fixed, and Mehrotra modes. The sparse GN restoration uses the rmumps solver during the Gauss-Newton restoration phase, which had been using dense factorization even on large problems. The diagnostics module exports per-solve information — pivot counts, perturbations, scaling factors, residuals — for post-mortem analysis.
+
+Nine commits in a single day. Net effect: closer to MUMPS, closer to Ipopt, closer to a solver someone other than its creator could reasonably use on a production problem.
+
+** v0.6.2
+
+April 12 was a release day, but the most interesting commit was a small one: /fix(ipm): prevent worse local minima from replacing main-IPM iterates in fallback dispatch./
+
+The fallback cascade — restoration, slack reformulation, augmented Lagrangian, NE-to-LS — was sometimes /replacing/ the main IPM's iterates with a fallback solution that had a /worse/ objective value. The IPM had been heading toward a good local minimum, hit a numerical hiccup, triggered the fallback; the fallback found a different (worse) local minimum; the dispatcher took it because it had a clean ~Optimal~ status.
+
+This was, in spirit, a violation of the honesty rule from February. A clean status on a worse answer is not better than a messy status on a better answer. The fix compares objectives before accepting a fallback solution and rejects fallbacks that regress.
+
+The rest of April 12 was release housekeeping: reorganize the benchmarks tree under ~benchmarks/~, expand the release checklist, sync the benchmark numbers, refresh the manuscript SI line references and rebuild the PDF, re-run all 15 tutorial notebooks against v0.6.2 and fix a bug in notebook 06, silence dead-code warnings, refresh the stale RIPOPT_VS_IPOPT comparison tables.
+
+By 12:46 PM on April 12, version 0.6.2 was tagged. The HS suite still stood at 116/120 tied with Ipopt. CUTEst had moved to 569/727 against Ipopt's 561 — ripopt now eight problems ahead, with a 17.7x geometric-mean speedup on the HS suite and 11.1x on CUTEst. Both numbers were strict-Optimal-only. The honesty rule had survived the second release cycle.
+
+---
+
+The shape of the work had changed.
+
+Before March 29, ripopt was a sprint — a fifty-day burst of agentic engineering with a clear goal and an implied deadline. After March 29, ripopt was an open-source project. The two are not the same kind of work. The sprint had a beginning and an end; the project has no end. There is always another bug, another benchmark, another release to prepare.
+
+The agents do not feel that distinction. To them, every session is the same: read the planning files, orient to the current state, execute the next task. The shift from /racing to ship/ to /maintaining a thing that ships/ lives in the human who supervises them — in John's choice to keep writing commits after the post had said the work was done.
+
+The LinkedIn post had ended with /the answer is mostly yes./ Two weeks later, with v0.6.2 on crates.io and a multifrontal solver that could read its own pivot statistics, the answer was the same.
+
+It was just a little more yes.
