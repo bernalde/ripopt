@@ -71,6 +71,10 @@ and Ipopt-only counts, electrolyte/grid results.
   - Inline `RIPOPT_VERSION` comment near the C API example
 - [ ] `docs/src/benchmarks.md` — mirror of README benchmark sections
 - [ ] `docs/src/introduction.md` and other `docs/src/*.md` if API/CLI changed
+- [ ] `docs/src/SUMMARY.md` — add entries for any new mdbook pages introduced
+  this release (the mdbook TOC does not auto-discover)
+- [ ] `mdbook build docs` — rebuild the book and confirm no broken links or
+  missing-page warnings
 - [ ] `benchmarks/hs/PERFORMANCE_COMPARISON.md` — full HS-specific report
 - [ ] `RIPOPT_VS_IPOPT.md` — strategic comparison narrative
 - [ ] `benchmarks/electrolyte/electrolyte_benchmark_report.md` — if domain-specific numbers changed
@@ -142,9 +146,10 @@ GAMS, since each layer depends on the one below it.
 
 - [ ] `cargo build --release` produces `target/release/libripopt.{dylib,so}`
 - [ ] `ripopt.h` `RIPOPT_VERSION` matches `Cargo.toml`
-- [ ] Compile and run a small C client against the shared library
-  (the README has a one-liner; or use a `.c` file from `examples/c/` if it
-  exists)
+- [ ] `make test-c` — compiles and runs the bundled C clients
+  (`examples/c_api_test.c`, `examples/c_rosenbrock.c`, `examples/c_hs035.c`,
+  `examples/c_example_with_options.c`) against the freshly built
+  `libripopt.{dylib,so}`
 - [ ] `make install` then `ripopt --version` reports the new version
 
 ### 6c. AMPL/NL solver binary
@@ -188,6 +193,26 @@ Ripopt.jl (most patch releases). Otherwise:
 - [ ] Confirm `~/.cargo/bin/ripopt` is on `$PATH` so `SolverFactory('ripopt')`
   resolves it (this is the default install location after `make install`)
 
+### 6h. Tutorial notebooks
+
+- [ ] Re-run all 15 notebooks in `tutorials/` **in place** against the newly
+  built release, top-to-bottom:
+
+  ```bash
+  cd tutorials
+  for nb in 0*.ipynb 1*.ipynb; do
+      jupyter nbconvert --to notebook --execute --inplace "$nb"
+  done
+  ```
+
+  Any `pyomo-ripopt` API drift or output-format change surfaces as a cell
+  failure. Commit the re-executed notebooks so GitHub renders fresh outputs.
+- [ ] Spot-check `15_ripopt_in_practice.ipynb` — this notebook exercises
+  the most ripopt-specific surface area (solver options, diagnostics,
+  architecture), so any behavioral change is most likely to show up here.
+- [ ] Verify `tutorials/README.md` still accurately lists every notebook
+  and its topic (update if notebooks were added, removed, or retitled)
+
 ---
 
 ## 7. Manuscript and supporting information
@@ -223,7 +248,7 @@ before tagging.**
   break these silently. Grep the SI for any path-shaped strings and
   re-verify each one. (Common reorganizations to watch for: any rename
   inside `benchmarks/`, anything moved between `src/` and `rmumps/`,
-  anything moved into or out of `tests/common/`.)
+  anything moved between `src/` and a new module split.)
 - [ ] **Code line-number references** — line numbers shift any time code
   is added or removed above. For each `file.rs:NNN` citation in the SI,
   open the file at that line and confirm it still points to the function,
@@ -322,6 +347,7 @@ These let us compare per-problem timing across versions later:
 - [ ] (Optional) `cp benchmarks/cutest/results.json benchmarks/cutest/results_vX.Y.Z.json`
 - [ ] (Optional) `cp benchmarks/electrolyte/electrolyte_results.json benchmarks/electrolyte/electrolyte_results_vX.Y.Z.json`
 - [ ] (Optional) `cp benchmarks/grid/grid_results.json benchmarks/grid/grid_results_vX.Y.Z.json`
+- [ ] (Optional) `cp benchmarks/cho/cho_results.json benchmarks/cho/cho_results_vX.Y.Z.json`
 
 ---
 
@@ -378,6 +404,12 @@ then ripopt, then language bindings.
 - [ ] On crates.io, confirm both `ripopt` and `rmumps` show the new version
 - [ ] `cargo install ripopt --version X.Y.Z` from a clean directory and run
   `ripopt --version` to confirm the published binary works
+- [ ] **Zenodo DOI** — Zenodo is linked to the GitHub repo and auto-archives
+  every published release (metadata in `.zenodo.json`). Wait a few minutes
+  after the GitHub release in Section 11, then check
+  https://zenodo.org/badge/latestdoi/1152248927 resolves to a new
+  version-specific DOI for `vX.Y.Z`. The `latestdoi` badge in `README.md`
+  updates automatically — no file edits needed.
 - [ ] Update `MEMORY.md` HS/CUTEst status sections with the new release
   numbers if you didn't already in step 3
 - [ ] Bump `Cargo.toml` to the next `+dev` working version if you use that
@@ -386,6 +418,11 @@ then ripopt, then language bindings.
 - [ ] Close any GitHub issues fixed in this release with a comment pointing
   at the release notes
 - [ ] Tweet/announce/etc. as appropriate
+- [ ] **Draft a brief LinkedIn post** summarizing the release: one-line hook,
+  2–4 headline numbers or changes (HS/CUTEst deltas, notable new features),
+  a link to the GitHub release page, and relevant tags (`#Rust`,
+  `#Optimization`, `#OpenSource`). Keep it under ~150 words so it renders
+  without a "see more" fold on desktop.
 
 ---
 
@@ -410,21 +447,3 @@ then ripopt, then language bindings.
   function signature changed, that's a SemVer concern — major-bump or
   carefully document
 
----
-
-## Possibly missing — please review
-
-Things that seem release-relevant but I'm not 100% sure are part of your
-current process. Decide whether to add them:
-
-- **`target/package/ripopt-0.6.X/`** directories from prior `cargo package`
-  runs — local artifacts, no release impact, but worth pruning.
-- **DOI / Zenodo deposit**: if you mint a DOI per release for citation,
-  that's a manual step after tagging.
-- **`docs/src/SUMMARY.md`** — if you added new mdbook pages, the SUMMARY
-  needs the entry. Check after every release that adds public-facing doc
-  pages.
-- **`benchmarks/gas/`, `benchmarks/water/`, `gams/`, `tutorials/` example READMEs**: do these
-  reference versions or capabilities that need updating?
-- **Crates.io categories/keywords in `Cargo.toml`**: occasionally worth
-  reviewing — they affect discoverability.
