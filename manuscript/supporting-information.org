@@ -52,10 +52,10 @@ When a constraint is infeasible ($s_{L,i} < 0$), no barrier term exists and the 
 
 ** Source Code References
 
-- KKT assembly function: [[../src/kkt.rs::45][src/kkt.rs:45]] (=assemble_kkt=)
-- $\Sigma_s$ computation and (2,2) block: [[../src/kkt.rs::145][src/kkt.rs:145]] (=let mut sigma_s = 0.0=)
-- (2,2) block entry written: [[../src/kkt.rs::192][src/kkt.rs:192]] (=matrix.add(n + i, n + i, -sigma_s_inv)=)
-- Mathematical derivation comment: [[../src/kkt.rs::144][src/kkt.rs:144]]
+- KKT assembly function: [[../src/kkt.rs::52][src/kkt.rs:52]] (=assemble_kkt=)
+- $\Sigma_s$ computation and (2,2) block: [[../src/kkt.rs::153][src/kkt.rs:153]] (=let mut sigma_s = 0.0=)
+- (2,2) block entry written: [[../src/kkt.rs::200][src/kkt.rs:200]] (=matrix.add(n + i, n + i, -sigma_s_inv)=)
+- Mathematical derivation comment: [[../src/kkt.rs::134][src/kkt.rs:134]]
 
 ** Condensed KKT via Schur Complement
 
@@ -63,10 +63,10 @@ When $m \ge 2n$, the KKT system is reduced via Schur complement elimination of $
 
 For equality constraints with zero $(2,2)$ entry, a stiff-spring penalty of $-10^{-16}$ prevents dropping them from the Schur complement.
 
-- =CondensedKktSystem= struct: [[../src/kkt.rs::490][src/kkt.rs:490]]
-- =assemble_condensed_kkt= function: [[../src/kkt.rs::516][src/kkt.rs:516]]
-- Schur complement assembly ($S = H + \Sigma + J^T D_c^{-1} J$): [[../src/kkt.rs::543][src/kkt.rs:543]]
-- Threshold ($m \ge 2n$) in solver: [[../src/ipm.rs::2164][src/ipm.rs:2164]]
+- =CondensedKktSystem= struct: [[../src/kkt.rs::944][src/kkt.rs:944]]
+- =assemble_condensed_kkt= function: [[../src/kkt.rs::970][src/kkt.rs:970]]
+- Schur complement assembly ($S = H + \Sigma + J^T D_c^{-1} J$): [[../src/kkt.rs::1079][src/kkt.rs:1079]]
+- Threshold ($m \ge 2n$) in solver: [[../src/ipm.rs::3169][src/ipm.rs:3169]]
 
 * Convergence with Stationarity-Based Bound Multipliers
 
@@ -85,7 +85,7 @@ The complementarity gate prevents false convergence by rejecting $z_{\text{opt}}
 
 $$z_{\text{opt},i} \cdot s_i \le \kappa_{\text{compl}} \cdot \mu$$
 
-with $\kappa_{\text{compl}} = 10^{10}$. As $\mu \to 0$, the gate tightens, eventually requiring $z_{\text{opt}} \cdot s \approx 0$.
+with $\kappa_{\text{compl}} = 10^{12}$. As $\mu \to 0$, the gate tightens, eventually requiring $z_{\text{opt}} \cdot s \approx 0$.
 
 *** Two-Layer Convergence Test
 
@@ -97,16 +97,16 @@ For complementarity, the algorithm takes $\min(C_z, C_{z_{\text{opt}}})$ to hand
 
 ** Source Code References
 
-- Stationarity-based $z_{\text{opt}}$ computation: [[../src/ipm.rs::1988][src/ipm.rs:1988]] (comment: =// Compute z_opt from stationarity=)
-- $z_{\text{opt}}$ block: [[../src/ipm.rs::1995][src/ipm.rs:1995]] (=let (z_l_opt, z_u_opt) = {=)
-- $J^T y$ accumulation: [[../src/ipm.rs::1996][src/ipm.rs:1996]]
-- Complementarity gate ($\kappa_{\text{compl}} = 10^{10}$): [[../src/ipm.rs::2004][src/ipm.rs:2004]]
-- Gate condition: [[../src/ipm.rs::2008][src/ipm.rs:2008]] (=if grad_jty[i] * s_l <= kappa_compl * state.mu=)
-- =check_convergence= function: [[../src/convergence.rs::46][src/convergence.rs:46]]
+- Stationarity-based $z_{\text{opt}}$ computation: [[../src/ipm.rs::2515][src/ipm.rs:2515]] (comment: =// Compute z_opt from stationarity=)
+- $z_{\text{opt}}$ block: [[../src/ipm.rs::2522][src/ipm.rs:2522]] (=let (z_l_opt, z_u_opt) = {=)
+- $J^T y$ accumulation: [[../src/ipm.rs::2524][src/ipm.rs:2524]]
+- Complementarity gate ($\kappa_{\text{compl}} = 10^{12}$): [[../src/ipm.rs::2531][src/ipm.rs:2531]]
+- Gate condition: [[../src/ipm.rs::2535][src/ipm.rs:2535]] (=if grad_jty[i] * s_l <= kappa_compl * state.mu=)
+- =check_convergence= function: [[../src/convergence.rs::51][src/convergence.rs:51]]
 - =ConvergenceInfo= struct: [[../src/convergence.rs::23][src/convergence.rs:23]]
-- Scaled check: [[../src/convergence.rs::70][src/convergence.rs:70]]
-- Unscaled check: [[../src/convergence.rs::73][src/convergence.rs:73]]
-- Acceptable tolerance checks (internal, for best-du tracking): [[../src/convergence.rs::81][src/convergence.rs:81]]
+- Scaled check: [[../src/convergence.rs::75][src/convergence.rs:75]]
+- Unscaled check: [[../src/convergence.rs::78][src/convergence.rs:78]]
+- Acceptable tolerance checks (internal, for best-du tracking): [[../src/convergence.rs::106][src/convergence.rs:106]]
 
 * Two-Phase Restoration with Multi-Attempt Recovery
 
@@ -144,25 +144,25 @@ After successful restoration: $z_i = \mu/s_i$ (capped at $10^3$), $y_i = 0$, bar
 
 ** Source Code References
 
-- =RestorationPhase= struct: [[../src/restoration.rs::11][src/restoration.rs:11]]
-- Main GN loop (=restore= function): [[../src/restoration.rs::40][src/restoration.rs:40]]
-- Gauss-Newton step computation: [[../src/restoration.rs::393][src/restoration.rs:393]] (=gauss_newton_step=)
-- Normal equations $J_a J_a^T$: [[../src/restoration.rs::118][src/restoration.rs:118]]
-- Gradient descent fallback: [[../src/restoration.rs::208][src/restoration.rs:208]]
+- =RestorationPhase= struct: [[../src/restoration.rs::13][src/restoration.rs:13]]
+- Main GN loop (=restore= function): [[../src/restoration.rs::42][src/restoration.rs:42]]
+- Gauss-Newton step computation: [[../src/restoration.rs::408][src/restoration.rs:408]] (=gauss_newton_step=)
+- Normal equations $J_a J_a^T$: [[../src/restoration.rs::429][src/restoration.rs:429]]
+- Gradient descent fallback: [[../src/restoration.rs::223][src/restoration.rs:223]]
 - =RestorationNlp= struct: [[../src/restoration_nlp.rs::18][src/restoration_nlp.rs:18]]
 - =RestorationNlp::new=: [[../src/restoration_nlp.rs::47][src/restoration_nlp.rs:47]]
 - Objective implementation ($\rho \Sigma + \eta/2 \|D_R\|^2$): [[../src/restoration_nlp.rs::185][src/restoration_nlp.rs:185]]
-- NLP restoration invocation: [[../src/ipm.rs::2871][src/ipm.rs:2871]] (=attempt_nlp_restoration=)
-- NLP restoration triggered at fail_count==2: [[../src/ipm.rs::2867][src/ipm.rs:2867]]
-- Multi-attempt recovery loop: [[../src/ipm.rs::2942][src/ipm.rs:2942]]
-- $\mu$ factors cycle: [[../src/ipm.rs::2940][src/ipm.rs:2940]] (=[10.0, 0.1, 100.0, 0.01, 1000.0, 0.001]=)
-- Mode switch (attempt 1): [[../src/ipm.rs::2944][src/ipm.rs:2944]]
-- $x$ perturbation (attempts 3+): [[../src/ipm.rs::2972][src/ipm.rs:2972]]
-- Post-restoration state reset: [[../src/ipm.rs::4028][src/ipm.rs:4028]] (=apply_restoration_success=)
-- Multiplier reset: [[../src/ipm.rs::4052][src/ipm.rs:4052]]
-- Filter reset: [[../src/ipm.rs::4120][src/ipm.rs:4120]]
-- $\mu$ recomputed: [[../src/ipm.rs::4125][src/ipm.rs:4125]]
-- Mode reset to Free: [[../src/ipm.rs::4028][src/ipm.rs:4028]]
+- NLP restoration invocation: [[../src/ipm.rs::4425][src/ipm.rs:4425]] (=attempt_nlp_restoration=)
+- NLP restoration triggered at fail_count==2: [[../src/ipm.rs::4423][src/ipm.rs:4423]]
+- Multi-attempt recovery loop: [[../src/ipm.rs::4498][src/ipm.rs:4498]]
+- $\mu$ factors cycle: [[../src/ipm.rs::4496][src/ipm.rs:4496]] (=[10.0, 0.1, 100.0, 0.01, 1000.0, 0.001]=)
+- Mode switch (attempt 1): [[../src/ipm.rs::4499][src/ipm.rs:4499]]
+- $x$ perturbation (attempts 3+): [[../src/ipm.rs::4533][src/ipm.rs:4533]]
+- Post-restoration state reset: [[../src/ipm.rs::5524][src/ipm.rs:5524]] (=apply_restoration_success=)
+- Multiplier reset: [[../src/ipm.rs::5548][src/ipm.rs:5548]]
+- Filter reset: [[../src/ipm.rs::5631][src/ipm.rs:5631]]
+- $\mu$ recomputed: [[../src/ipm.rs::5637][src/ipm.rs:5637]]
+- Mode reset to Free: [[../src/ipm.rs::5644][src/ipm.rs:5644]]
 
 * Automatic NE-to-LS Reformulation
 
@@ -197,12 +197,12 @@ For square systems ($m = n$), if the LS reformulation returns =LocalInfeasibilit
 
 ** Source Code References
 
-- NE detection function: [[../src/ipm.rs::978][src/ipm.rs:978]] (=detect_ne_problem=)
-- Detection trigger in =solve=: [[../src/ipm.rs::1068][src/ipm.rs:1068]]
-- =LeastSquaresProblem= struct: [[../src/ipm.rs::803][src/ipm.rs:803]]
-- Full Hessian (=hessian_values=): [[../src/ipm.rs::924][src/ipm.rs:924]]
-- $J^T J$ (Gauss-Newton term): [[../src/ipm.rs::936][src/ipm.rs:936]]
-- $\sum r_i \nabla^2 g_i$ (second-order correction): [[../src/ipm.rs::958][src/ipm.rs:958]]
+- NE detection function: [[../src/ipm.rs::1038][src/ipm.rs:1038]] (=detect_ne_problem=)
+- Detection trigger in =solve=: [[../src/ipm.rs::1231][src/ipm.rs:1231]]
+- =LeastSquaresProblem= struct: [[../src/ipm.rs::815][src/ipm.rs:815]]
+- Full Hessian (=hessian_values=): [[../src/ipm.rs::936][src/ipm.rs:936]]
+- $J^T J$ (Gauss-Newton term): [[../src/ipm.rs::948][src/ipm.rs:948]]
+- $\sum r_i \nabla^2 g_i$ (second-order correction): [[../src/ipm.rs::970][src/ipm.rs:970]]
 
 * Multi-Solver Fallback Architecture
 
@@ -226,19 +226,19 @@ If no dual infeasibility improvement occurs for 500+ iterations, the best-du poi
 
 ** Source Code References
 
-- L-BFGS solver entry: [[../src/lbfgs.rs::23][src/lbfgs.rs:23]] (=pub fn solve=)
-- L-BFGS memory size: [[../src/lbfgs.rs::12][src/lbfgs.rs:12]] (=LBFGS_M = 10=)
-- AL solver entry: [[../src/augmented_lagrangian.rs::185][src/augmented_lagrangian.rs:185]] (=pub fn solve=)
+- L-BFGS solver entry: [[../src/lbfgs.rs::24][src/lbfgs.rs:24]] (=pub fn solve=)
+- L-BFGS memory size: [[../src/lbfgs.rs::13][src/lbfgs.rs:13]] (=LBFGS_M = 10=)
+- AL solver entry: [[../src/augmented_lagrangian.rs::186][src/augmented_lagrangian.rs:186]] (=pub fn solve=)
 - =SlackFormulation= struct: [[../src/slack_formulation.rs::17][src/slack_formulation.rs:17]]
 - =SlackFormulation::new=: [[../src/slack_formulation.rs::34][src/slack_formulation.rs:34]]
 - Slack =NlpProblem= impl: [[../src/slack_formulation.rs::74][src/slack_formulation.rs:74]]
-- Slack fallback trigger: [[../src/ipm.rs::1442][src/ipm.rs:1442]]
-- Best-du initialization: [[../src/ipm.rs::1765][src/ipm.rs:1765]]
-- Best-du update: [[../src/ipm.rs::2129][src/ipm.rs:2129]]
-- Best-du restore at max_iter: [[../src/ipm.rs::3579][src/ipm.rs:3579]]
-- Dual stagnation detection: [[../src/ipm.rs::1898][src/ipm.rs:1898]]
-- Stagnation threshold (500 iters): [[../src/ipm.rs::1914][src/ipm.rs:1914]]
-- Stagnation restore: [[../src/ipm.rs::1919][src/ipm.rs:1919]]
+- Slack fallback trigger: [[../src/ipm.rs::1646][src/ipm.rs:1646]]
+- Best-du initialization: [[../src/ipm.rs::2260][src/ipm.rs:2260]]
+- Best-du update: [[../src/ipm.rs::2852][src/ipm.rs:2852]]
+- Best-du restore at max_iter: [[../src/ipm.rs::2443][src/ipm.rs:2443]]
+- Dual stagnation detection: [[../src/ipm.rs::2419][src/ipm.rs:2419]]
+- Stagnation threshold (500 iters): [[../src/ipm.rs::2435][src/ipm.rs:2435]]
+- Stagnation restore: [[../src/ipm.rs::2443][src/ipm.rs:2443]]
 
 * Adaptive Barrier Parameter
 
@@ -268,11 +268,11 @@ When no variable has finite bounds, $\mu = \mu_{\min} = 10^{-11}$ immediately.
 
 ** Source Code References
 
-- =MuMode= enum: [[../src/ipm.rs::201][src/ipm.rs:201]]
-- =MuState= struct: [[../src/ipm.rs::209][src/ipm.rs:209]]
-- Main barrier update block: [[../src/ipm.rs::2948][src/ipm.rs:2948]]
-- Free mode oracle ($\bar{c}/\kappa$): [[../src/ipm.rs::3228][src/ipm.rs:3228]]
-- Fixed mode decrease: [[../src/ipm.rs::2955][src/ipm.rs:2955]]
+- =MuMode= enum: [[../src/ipm.rs::236][src/ipm.rs:236]]
+- =MuState= struct: [[../src/ipm.rs::244][src/ipm.rs:244]]
+- Main barrier update block: [[../src/ipm.rs::4784][src/ipm.rs:4784]]
+- Free mode oracle ($\bar{c}/\kappa$): [[../src/ipm.rs::4883][src/ipm.rs:4883]]
+- Fixed mode decrease: [[../src/ipm.rs::4958][src/ipm.rs:4958]]
 
 * Filter Line Search
 
@@ -295,16 +295,16 @@ Reject trial points where $\phi_{\text{trial}} > \phi_{\text{current}} + 5(1 + |
 ** Source Code References
 
 - =Filter= struct: [[../src/filter.rs::14][src/filter.rs:14]]
-- =is_acceptable=: [[../src/filter.rs::58][src/filter.rs:58]]
-- =switching_condition=: [[../src/filter.rs::80][src/filter.rs:80]]
-- =armijo_condition=: [[../src/filter.rs::96][src/filter.rs:96]]
-- =check_acceptability=: [[../src/filter.rs::122][src/filter.rs:122]]
-- =fraction_to_boundary=: [[../src/filter.rs::244][src/filter.rs:244]]
-- Full KKT SOC: [[../src/ipm.rs::3655][src/ipm.rs:3655]] (=attempt_soc=)
-- Condensed SOC: [[../src/ipm.rs::3800][src/ipm.rs:3800]] (=attempt_soc_condensed=)
-- SOC trigger on backtracking: [[../src/ipm.rs::2789][src/ipm.rs:2789]]
-- $\kappa_{\text{soc}}$ check (full): [[../src/ipm.rs::3688][src/ipm.rs:3688]]
-- $\kappa_{\text{soc}}$ check (condensed): [[../src/ipm.rs::3832][src/ipm.rs:3832]]
+- =is_acceptable=: [[../src/filter.rs::64][src/filter.rs:64]]
+- =switching_condition=: [[../src/filter.rs::86][src/filter.rs:86]]
+- =armijo_condition=: [[../src/filter.rs::102][src/filter.rs:102]]
+- =check_acceptability=: [[../src/filter.rs::133][src/filter.rs:133]]
+- =fraction_to_boundary=: [[../src/filter.rs::263][src/filter.rs:263]]
+- Full KKT SOC: [[../src/ipm.rs::5151][src/ipm.rs:5151]] (=attempt_soc=)
+- Condensed SOC: [[../src/ipm.rs::5296][src/ipm.rs:5296]] (=attempt_soc_condensed=)
+- SOC trigger on backtracking: [[../src/ipm.rs::4280][src/ipm.rs:4280]]
+- $\kappa_{\text{soc}}$ check (full): [[../src/ipm.rs::5222][src/ipm.rs:5222]]
+- $\kappa_{\text{soc}}$ check (condensed): [[../src/ipm.rs::5358][src/ipm.rs:5358]]
 
 * Linear Algebra
 
@@ -346,26 +346,26 @@ Up to 3 rounds of iterative refinement with tolerance $10^{-12}$.
 
 *** rmumps Integration
 - =MultifrontalLdl= struct: [[../src/linear_solver/multifrontal.rs::9][src/linear_solver/multifrontal.rs:9]]
-- =LinearSolver= impl for =MultifrontalLdl=: [[../src/linear_solver/multifrontal.rs::96][src/linear_solver/multifrontal.rs:96]]
-- COO-to-CSC mapping cache: [[../src/linear_solver/multifrontal.rs::59][src/linear_solver/multifrontal.rs:59]] (=build_coo_to_csc_mapping=)
-- Scatter COO values to cached CSC: [[../src/linear_solver/multifrontal.rs::82][src/linear_solver/multifrontal.rs:82]] (=scatter_coo_to_csc=)
-- =LinearSolver= trait: [[../src/linear_solver/mod.rs::440][src/linear_solver/mod.rs:440]]
-- =KktMatrix= enum (Dense/Sparse): [[../src/linear_solver/mod.rs::364][src/linear_solver/mod.rs:364]]
+- =LinearSolver= impl for =MultifrontalLdl=: [[../src/linear_solver/multifrontal.rs::115][src/linear_solver/multifrontal.rs:115]]
+- COO-to-CSC mapping cache: [[../src/linear_solver/multifrontal.rs::78][src/linear_solver/multifrontal.rs:78]] (=build_coo_to_csc_mapping=)
+- Scatter COO values to cached CSC: [[../src/linear_solver/multifrontal.rs::101][src/linear_solver/multifrontal.rs:101]] (=scatter_coo_to_csc=)
+- =LinearSolver= trait: [[../src/linear_solver/mod.rs::567][src/linear_solver/mod.rs:567]]
+- =KktMatrix= enum (Dense/Sparse): [[../src/linear_solver/mod.rs::467][src/linear_solver/mod.rs:467]]
 
 *** Dense Solver
 - =DenseLdl= struct: [[../src/linear_solver/dense.rs::11][src/linear_solver/dense.rs:11]]
-- =bunch_kaufman_factor=: [[../src/linear_solver/dense.rs::61][src/linear_solver/dense.rs:61]]
-- =find_pivot=: [[../src/linear_solver/dense.rs::221][src/linear_solver/dense.rs:221]]
-- =compute_inertia=: [[../src/linear_solver/dense.rs::295][src/linear_solver/dense.rs:295]]
-- =solve_internal=: [[../src/linear_solver/dense.rs::347][src/linear_solver/dense.rs:347]]
+- =bunch_kaufman_factor=: [[../src/linear_solver/dense.rs::65][src/linear_solver/dense.rs:65]]
+- =find_pivot=: [[../src/linear_solver/dense.rs::225][src/linear_solver/dense.rs:225]]
+- =compute_inertia=: [[../src/linear_solver/dense.rs::299][src/linear_solver/dense.rs:299]]
+- =solve_internal=: [[../src/linear_solver/dense.rs::351][src/linear_solver/dense.rs:351]]
 
 *** Inertia Correction and Search Direction
-- =InertiaCorrectionParams= struct: [[../src/kkt.rs::246][src/kkt.rs:246]]
-- =factor_with_inertia_correction=: [[../src/kkt.rs::278][src/kkt.rs:278]]
-- Perturbation loop: [[../src/kkt.rs::327][src/kkt.rs:327]]
-- Proceed-on-failure logic: [[../src/kkt.rs::362][src/kkt.rs:362]]
-- =solve_for_direction= (iterative refinement): [[../src/kkt.rs::388][src/kkt.rs:388]]
-- Refinement loop: [[../src/kkt.rs::414][src/kkt.rs:414]]
+- =InertiaCorrectionParams= struct: [[../src/kkt.rs::324][src/kkt.rs:324]]
+- =factor_with_inertia_correction=: [[../src/kkt.rs::405][src/kkt.rs:405]]
+- Perturbation loop: [[../src/kkt.rs::571][src/kkt.rs:571]]
+- Proceed-on-failure logic: [[../src/kkt.rs::629][src/kkt.rs:629]]
+- =solve_for_direction= (iterative refinement): [[../src/kkt.rs::686][src/kkt.rs:686]]
+- Refinement loop: [[../src/kkt.rs::730][src/kkt.rs:730]]
 
 * Implementation
 
@@ -381,10 +381,10 @@ The public API consists of two functions:
 - =solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult= for standard optimization.
 - =solve_with_sensitivity<P: ParametricNlpProblem>(problem: &P, options: &SolverOptions) -> (SolveResult, SensitivityContext)= for optimization with parametric sensitivity analysis.
 
-- =solve= function: [[../src/lib.rs::28][src/lib.rs:28]]
-- =solve_with_sensitivity= function: [[../src/lib.rs::33][src/lib.rs:33]]
-- Internal solver entry: [[../src/ipm.rs::1032][src/ipm.rs:1032]] (dispatches NE-to-LS, fallbacks, then =solve_ipm=)
-- =solve_ipm= (core IPM loop): [[../src/ipm.rs::1589][src/ipm.rs:1589]]
+- =solve= function: [[../src/lib.rs::102][src/lib.rs:102]]
+- =solve_with_sensitivity= function: [[../src/lib.rs::107][src/lib.rs:107]]
+- Internal solver entry: [[../src/ipm.rs::1182][src/ipm.rs:1182]] (dispatches NE-to-LS, fallbacks, then =solve_ipm=)
+- =solve_ipm= (core IPM loop): [[../src/ipm.rs::2009][src/ipm.rs:2009]]
 
 ** AMPL NL Interface and Pyomo Integration
 
@@ -393,7 +393,7 @@ The AMPL interface reads NL files (nonlinear expression DAGs) with automatic dif
 - NL file parser: [[../src/nl/parser.rs::34][src/nl/parser.rs:34]] (=parse_nl_file=)
 - =NlFileData= struct: [[../src/nl/parser.rs::6][src/nl/parser.rs:6]]
 - =NlProblem= (NlpProblem impl): [[../src/nl/problem_impl.rs::8][src/nl/problem_impl.rs:8]]
-- =NlpProblem for NlProblem= impl: [[../src/nl/problem_impl.rs::201][src/nl/problem_impl.rs:201]]
+- =NlpProblem for NlProblem= impl: [[../src/nl/problem_impl.rs::216][src/nl/problem_impl.rs:216]]
 - AMPL binary (reads =.nl=, writes =.sol=): [[../src/bin/ripopt_ampl.rs][src/bin/ripopt_ampl.rs]]
 - Pyomo plugin: =pyomo-ripopt/= directory
 
@@ -434,7 +434,7 @@ The reduced Hessian is extracted column-by-column from $M^{-1}$ by solving $M e_
 - KKT reassembly (unregularized): [[../src/sensitivity.rs::119][src/sensitivity.rs:119]]
 - =compute_sensitivity()= backsolve: [[../src/sensitivity.rs::159][src/sensitivity.rs:159]]
 - =reduced_hessian()= extraction: [[../src/sensitivity.rs::284][src/sensitivity.rs:284]]
-- Unit tests (parametric QP, constrained QP, reduced Hessian): [[../src/sensitivity.rs::322][src/sensitivity.rs:322]]
+- Unit tests (parametric QP, constrained QP, reduced Hessian): [[../src/sensitivity.rs::323][src/sensitivity.rs:323]]
 - Integration tests (HS071 parametric, finite difference verification): [[../tests/sensitivity.rs::1][tests/sensitivity.rs:1]]
 - Example (HS071 with parametric constraint bound): [[../examples/sensitivity.rs::1][examples/sensitivity.rs:1]]
 
@@ -453,26 +453,27 @@ The reduced Hessian is extracted column-by-column from $M^{-1}$ by solving $M e_
 The HS problems are generated from Fortran source files:
 
 #+begin_src bash
-cd hs_suite
-python generate.py   # generates hs_suite/generated/hs_problems.rs
+cd benchmarks/hs
+python generate.py   # generates benchmarks/hs/generated/hs_problems.rs
 #+end_src
 
 *** Running ripopt on HS Suite
 
 #+begin_src bash
-cargo run --bin hs_suite --release
+cargo run --release --features hs --bin hs_suite
 #+end_src
 
 This solves the HS problems and outputs JSON results to stdout. The number of timing runs can be controlled via environment variable:
 
 #+begin_src bash
-RIPOPT_TIMING_RUNS=10 cargo run --bin hs_suite --release > hs_results_ripopt.json
+RIPOPT_TIMING_RUNS=10 cargo run --release --features hs --bin hs_suite \
+    > benchmarks/hs/hs_ripopt_results.json
 #+end_src
 
 To force sparse factorization on all problems (for comparison):
 
 #+begin_src bash
-RIPOPT_FORCE_SPARSE=1 cargo run --bin hs_suite --release
+RIPOPT_FORCE_SPARSE=1 cargo run --release --features hs --bin hs_suite
 #+end_src
 
 *** Running Ipopt (native) on HS Suite
@@ -480,24 +481,25 @@ RIPOPT_FORCE_SPARSE=1 cargo run --bin hs_suite --release
 Requires the =ipopt-native= feature and Ipopt C library:
 
 #+begin_src bash
-cargo run --bin ipopt_native --features ipopt-native --release > hs_results_ipopt.json
+cargo run --release --features ipopt-native --bin ipopt_native \
+    > benchmarks/hs/hs_ipopt_native_results.json
 #+end_src
 
 *** Running cyipopt on HS Suite
 
 #+begin_src bash
-cd hs_suite
-python run_cyipopt.py > hs_results_cyipopt.json
+cd benchmarks/hs
+python run_cyipopt.py > hs_cyipopt_results.json
 #+end_src
 
 *** Comparing Results
 
 #+begin_src bash
-cd hs_suite
+cd benchmarks/hs
 python compare.py
 #+end_src
 
-This reads the JSON results and generates =HS_VALIDATION_REPORT.md= with solve rates, objective comparisons, speed comparisons, and iteration counts.
+This reads the JSON results and generates =HS_VALIDATION_REPORT.md= with solve rates, objective comparisons, speed comparisons, and iteration counts. A second, more detailed report is written to =benchmarks/hs/PERFORMANCE_COMPARISON.md=.
 
 ** CUTEst Benchmark Suite
 
@@ -510,16 +512,17 @@ CUTEst must be installed and the environment configured so that the CUTEst share
 To run specific problems:
 
 #+begin_src bash
-cargo run --bin cutest_suite --features cutest,ipopt-native --release -- ROSENBR HS35 HS71
+cargo run --release --features cutest,ipopt-native --bin cutest_suite -- ROSENBR HS35 HS71
 #+end_src
 
 To run all problems from the problem list:
 
 #+begin_src bash
-cargo run --bin cutest_suite --features cutest,ipopt-native --release
+RESULTS_FILE=benchmarks/cutest/results.json \
+    cargo run --release --features cutest,ipopt-native --bin cutest_suite
 #+end_src
 
-This reads problem names from =cutest_suite/problem_list.txt= and solves each with both ripopt and native Ipopt. Results are auto-saved to =cutest_suite/results.json=.
+This reads problem names from =benchmarks/cutest/problem_list.txt= and solves each with both ripopt and native Ipopt. Results are auto-saved to =benchmarks/cutest/results.json= (override with =RESULTS_FILE=).
 
 The solver uses =max_wall_time=30s= so the IPM exits before the 60-second OS kill limit, enabling fallback solvers to attempt recovery.
 
