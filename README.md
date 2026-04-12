@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/ripopt.svg)](https://crates.io/crates/ripopt)
 [![Tests](https://github.com/jkitchin/ripopt/actions/workflows/test.yml/badge.svg)](https://github.com/jkitchin/ripopt/actions/workflows/test.yml)
-[![DOI](https://zenodo.org/badge/1152248927.svg)](https://zenodo.org/badge/latestdoi/1152248927)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19542664.svg)](https://doi.org/10.5281/zenodo.19542664)
 
 ![img](./ipopt-rust.png)
 

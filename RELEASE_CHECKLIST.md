@@ -415,9 +415,12 @@ then ripopt, then language bindings.
 - [ ] **Zenodo DOI** — Zenodo is linked to the GitHub repo and auto-archives
   every published release (metadata in `.zenodo.json`). Wait a few minutes
   after the GitHub release in Section 11, then check
-  https://zenodo.org/badge/latestdoi/1152248927 resolves to a new
-  version-specific DOI for `vX.Y.Z`. The `latestdoi` badge in `README.md`
-  updates automatically — no file edits needed.
+  https://doi.org/10.5281/zenodo.19542664 (the concept DOI — the parent
+  record for all versions) and confirm `vX.Y.Z` appears in the version
+  list. The README badge points at the concept DOI, so the SVG and link
+  both auto-update — no file edits needed. (Avoid the
+  `zenodo.org/badge/<repo_id>.svg` redirect form: GitHub Camo doesn't
+  follow it reliably and the badge won't render.)
 - [ ] Update `MEMORY.md` HS/CUTEst status sections with the new release
   numbers if you didn't already in step 3
 - [ ] Bump `Cargo.toml` to the next `+dev` working version if you use that
