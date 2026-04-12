@@ -59,33 +59,33 @@ It implements a primal-dual interior point method with a barrier formulation, si
 
 | Metric          | ripopt             | Ipopt (native, MUMPS) |
 |-----------------|--------------------|-----------------------|
-| Problems solved | **115/120 (95.8%)**| 116/120 (96.7%)       |
-| Optimal         | 115                | 116                   |
+| Problems solved | **116/120 (96.7%)**| 116/120 (96.7%)       |
+| Optimal         | 116                | 116                   |
 | ripopt only     | 2                  | --                    |
-| Ipopt only      | --                 | 3                     |
+| Ipopt only      | --                 | 2                     |
 
-On 113 commonly-solved problems: **14.0x geometric mean speedup**, ripopt faster on 111/113 (98%).
+On 114 commonly-solved problems: **17.7x geometric mean speedup**, ripopt faster on 113/114 (99%).
 
 ### CUTEst Benchmark Suite (727 problems)
 
 | Metric        | ripopt              | Ipopt (C++ with MUMPS) |
 |---------------|---------------------|------------------------|
-| Total solved  | **553/727 (76.1%)** | 561/727 (77.2%)        |
-| Both solve    | 513                 | 513                    |
-| ripopt only   | **40**              | --                     |
-| Ipopt only    | --                  | **48**                 |
+| Total solved  | **569/727 (78.3%)** | 561/727 (77.2%)        |
+| Both solve    | 526                 | 526                    |
+| ripopt only   | **43**              | --                     |
+| Ipopt only    | --                  | **35**                 |
 
-On 513 commonly-solved problems:
+On 526 commonly-solved problems:
 
 | Metric                          | Value            |
 |---------------------------------|------------------|
-| Geometric mean speedup          | **8.0x**         |
-| Median speedup                  | **18.8x**        |
-| Problems where ripopt is faster | 415/513 (81%)    |
-| ripopt 10x+ faster              | 313/513 (61%)    |
-| Problems where Ipopt is faster  | 98/513 (19%)     |
+| Geometric mean speedup          | **11.1x**        |
+| Median speedup                  | **23.1x**        |
+| Problems where ripopt is faster | 455/526 (87%)    |
+| ripopt 10x+ faster              | 341/526 (65%)    |
+| Problems where Ipopt is faster  | 71/526 (13%)     |
 
-**Interpreting the speed numbers.** Most CUTEst problems are small (n < 10) and solve in microseconds for ripopt, while Ipopt has a ~1-3ms floor from internal initialization. The per-iteration speedup on small problems comes from stack allocation, the absence of C/Fortran interop, and cache-efficient dense linear algebra. On larger problems, ripopt switches to sparse multifrontal LDL^T with SuiteSparse AMD ordering, and Ipopt's Fortran MUMPS has a per-factorization advantage. Ipopt also uses more iterations on average (ripopt mean 93.0 vs Ipopt 35.6 on CUTEst), reflecting its more mature barrier parameter tuning.
+**Interpreting the speed numbers.** Most CUTEst problems are small (n < 10) and solve in microseconds for ripopt, while Ipopt has a ~1-3ms floor from internal initialization. The per-iteration speedup on small problems comes from stack allocation, the absence of C/Fortran interop, and cache-efficient dense linear algebra. On larger problems, ripopt switches to sparse multifrontal LDL^T with SuiteSparse AMD ordering, and Ipopt's Fortran MUMPS has a per-factorization advantage. Ipopt also uses more iterations on average on CUTEst (ripopt mean 57.6 vs Ipopt 38.1), reflecting its more mature barrier parameter tuning.
 
 The speed advantage comes from:
 

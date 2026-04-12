@@ -9,25 +9,25 @@ Ipopt remains stronger, and where there is room to improve.
 
 ## Benchmark Summary
 
-|                          | ripopt              | Ipopt                |
-|--------------------------|---------------------|----------------------|
-| CUTEst solved            | 553/727 (76.1%)     | **561/727 (77.2%)**  |
-| HS solved                | 115/120 (95.8%)     | **116/120 (96.7%)**  |
-| Both solve (CUTEst)      | 513                 | 513                  |
-| Matching objectives      | 413/513 (80.5%)     |                      |
-| ripopt-only (CUTEst)     | **40**              | --                   |
-| Ipopt-only (CUTEst)      | --                  | **48**               |
-| Both fail (CUTEst)       | 166                 | 166                  |
+|                          | ripopt                 | Ipopt                |
+|--------------------------|------------------------|----------------------|
+| CUTEst solved            | **569/727 (78.3%)**    | 561/727 (77.2%)      |
+| HS solved                | **116/120 (96.7%)**    | 116/120 (96.7%)      |
+| Both solve (CUTEst)      | 526                    | 526                  |
+| Matching objectives      | 430/526 (81.7%)        |                      |
+| ripopt-only (CUTEst)     | **43**                 | --                   |
+| Ipopt-only (CUTEst)      | --                     | **35**               |
+| Both fail (CUTEst)       | 123                    | 123                  |
 
-**Solution quality** (513 CUTEst problems where both converge):
-- Matching objectives (rel diff < 1e-4): 413/513 (80.5%)
-- 100 mismatches: both reach valid KKT points but at different local optima
+**Solution quality** (526 CUTEst problems where both converge):
+- Matching objectives (rel diff < 1e-4): 430/526 (81.7%)
+- 96 mismatches: both reach valid KKT points but at different local optima
 
-**Speed** (513 CUTEst common successes):
-- Geometric mean speedup: **8.0x** (ripopt faster)
-- Median speedup: **18.8x**
-- 81% of problems: ripopt faster
-- 61% of problems: ripopt 10x+ faster
+**Speed** (526 CUTEst common successes):
+- Geometric mean speedup: **11.1x** (ripopt faster)
+- Median speedup: **23.1x**
+- 87% of problems: ripopt faster
+- 65% of problems: ripopt 10x+ faster
 - Small problems (n <= 10): massive speedup (100x+ median on microsecond solves)
 - Medium problems (10 < n <= 50): typically 2-5x faster
 - Large problems (n > 50): roughly even, with Ipopt's MUMPS winning on largest systems
@@ -201,7 +201,7 @@ final convergence.
 
 ### 2. Iteration Counts on Some Problems
 
-While ripopt is faster per iteration (median 18.8x on CUTEst), it sometimes requires significantly
+While ripopt is faster per iteration (median 23.1x on CUTEst), it sometimes requires significantly
 more iterations:
 
 | Problem | ripopt iters | Ipopt iters | Cause |
@@ -281,15 +281,16 @@ perturbation strategy.
 
 ## Summary
 
-On the CUTEst suite, ripopt and Ipopt are nearly tied (553 vs 561), with each solver
-recovering a different ~40 problems the other cannot. ripopt's unique capabilities:
+On the CUTEst suite, ripopt now surpasses Ipopt (569 vs 561), with ripopt
+recovering 43 problems Ipopt cannot and Ipopt recovering 35 problems ripopt cannot.
+ripopt's unique capabilities:
 - NE-to-LS reformulation (~18 NE problems Ipopt cannot handle)
 - Two-phase restoration (GN fast path + NLP robust fallback)
 - Explicit slack fallback (recovers problems where implicit-slack multipliers oscillate)
 - Pragmatic inertia correction (continues past factorization failures)
 - Complementarity gate (prevents false convergence)
 - Hybrid dense/sparse linear algebra (auto-selected by problem size)
-- Raw speed advantage from Rust (median 18.8x faster on CUTEst, 15.1x on HS)
+- Raw speed advantage from Rust (median 23.1x faster on CUTEst, 17.8x on HS)
 
 Ipopt's remaining advantages are:
 - More mature mu strategy on difficult nonconvex problems
@@ -297,6 +298,6 @@ Ipopt's remaining advantages are:
 - Better handling of dual oscillation at degenerate points
 - Fortran MUMPS outperforms rmumps on the very largest sparse systems
 
-The most impactful improvements would target the 83 CUTEst NumericalError failures
-(often on non-convex Hessians and ill-conditioned KKT systems) and the 56 LocalInfeasibility
+The most impactful improvements would target the 63 CUTEst NumericalError failures
+(often on non-convex Hessians and ill-conditioned KKT systems) and the 66 LocalInfeasibility
 cases where multi-start or constraint-space search could escape false infeasibility declarations.

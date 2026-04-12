@@ -8,19 +8,19 @@ The HS suite is the classic test set for NLP solvers, covering small problems (n
 
 | Metric | ripopt | Ipopt (MUMPS) |
 |---|---|---|
-| Problems solved | **115/120 (95.8%)** | 116/120 (96.7%) |
+| Problems solved | **116/120 (96.7%)** | 116/120 (96.7%) |
 | Solved by ripopt only | **2** | — |
-| Solved by Ipopt only | — | 3 |
+| Solved by Ipopt only | — | 2 |
 
-On 113 commonly solved problems (strict `Optimal` status required):
+On 114 commonly solved problems (strict `Optimal` status required):
 
 | Metric | Value |
 |---|---|
-| Geometric mean speedup | **14.0x** |
-| Median speedup | **15.1x** |
-| ripopt faster | 111/113 (98%) |
-| ripopt 10x+ faster | 80/113 (71%) |
-| Matching objectives (rel diff < 1e-4) | 107/113 (95%) |
+| Geometric mean speedup | **17.7x** |
+| Median speedup | **17.8x** |
+| ripopt faster | 113/114 (99%) |
+| ripopt 10x+ faster | 95/114 (83%) |
+| Matching objectives (rel diff < 1e-4) | 106/114 (93%) |
 
 Run: `make hs-run`
 
@@ -30,19 +30,19 @@ CUTEst covers a wide range of problem types, sizes, and structures. Problems ran
 
 | Metric | ripopt | Ipopt (MUMPS) |
 |---|---|---|
-| Total solved | **553/727 (76.1%)** | 561/727 (77.2%) |
-| Solved by ripopt only | **40** | — |
-| Solved by Ipopt only | — | 48 |
+| Total solved | **569/727 (78.3%)** | 561/727 (77.2%) |
+| Solved by ripopt only | **43** | — |
+| Solved by Ipopt only | — | 35 |
 
-On 513 commonly solved problems:
+On 526 commonly solved problems:
 
 | Metric | Value |
 |---|---|
-| Geometric mean speedup | **8.0x** |
-| Median speedup | **18.8x** |
-| ripopt faster | 415/513 (81%) |
-| ripopt 10x+ faster | 313/513 (61%) |
-| Matching objectives (rel diff < 1e-4) | 413/513 (80.5%) |
+| Geometric mean speedup | **11.1x** |
+| Median speedup | **23.1x** |
+| ripopt faster | 455/526 (87%) |
+| ripopt 10x+ faster | 341/526 (65%) |
+| Matching objectives (rel diff < 1e-4) | 430/526 (81.7%) |
 
 Run: `make benchmark` (full suite, ~2 hours) or individual problems:
 ```bash

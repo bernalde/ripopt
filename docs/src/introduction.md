@@ -22,9 +22,9 @@ It implements a primal-dual interior point method (IPM) with a logarithmic barri
 |---|---|
 | Algorithm | Primal-dual IPM with Mehrotra predictor-corrector |
 | Linear solver | Dense Bunch-Kaufman LDL^T (small) / rmumps multifrontal (large) |
-| HS benchmark | **118/120** (98.3%) — surpasses Ipopt's 116/120 |
-| CUTEst benchmark | **569/727** (78.3%) — surpasses Ipopt's 556/727 |
-| Speed vs Ipopt | **12.9x** geo mean on HS suite, **10.2x** on CUTEst |
+| HS benchmark | **116/120** (96.7%) — matches Ipopt's 116/120 |
+| CUTEst benchmark | **569/727** (78.3%) — surpasses Ipopt's 561/727 |
+| Speed vs Ipopt | **17.7x** geo mean on HS suite, **11.1x** on CUTEst |
 | Language | Rust (no unsafe FFI) |
 | Interfaces | Rust API, C API, Pyomo/AMPL, GAMS, Julia/JuMP |
 
