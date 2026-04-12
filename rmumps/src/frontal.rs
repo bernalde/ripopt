@@ -1,6 +1,6 @@
 use crate::dense::{DenseMat, gemm_nt_sub};
 use crate::pivot::{
-    dense_ldlt_bunch_kaufman, BunchKaufmanResult, PivotResult,
+    dense_ldlt_bunch_kaufman, BunchKaufmanResult,
     compute_inertia,
 };
 
@@ -513,6 +513,7 @@ impl FrontalMatrix {
         let mut iend_blr: usize = 0;
         let mut iend_block: usize = 0;
         let mut last_panel = false;
+        #[allow(unused_assignments)]
         let mut ibeg_blr: usize = 0;
 
         // Outer panel loop

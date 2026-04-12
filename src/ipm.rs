@@ -1133,12 +1133,34 @@ fn diagnose_failure(result: &SolveResult) -> FailureDiagnosis {
 }
 
 /// Check if `candidate` is strictly better than `current`.
+///
+/// A candidate is "better" when it is Optimal **and** either:
+/// 1. `current` is clearly bad (infeasible or objective unusable), or
+/// 2. `candidate.objective < current.objective` (strict improvement).
+///
+/// If `current` is NumericalError/MaxIterations but reached a feasible point
+/// (`pr ≤ constr_viol_tol` and a finite objective), its objective is meaningful
+/// and the candidate should only replace it if it finds a strictly lower objective.
+/// Without this guard, a fallback that converges to a worse local minimum can
+/// silently replace a near-optimal main-IPM iterate.
 fn is_strictly_better(current: &SolveResult, candidate: &SolveResult) -> bool {
     let candidate_solved = matches!(candidate.status, SolveStatus::Optimal);
+    if !candidate_solved {
+        return false;
+    }
     let current_solved = matches!(current.status, SolveStatus::Optimal);
-    candidate_solved
-        && (!current_solved
-            || candidate.objective < current.objective)
+    // Treat `current` as having a meaningful objective if it is feasible,
+    // has a finite objective, and primal infeasibility is within the tolerance.
+    let current_has_good_point = current.objective.is_finite()
+        && current.diagnostics.final_primal_inf <= 1e-4;
+    if current_solved || current_has_good_point {
+        // Require strict objective improvement (with tiny tolerance for FP noise).
+        let tol = 1e-8 * current.objective.abs().max(1.0);
+        candidate.objective < current.objective - tol
+    } else {
+        // current is clearly bad — any Optimal candidate is an improvement.
+        true
+    }
 }
 
 /// Prepare options for a fallback solve: cap iterations and set remaining time budget.
@@ -2161,7 +2183,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     // Flag set by bandwidth detection: when the sparse condensed Schur complement
     // is essentially dense, switch to dense condensed KKT (n×n) for all subsequent
     // iterations. This avoids the catastrophic rmumps fill-in on PDE problems.
-    let mut use_dense_condensed_fallback = false;
+    let _use_dense_condensed_fallback = false;
 
     // Initialize filter
     let mut filter = Filter::new(1e4);
@@ -3151,7 +3173,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         let use_sparse_condensed = use_sparse && m > 0 && !use_condensed && !disable_sparse_condensed;
 
         let t_kkt = Instant::now();
-        let mut condensed_system = if use_condensed {
+        let condensed_system = if use_condensed {
             Some(kkt::assemble_condensed_kkt(
                 n, m,
                 &state.hess_rows, &state.hess_cols, &state.hess_vals,
@@ -4801,7 +4823,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             match mu_state.mode {
                 MuMode::Free => {
                     // Consume Mehrotra sigma for use as quality function candidate
-                    let sigma_mu = last_mehrotra_sigma.take();
+                    let _sigma_mu = last_mehrotra_sigma.take();
                     if sufficient && !mu_state.tiny_step {
                         mu_state.consecutive_insufficient = 0;
                         mu_state.remember_accepted(kkt_error);
