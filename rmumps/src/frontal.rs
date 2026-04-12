@@ -1054,7 +1054,8 @@ fn between_block_gemm_naive(
     ibeg_block: usize, iend_block: usize, npiv: usize,
     last_col_gemm: usize, last_row_gemm: usize,
 ) {
-    let npiv_block = npiv - ibeg_block;
+    // Caller (between_block_gemm_ldlt) has already returned early if
+    // npiv_block == 0, so it's always > 0 here.
 
     // Symmetric part: update [iend_block, last_col_gemm) x [iend_block, last_col_gemm)
     for col in iend_block..last_col_gemm {
