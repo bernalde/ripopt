@@ -8,6 +8,8 @@ edition = "2021"
 license = "EPL-2.0"
 description = "A memory-safe interior point optimizer in Rust"
 repository = "https://github.com/jkitchin/ripopt"
+categories = ["mathematics", "science", "algorithms"]
+keywords = ["optimization", "nlp", "interior-point", "nonlinear", "solver"]
 exclude = [
     "adversary/",
     "benchmarks/",

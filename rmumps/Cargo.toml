@@ -4,6 +4,9 @@ version = "0.1.1"
 edition = "2021"
 license = "CECILL-C"
 description = "Pure Rust multifrontal sparse symmetric indefinite solver"
+repository = "https://github.com/jkitchin/ripopt"
+categories = ["mathematics", "algorithms"]
+keywords = ["sparse", "ldlt", "multifrontal", "linear-algebra", "solver"]
 
 [dependencies]
 rayon = "1"
