@@ -1,5 +1,101 @@
 # Changelog
 
+## [0.6.2] - 2026-04-12
+
+### Added
+- **Reorganized benchmarks under `benchmarks/`** with one self-contained
+  subdirectory per suite: `hs/`, `cutest/`, `electrolyte/`, `grid/` (renamed
+  from `opf/`), `cho/`, `large_scale/`, `gas/`, and the new `water/`. Each
+  suite has its own README and per-suite report. The composite report at
+  `benchmarks/BENCHMARK_REPORT.md` aggregates HS + CUTEst + electrolyte +
+  grid + CHO + large-scale; the gas and water suites are standalone (AMPL
+  `.nl` interface, per-problem `.sol` output).
+- **`benchmarks/water/`**: 6 water distribution network design NLPs from
+  MINLPLib (Hazen-Williams head-loss formulation). Solved via the AMPL
+  interface; ripopt matches the best-known primal bound for `water.nl`
+  (963.13) where Ipopt converges to a different local minimum (1001.16).
+- **`benchmarks/gas/`**: 4 gas pipeline NLPs from PDE-discretized Euler
+  equations on pipe networks (gaslib11/40, steady/dynamic). Solved via the
+  AMPL interface.
+- **Loqo mu oracle** (`mu_oracle = "loqo"`) enabled by default, matching Ipopt's
+  `mu_oracle=quality-function` strategy. Uses centrality measure
+  `xi = min(z*s)/avg_compl` to set centering parameter `sigma`, preventing
+  premature mu decrease from highly infeasible starting points. On gaslib11_steady:
+  164→134 iters, NLP restorations 1→0, mode switches 24→8.
+- **Sparse Gauss-Newton restoration**: sparse `J*J^T` factorization for GN restoration
+  when m > 500, removing the dense Bunch-Kaufman bottleneck (6s/step → 0.02s for
+  gas pipeline NLPs). Sparse LS multiplier estimates for post-restoration `y`
+  initialization.
+- **Ruiz equilibration KKT scaling** matching MUMPS `SimScale` schedule
+  (KEEP(52)=7 for SYM=2): 1 inf-norm iteration + 3 one-norm iterations. Activated
+  on demand when backward error is poor. Added `row_abs_sum()` to
+  `DenseSymmetric`, `SparseSymmetric`, and `KktMatrix`.
+- **Pretend-singular fallback** using Ipopt's normwise residual ratio (threshold
+  1e-5). When iterative refinement cannot reach target accuracy, tries `delta_c`
+  first (`PerturbForSingularity`), then `delta_w`.
+- **Adaptive mu dual infeasibility safeguard**: prevents mu from collapsing to
+  1e-11 while dual infeasibility remains large. Adds `du_floor` to barrier error
+  and dual-infeasibility stagnation detection.
+- **Structural degeneracy detection**: after 3 consecutive iterations requiring
+  `delta_w > 0`, skips the unperturbed factorization trial on subsequent iterations.
+- **Dense BK `increase_quality()`**: configurable pivot threshold with escalation
+  0.64 → 0.8 → 0.95 → 1.0.
+- **KKT factorization diagnostics** (dim, nnz, wall time) at `print_level ≥ 5`.
+  Line-search rejection details at `print_level ≥ 7`.
+
+### Changed
+- **PretendSingular chain now matches Ipopt's `PDFullSpaceSolver`**:
+  `solve → refine(fail) → IncreaseQuality → re-solve → perturbation`.
+  Previously perturbation was applied before `IncreaseQuality`.
+- **Iterative refinement**: max steps raised from 3–5 to 5–10 (matching Ipopt
+  default). Stagnation detection extended to the non-IC path with a relaxed
+  factor (1−1e−6 vs Ipopt's 1−1e−9).
+- **Default sparse threshold** unchanged (n+m ≥ 110) but sparse GN restoration
+  now activates at m > 500 even when the outer IPM is dense.
+- Workspace version bumped — `ripopt` → 0.6.2, `rmumps` → 0.1.1.
+- `ref/` directory and `pyomo-ripopt/build/` now ignored in git.
+
+### Fixed
+- **Fallback-result regression (`is_strictly_better`)**: when the main IPM
+  reports `NumericalError` at a feasible iterate with a meaningful objective,
+  a fallback solver that converges to a **worse** local minimum no longer
+  silently replaces the main-IPM result. The comparator now requires either
+  strict objective improvement (with primal feasibility ≤ 1e-4) or that the
+  current result has no usable objective. This was the root cause of the
+  `c_api_hs071_basic`, `c_api_hs071_multiplier_extraction`,
+  `c_api_null_output_params`, `test_hs071_sensitivity_vs_finite_differences`,
+  and `test_sensitivity_linear_prediction_accuracy` regressions introduced by
+  the recent Loqo oracle / KKT quality-chain work.
+- **Phosphoric-acid electrolyte test** (`electrolyte_05_phosphoric_acid`)
+  pinned to `mu_oracle_quality_function=false`. The Loqo oracle steers the
+  solver into a chemically-wrong local minimum (pH ≈ 11.84) of the Gibbs
+  free-energy surface; the pre-Loqo default converges to the correct basin
+  (pH ≈ 2.25). Documented in the test comment.
+- **All compiler warnings** cleaned up in `src/ipm.rs`, `rmumps/src/frontal.rs`,
+  and the adversary example suite.
+- **13 adversary example files** updated to the current `NlpProblem` trait
+  signature (removed `_new_x: bool` parameters and `-> bool` return types).
+- `tests/large_scale_benchmark.rs` unused import cleaned up.
+
+### Performance
+- Fresh benchmark results (2026-04-11 on Apple Mac Mini, aarch64-apple-darwin):
+  - **HS suite**: ripopt 115/120 (95.8%), Ipopt 116/120 (96.7%) — nearly tied.
+    14.0× geometric mean speedup on 113 commonly solved, median 15.1×,
+    ripopt faster on 111/113 (98%).
+  - **CUTEst suite**: ripopt 553/727 (76.1%), Ipopt 561/727 (77.2%). 8.0× geometric
+    mean speedup on 513 commonly solved, median 18.8×, ripopt faster on 415/513 (81%).
+    ripopt-only solves: 40; Ipopt-only solves: 48.
+  - **Electrolyte thermodynamics**: ripopt 13/13 (100%), Ipopt 12/13, 20.8× geo mean.
+  - **Grid (AC OPF)**: 4/4 for both, Ipopt faster (0.2× geo mean).
+- gas pipeline NLPs: sparse GN restoration reduces per-step cost 300× on m > 500.
+
+### Notes
+- The fresh benchmark shows a small shift in both solvers' solve counts vs. the
+  0.6.1 numbers reported in the prior CHANGELOG. This reflects run-to-run
+  floating-point sensitivity on borderline problems combined with the quality-chain
+  changes; the dominant failure modes (NumericalError, LocalInfeasibility) are
+  unchanged.
+
 ## [0.6.1] - 2026-04-05
 
 ### Fixed

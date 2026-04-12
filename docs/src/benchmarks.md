@@ -8,19 +8,19 @@ The HS suite is the classic test set for NLP solvers, covering small problems (n
 
 | Metric | ripopt | Ipopt (MUMPS) |
 |---|---|---|
-| Problems solved | **118/120 (98.3%)** | 116/120 (96.7%) |
+| Problems solved | **115/120 (95.8%)** | 116/120 (96.7%) |
 | Solved by ripopt only | **2** | — |
-| Solved by Ipopt only | — | 0 |
+| Solved by Ipopt only | — | 3 |
 
-On 116 commonly solved problems (strict `Optimal` status required):
+On 113 commonly solved problems (strict `Optimal` status required):
 
 | Metric | Value |
 |---|---|
-| Geometric mean speedup | **12.9x** |
-| Median speedup | **12.7x** |
-| ripopt faster | 114/116 (98%) |
-| ripopt 10x+ faster | 68/116 (59%) |
-| Matching objectives (rel diff < 1e-4) | 107/116 (92%) |
+| Geometric mean speedup | **14.0x** |
+| Median speedup | **15.1x** |
+| ripopt faster | 111/113 (98%) |
+| ripopt 10x+ faster | 80/113 (71%) |
+| Matching objectives (rel diff < 1e-4) | 107/113 (95%) |
 
 Run: `make hs-run`
 
@@ -30,19 +30,19 @@ CUTEst covers a wide range of problem types, sizes, and structures. Problems ran
 
 | Metric | ripopt | Ipopt (MUMPS) |
 |---|---|---|
-| Total solved | **569/727 (78.3%)** | 556/727 (76.5%) |
-| Solved by ripopt only | **45** | — |
-| Solved by Ipopt only | — | 32 |
+| Total solved | **553/727 (76.1%)** | 561/727 (77.2%) |
+| Solved by ripopt only | **40** | — |
+| Solved by Ipopt only | — | 48 |
 
-On 524 commonly solved problems:
+On 513 commonly solved problems:
 
 | Metric | Value |
 |---|---|
-| Geometric mean speedup | **10.2x** |
-| Median speedup | **23.9x** |
-| ripopt faster | 439/524 (84%) |
-| ripopt 10x+ faster | 336/524 (64%) |
-| Matching objectives (rel diff < 1e-4) | 416/524 (79.4%) |
+| Geometric mean speedup | **8.0x** |
+| Median speedup | **18.8x** |
+| ripopt faster | 415/513 (81%) |
+| ripopt 10x+ faster | 313/513 (61%) |
+| Matching objectives (rel diff < 1e-4) | 413/513 (80.5%) |
 
 Run: `make benchmark` (full suite, ~2 hours) or individual problems:
 ```bash
@@ -83,6 +83,8 @@ Run: `make benchmark`
 
 | Suite | Problems | ripopt | Ipopt | Notes |
 |---|---|---|---|---|
-| Electrolyte thermodynamics | 13 | **13/13 (100%)** | 12/13 (92.3%) | 23.7x geo mean; ripopt uniquely solves seawater speciation |
-| AC Optimal Power Flow | 4 | **4/4 (100%)** | 4/4 (100%) | Ipopt faster on OPF (0.1x geo mean) |
+| Electrolyte thermodynamics | 13 | **13/13 (100%)** | 12/13 (92.3%) | 20.8x geo mean; ripopt uniquely solves seawater speciation |
+| Grid (AC Optimal Power Flow) | 4 | **4/4 (100%)** | 4/4 (100%) | Ipopt faster on grid (0.1x geo mean) |
 | CHO parameter estimation | 1 | 0/1 | 0/1 | n=21,672, m=21,660; both hit iteration limit |
+| Gas pipeline NLPs | 4 | see suite README | see suite README | PDE-discretized Euler equations on pipe networks (gaslib11/40). Standalone — does not feed `BENCHMARK_REPORT.md` |
+| Water distribution NLPs | 6 | see suite README | see suite README | MINLPLib water network design instances. Standalone — does not feed `BENCHMARK_REPORT.md` |

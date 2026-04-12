@@ -9,7 +9,7 @@
 - `make hs-run` — HS suite only (ripopt + ipopt, ~2 min)
 - `cargo run --release --features hs --bin hs_suite` — HS suite (ripopt only)
 - Individual CUTEst problems: `cargo run --bin cutest_suite --features cutest,ipopt-native --release -- PROBLEM1 PROBLEM2`
-- Full CUTEst suite: `RESULTS_FILE=cutest_suite/results.json cargo run --bin cutest_suite --features cutest,ipopt-native --release`
+- Full CUTEst suite: `RESULTS_FILE=benchmarks/cutest/results.json cargo run --bin cutest_suite --features cutest,ipopt-native --release`
 
 ## Code Coverage
 - Install: `cargo install cargo-llvm-cov` (requires llvm-tools-preview: `rustup component add llvm-tools-preview`)
@@ -39,9 +39,9 @@
 ## Benchmark Versioning
 After each release, save tagged benchmark results so we can track improvement and regression across versions. Run `make hs-run` (or the full `make benchmark`) and copy the results:
 ```
-cp hs_suite/hs_ripopt_results.json hs_suite/hs_ripopt_results_vX.Y.Z.json
-cp hs_suite/hs_ipopt_native_results.json hs_suite/hs_ipopt_native_results_vX.Y.Z.json
-cp BENCHMARK_REPORT.json BENCHMARK_REPORT_vX.Y.Z.json
+cp benchmarks/hs/hs_ripopt_results.json benchmarks/hs/hs_ripopt_results_vX.Y.Z.json
+cp benchmarks/hs/hs_ipopt_native_results.json benchmarks/hs/hs_ipopt_native_results_vX.Y.Z.json
+cp benchmarks/BENCHMARK_REPORT.json benchmarks/BENCHMARK_REPORT_vX.Y.Z.json
 ```
 This enables per-problem timing comparisons between versions (e.g. "did problem 12 get faster?") and catches regressions that aggregate pass rates miss.
 

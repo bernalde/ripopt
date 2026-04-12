@@ -2,6 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/ripopt.svg)](https://crates.io/crates/ripopt)
 [![Tests](https://github.com/jkitchin/ripopt/actions/workflows/test.yml/badge.svg)](https://github.com/jkitchin/ripopt/actions/workflows/test.yml)
+[![DOI](https://zenodo.org/badge/1152248927.svg)](https://zenodo.org/badge/latestdoi/1152248927)
 
 ![img](./ipopt-rust.png)
 
@@ -58,33 +59,33 @@ It implements a primal-dual interior point method with a barrier formulation, si
 
 | Metric          | ripopt             | Ipopt (native, MUMPS) |
 |-----------------|--------------------|-----------------------|
-| Problems solved | **118/120 (98.3%)**| 116/120 (96.7%)       |
-| Optimal         | 118                | 116                   |
+| Problems solved | **115/120 (95.8%)**| 116/120 (96.7%)       |
+| Optimal         | 115                | 116                   |
 | ripopt only     | 2                  | --                    |
-| Ipopt only      | --                 | 0                     |
+| Ipopt only      | --                 | 3                     |
 
-On 116 commonly-solved problems: **12.9x geometric mean speedup**, ripopt faster on 114/116 (98%).
+On 113 commonly-solved problems: **14.0x geometric mean speedup**, ripopt faster on 111/113 (98%).
 
 ### CUTEst Benchmark Suite (727 problems)
 
 | Metric        | ripopt              | Ipopt (C++ with MUMPS) |
 |---------------|---------------------|------------------------|
-| Total solved  | **569/727 (78.3%)** | 556/727 (76.5%)        |
-| Both solve    | 524                 | 524                    |
-| ripopt only   | **45**              | --                     |
-| Ipopt only    | --                  | **32**                 |
+| Total solved  | **553/727 (76.1%)** | 561/727 (77.2%)        |
+| Both solve    | 513                 | 513                    |
+| ripopt only   | **40**              | --                     |
+| Ipopt only    | --                  | **48**                 |
 
-On 524 commonly-solved problems:
+On 513 commonly-solved problems:
 
 | Metric                          | Value            |
 |---------------------------------|------------------|
-| Geometric mean speedup          | **10.2x**        |
-| Median speedup                  | **23.9x**        |
-| Problems where ripopt is faster | 439/524 (84%)    |
-| ripopt 10x+ faster              | 336/524 (64%)    |
-| Problems where Ipopt is faster  | 85/524 (16%)     |
+| Geometric mean speedup          | **8.0x**         |
+| Median speedup                  | **18.8x**        |
+| Problems where ripopt is faster | 415/513 (81%)    |
+| ripopt 10x+ faster              | 313/513 (61%)    |
+| Problems where Ipopt is faster  | 98/513 (19%)     |
 
-**Interpreting the speed numbers.** Most CUTEst problems are small (n < 10) and solve in microseconds for ripopt, while Ipopt has a ~1-3ms floor from internal initialization. The per-iteration speedup on small problems comes from stack allocation, the absence of C/Fortran interop, and cache-efficient dense linear algebra. On larger problems, ripopt switches to sparse multifrontal LDL^T with SuiteSparse AMD ordering, and Ipopt's Fortran MUMPS has a per-factorization advantage.
+**Interpreting the speed numbers.** Most CUTEst problems are small (n < 10) and solve in microseconds for ripopt, while Ipopt has a ~1-3ms floor from internal initialization. The per-iteration speedup on small problems comes from stack allocation, the absence of C/Fortran interop, and cache-efficient dense linear algebra. On larger problems, ripopt switches to sparse multifrontal LDL^T with SuiteSparse AMD ordering, and Ipopt's Fortran MUMPS has a per-factorization advantage. Ipopt also uses more iterations on average (ripopt mean 93.0 vs Ipopt 35.6 on CUTEst), reflecting its more mature barrier parameter tuning.
 
 The speed advantage comes from:
 
@@ -122,11 +123,13 @@ Run the benchmarks yourself: `make benchmark`
 
 ### Domain-Specific Benchmarks
 
-| Suite                      | Problems | ripopt           | Ipopt         | Notes                                                              |
-|----------------------------|----------|------------------|---------------|--------------------------------------------------------------------|
-| Electrolyte thermodynamics | 13       | **13/13 (100%)** | 12/13 (92.3%) | 23.7x geo mean speedup; ripopt uniquely solves seawater speciation |
-| AC Optimal Power Flow      | 4        | **4/4 (100%)**   | 4/4 (100%)    | Ipopt faster on OPF (0.1x geo mean)                                |
-| CHO parameter estimation   | 1        | 0/1              | 0/1           | Large-scale (n=21,672, m=21,660); both hit iteration limit         |
+| Suite                        | Problems | ripopt           | Ipopt         | Notes                                                              |
+|------------------------------|----------|------------------|---------------|--------------------------------------------------------------------|
+| Electrolyte thermodynamics   | 13       | **13/13 (100%)** | 12/13 (92.3%) | 20.8x geo mean speedup; ripopt uniquely solves seawater speciation |
+| Grid (AC Optimal Power Flow) | 4        | **4/4 (100%)**   | 4/4 (100%)    | Ipopt faster on grid (0.1x geo mean)                               |
+| CHO parameter estimation     | 1        | 0/1              | 0/1           | Large-scale (n=21,672, m=21,660); both hit iteration limit         |
+| Gas pipeline NLPs            | 4        | see suite README | see suite README | PDE-discretized Euler equations on pipe networks (gaslib11/40, steady/dynamic). Standalone — does not feed `BENCHMARK_REPORT.md` |
+| Water distribution NLPs      | 6        | see suite README | see suite README | MINLPLib water network design instances (Hazen-Williams head-loss). Standalone — does not feed `BENCHMARK_REPORT.md` |
 
 Run all benchmarks: `make benchmark`
 
@@ -490,7 +493,7 @@ Include `ripopt.h` (repo root) in your C project. It defines version macros, cal
 #include "ripopt.h"
 
 // Check version at compile time
-printf("ripopt %s\n", RIPOPT_VERSION);  // "0.6.1"
+printf("ripopt %s\n", RIPOPT_VERSION);  // "0.6.2"
 ```
 
 ### Callback signatures

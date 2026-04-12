@@ -3,18 +3,16 @@ members = [".", "rmumps"]
 
 [package]
 name = "ripopt"
-version = "0.6.1"
+version = "0.6.2"
 edition = "2021"
 license = "EPL-2.0"
 description = "A memory-safe interior point optimizer in Rust"
 repository = "https://github.com/jkitchin/ripopt"
 exclude = [
     "adversary/",
-    "cho/",
+    "benchmarks/",
     ".crucible/",
-    "cutest_suite/",
     "docs/",
-    "hs_suite/",
     "manuscript/",
     "research/",
     "tutorials/",
@@ -22,9 +20,7 @@ exclude = [
     "ipopt-rust.png",
     "*.pdf",
     "*.ipynb",
-    "BENCHMARK_REPORT.*",
     "RIPOPT_VS_IPOPT.md",
-    "benchmark_report.py",
     ".github/",
 ]
 
@@ -37,7 +33,7 @@ env_logger = "0.11"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 faer = { version = "0.20", optional = true }
-rmumps = { version = "0.1.0", path = "rmumps", optional = true, features = ["faer"] }
+rmumps = { version = "0.1.1", path = "rmumps", optional = true, features = ["faer"] }
 
 [features]
 default = ["rmumps", "faer"]
@@ -49,12 +45,12 @@ faer = ["dep:faer"]
 
 [[bin]]
 name = "hs_suite"
-path = "hs_suite/run_ripopt.rs"
+path = "benchmarks/hs/run_ripopt.rs"
 required-features = ["hs"]
 
 [[bin]]
 name = "ipopt_native"
-path = "hs_suite/run_ipopt_native.rs"
+path = "benchmarks/hs/run_ipopt_native.rs"
 required-features = ["ipopt-native"]
 
 [[bin]]
@@ -63,12 +59,12 @@ path = "src/bin/ripopt_ampl.rs"
 
 [[bin]]
 name = "cutest_suite"
-path = "cutest_suite/run_cutest.rs"
+path = "benchmarks/cutest/run_cutest.rs"
 required-features = ["cutest", "ipopt-native"]
 
 [[bin]]
 name = "collect_kkt"
-path = "cutest_suite/collect_kkt.rs"
+path = "benchmarks/cutest/collect_kkt.rs"
 required-features = ["cutest"]
 
 [[example]]
