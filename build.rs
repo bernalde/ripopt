@@ -62,7 +62,7 @@ fn main() {
             // Compile fixed fortran_open wrapper
             let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
             let fortran_open_src =
-                format!("{}/cutest_suite/fortran_open_fixed.f90", manifest_dir);
+                format!("{}/benchmarks/cutest/fortran_open_fixed.f90", manifest_dir);
             let fortran_open_obj = format!("{}/fortran_open_fixed.o", out_dir);
             let status = Command::new("gfortran")
                 .args(["-c", "-fPIC", &fortran_open_src, "-o", &fortran_open_obj])
@@ -113,6 +113,6 @@ fn main() {
 
         println!("cargo:rerun-if-changed={}", trampoline_src);
         let manifest_dir_for_rerun = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-        println!("cargo:rerun-if-changed={}/cutest_suite/fortran_open_fixed.f90", manifest_dir_for_rerun);
+        println!("cargo:rerun-if-changed={}/benchmarks/cutest/fortran_open_fixed.f90", manifest_dir_for_rerun);
     }
 }

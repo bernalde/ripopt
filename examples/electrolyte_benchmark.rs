@@ -5,8 +5,8 @@
 use ripopt::{NlpProblem, SolverOptions};
 use std::time::Instant;
 
-// Import problem definitions from tests/common
-#[path = "../tests/common/electrolyte_problems.rs"]
+// Import problem definitions from benchmarks/electrolyte
+#[path = "../benchmarks/electrolyte/problems.rs"]
 mod problems;
 
 // =========================================================================

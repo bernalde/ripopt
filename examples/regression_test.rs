@@ -1,7 +1,7 @@
 // Quick regression diagnostic
 // Run: cargo run --release --example regression_test
 
-#[path = "../hs_suite/generated/hs_problems.rs"]
+#[path = "../benchmarks/hs/generated/hs_problems.rs"]
 mod hs_problems;
 
 use ripopt::SolverOptions;

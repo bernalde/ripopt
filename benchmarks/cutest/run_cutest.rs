@@ -457,7 +457,7 @@ fn get_problem_list_from_args_or_file(suite_dir: &Path) -> Vec<String> {
             .collect()
     } else {
         eprintln!("No problems specified and problem_list.txt not found.");
-        eprintln!("Usage: cutest_suite PROBLEM1 PROBLEM2 ...");
+        eprintln!("Usage: cutest_suite PROBLEM1 PROBLEM2 ... (problems live in benchmarks/cutest/)");
         std::process::exit(1);
     }
 }
@@ -470,7 +470,7 @@ fn run_single_solver(name: &str, solver: &str) {
         .and_then(|s| s.parse().ok())
         .unwrap_or(3);
 
-    let suite_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("cutest_suite");
+    let suite_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("benchmarks").join("cutest");
     let problems_dir = suite_dir.join("problems");
 
     let lib_path = problems_dir.join(format!("lib{}.{}", name, std::env::consts::DLL_EXTENSION));
@@ -630,8 +630,8 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(60);
 
-    // Find the cutest_suite directory (next to the binary source)
-    let suite_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("cutest_suite");
+    // Find the cutest suite directory (benchmarks/cutest/)
+    let suite_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("benchmarks").join("cutest");
     let problems_dir = suite_dir.join("problems");
 
     let problem_names = get_problem_list_from_args_or_file(&suite_dir);

@@ -1,11 +1,11 @@
-// Benchmark comparing ripopt vs ipopt on AC Optimal Power Flow problems.
+// Benchmark comparing ripopt vs ipopt on AC Optimal Power Flow (grid) problems.
 //
-// Run with: cargo run --release --features ipopt-native --example opf_benchmark
+// Run with: cargo run --release --features ipopt-native --example grid_benchmark
 
 use ripopt::{NlpProblem, SolverOptions};
 use std::time::Instant;
 
-#[path = "../tests/common/opf_problems.rs"]
+#[path = "../benchmarks/grid/problems.rs"]
 mod problems;
 
 // =========================================================================
@@ -183,7 +183,7 @@ fn main() {
 
     // Write JSON results
     let results_path = std::env::var("RESULTS_FILE")
-        .unwrap_or_else(|_| "opf_results.json".to_string());
+        .unwrap_or_else(|_| "grid_results.json".to_string());
     let json = serde_json::to_string_pretty(&results).unwrap();
     std::fs::write(&results_path, json).unwrap();
     eprintln!("Results written to {}", results_path);

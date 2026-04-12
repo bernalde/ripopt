@@ -6,31 +6,36 @@ __pycache__/
 cutest_install.log
 
 # CUTEst problem data and run artifacts
-cutest_suite/problems/
-cutest_suite/*_stderr.txt
-cutest_suite/*_results.json
-cutest_suite/*_results.log
-cutest_suite/cutest_phase1_run.log
-cutest_suite/phase1_results.log
-cutest_suite/results_full.txt
-cutest_suite/subset_test_results.txt
-cutest_suite/test_failures.sh
-cutest_suite/test_subset.txt
-cutest_suite/fortran_open_fixed.f90
+benchmarks/cutest/problems/
+benchmarks/cutest/*_stderr.txt
+benchmarks/cutest/*_results.json
+benchmarks/cutest/*_results.log
+benchmarks/cutest/cutest_phase1_run.log
+benchmarks/cutest/phase1_results.log
+benchmarks/cutest/results_full.txt
+benchmarks/cutest/subset_test_results.txt
+benchmarks/cutest/test_failures.sh
+benchmarks/cutest/test_subset.txt
+benchmarks/cutest/fortran_open_fixed.f90
 
 # HS suite artifacts
-hs_suite/phase1_results.log
-hs_suite_stderr.txt
+benchmarks/hs/phase1_results.log
+benchmarks/hs/hs_suite_stderr.txt
 
 # Data files
 CLSF.DAT
 
 # Manuscript build artifacts (org files are primary source)
+# All of these are produced by `scimax export <file>.org --format pdf`
+# from inside the manuscript/ directory and should never be committed.
 manuscript/*.tex
 manuscript/*.pdf
+manuscript/*.html
 manuscript/*.synctex.gz
 manuscript/_minted/
 manuscript/*.pyg
+manuscript/*.bbl
+manuscript/*.blg
 
 # Archive of old docs
 archive/
@@ -43,13 +48,16 @@ install_cutest.sh
 
 # Python build artifacts
 *.egg-info/
-hs_suite/hs_ipopt_native_stderr.txt
-hs_suite/hs_ripopt_stderr.txt
+benchmarks/hs/hs_ipopt_native_stderr.txt
+benchmarks/hs/hs_ripopt_stderr.txt
 
-# Domain benchmark stderr
+# Domain benchmark stderr (match legacy root paths and new benchmarks/ paths)
 electrolyte_stderr.txt
-opf_stderr.txt
+grid_stderr.txt
 cho_stderr.txt
+benchmarks/electrolyte/electrolyte_stderr.txt
+benchmarks/grid/grid_stderr.txt
+benchmarks/cho/cho_stderr.txt
 
 # nlp problems
 nlpbench*

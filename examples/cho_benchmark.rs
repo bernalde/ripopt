@@ -122,12 +122,12 @@ fn main() {
 
     // Load NL file
     let nl_path = std::env::var("CHO_NL_PATH")
-        .unwrap_or_else(|_| "cho/nl_export_results/cho_parmest.nl".to_string());
+        .unwrap_or_else(|_| "benchmarks/cho/nl_export_results/cho_parmest.nl".to_string());
     let content = match std::fs::read_to_string(&nl_path) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Error reading {}: {}", nl_path, e);
-            eprintln!("Generate it with: cd cho && python parmest_nl_export.py");
+            eprintln!("Generate it with: cd benchmarks/cho && python parmest_nl_export.py");
             std::process::exit(1);
         }
     };

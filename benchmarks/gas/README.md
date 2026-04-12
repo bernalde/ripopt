@@ -3,6 +3,13 @@
 Benchmark problems from [Sakshi21299/gas_networks](https://github.com/Sakshi21299/gas_networks),
 exported as AMPL NL files. See [issue #12](https://github.com/jkitchin/ripopt/issues/12).
 
+This suite lives under `benchmarks/gas/`. See `benchmarks/README.md` for an
+overview of all benchmark suites. Unlike the HS / CUTEst / domain benchmarks,
+the gas suite does **not** feed into the composite `BENCHMARK_REPORT.md`:
+the problems are solved one-at-a-time via the AMPL `.nl` interface, solver
+output is written to per-problem `.sol` files, and results are inspected
+manually rather than aggregated into a JSON summary.
+
 ## Problems
 
 | File | Network | Phase | n | m | Ipopt status | Ipopt obj | Ipopt time | Ipopt iters |
@@ -19,10 +26,16 @@ finite-volume PDE discretization of the Euler equations on a pipe network.
 
 ```bash
 # Test with ipopt
-ipopt gas/gaslib11_steady.nl
+ipopt benchmarks/gas/gaslib11_steady.nl
 
 # Test with ripopt
-ripopt gas/gaslib11_steady.nl print_level=5
+ripopt benchmarks/gas/gaslib11_steady.nl print_level=5
+```
+
+Or run the full suite via the benchmarks Makefile:
+
+```bash
+make -C benchmarks gas-run
 ```
 
 ## Re-exporting
@@ -30,7 +43,7 @@ ripopt gas/gaslib11_steady.nl print_level=5
 If the gas_net package or data changes, regenerate the NL files:
 
 ```bash
-python gas/export_nl.py
+python benchmarks/gas/export_nl.py
 ```
 
 Requires `gas_net` installed (`pip install -e path/to/gas_networks`).

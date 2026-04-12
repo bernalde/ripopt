@@ -1,8 +1,8 @@
-//! AC Optimal Power Flow test suite for ripopt.
+//! AC Optimal Power Flow (grid) test suite for ripopt.
 //!
-//! Run with: cargo test opf -- --nocapture
+//! Run with: cargo test grid -- --nocapture
 
-#[path = "common/opf_problems.rs"]
+#[path = "../benchmarks/grid/problems.rs"]
 mod problems;
 use problems::*;
 

@@ -1,5 +1,5 @@
 SHELL = /bin/bash
-.PHONY: help test test-c test-iterative install uninstall clean cutest-install cutest-prepare cutest-run cutest-full cutest-report cutest cutest-maxiter cutest-smoke cutest-large hs-run large-scale electrolyte-run opf-run cho-run benchmark benchmark-report
+.PHONY: help test test-c test-iterative install uninstall clean cutest-install cutest-prepare cutest-run cutest-full cutest-report cutest cutest-maxiter cutest-smoke cutest-large hs-run large-scale electrolyte-run grid-run cho-run gas-run water-run benchmark benchmark-report
 
 # Show available targets
 help:
@@ -19,9 +19,11 @@ help:
 	@echo "  benchmark-report Generate unified report from existing results"
 	@echo "  hs-run           Run HS suite benchmark (ripopt + ipopt)"
 	@echo "  electrolyte-run  Run electrolyte thermodynamics benchmark"
-	@echo "  opf-run          Run AC optimal power flow benchmark"
+	@echo "  grid-run         Run AC optimal power flow (electrical grid) benchmark"
 	@echo "  cho-run          Run CHO parameter estimation benchmark"
 	@echo "  large-scale      Run synthetic large-scale tests (up to 100K vars)"
+	@echo "  gas-run          Run gas pipeline NLP benchmark (AMPL .nl files)"
+	@echo "  water-run        Run water distribution network NLP benchmark (AMPL .nl files)"
 	@echo "  test-c           Build shared library and run C API examples"
 	@echo ""
 	@echo "CUTEst Benchmarks:"
@@ -124,112 +126,10 @@ test-c:
 cutest-install:
 	bash install_cutest.sh
 
-# Prepare CUTEst problems (compile SIF -> .dylib)
-cutest-prepare:
-	source ~/.local/cutest/env.sh && bash cutest_suite/prepare.sh
+# Backward-compatibility shims — real targets live in benchmarks/Makefile.
+# Each target delegates so existing workflows (e.g. `make hs-run`) keep working.
+cutest-prepare cutest-run cutest-full cutest-report cutest-smoke cutest-large cutest-maxiter cutest:
+	$(MAKE) -C benchmarks $@
 
-# Run CUTEst benchmark (saves results to cutest_suite/results.json)
-cutest-run:
-	RESULTS_FILE=cutest_suite/results.json \
-	cargo run --bin cutest_suite --features cutest,ipopt-native --release \
-		2> >(tee cutest_suite/benchmark_stderr.txt >&2)
-
-# Run full CUTEst benchmark (all 1542 SIF problems)
-cutest-full:
-	PROBLEM_LIST=cutest_suite/problem_list_full.txt \
-	RESULTS_FILE=cutest_suite/full_results.json \
-	cargo run --bin cutest_suite --features cutest,ipopt-native --release \
-		2> >(tee cutest_suite/full_stderr.txt >&2)
-
-# Generate comparison report from results
-cutest-report:
-	python cutest_suite/compare.py cutest_suite/results.json
-
-# Smoke test: ~20 fast, diverse problems (unconstrained, bounds, equality,
-# inequality, NE-to-LS, mixed). All n+m < 50, finishes in seconds.
-cutest-smoke:
-	RESULTS_FILE=cutest_suite/smoke_results.json \
-	cargo run --bin cutest_suite --features cutest,ipopt-native --release -- \
-		ROSENBR BEALE CUBE DENSCHNB BROWNBS \
-		HS6 HS10 HS35 HS71 HS106 \
-		MARATOS BT1 HS13 HS57 S316-322 \
-		BEALENE BROWNBSNE ENGVAL2NE \
-		PALMER1D PALMER5D \
-		2> >(tee cutest_suite/smoke_stderr.txt >&2)
-	@echo "Smoke test complete."
-
-# Large problems: n+m >= 100, exercises the sparse multifrontal solver.
-# Includes over-constrained (m >> n), large-n, and NE systems.
-cutest-large:
-	RESULTS_FILE=cutest_suite/large_results.json \
-	cargo run --bin cutest_suite --features cutest,ipopt-native --release -- \
-		HIMMELBI AIRPORT LAKES SWOPF QPCBLEND QPNBLEND SPANHYD LINSPANH \
-		ACOPP14 ACOPR14 ACOPP30 ACOPR30 BATCH CORE1 MSS1 HAIFAM FEEDLOC \
-		DISCS DECONVBNE DECONVNE NET1 HYDCAR20 \
-		TFI1 TFI2 TFI3 EXPFITB ELATTAR CRESC50 EXPFITC \
-		DUALC1 DUALC2 DUALC5 DUALC8 \
-		PT HET-Z OET1 OET2 OET3 OET4 KSIP \
-		SIPOW1 SIPOW1M SIPOW2 SIPOW2M SIPOW3 SIPOW4 \
-		TAXR13322 GOFFIN \
-		2> >(tee cutest_suite/large_stderr.txt >&2)
-	@echo "Large problem benchmark complete."
-
-# Run only the 35 MaxIterations failures for fast iteration
-cutest-maxiter:
-	RESULTS_FILE=cutest_suite/maxiter_results.json \
-	cargo run --bin cutest_suite --features cutest,ipopt-native --release -- \
-		AIRCRFTB ALLINIT BENNETT5LS BIGGS3 BIGGS5 BOX2 BQPGABIM CHWIRUT2LS \
-		DJTL HAHN1LS MEYER3 MGH10LS MINSURF OSBORNEA RAT43LS SIM2BQP THURBERLS \
-		AIRCRFTA CONCON DECONVC DECONVNE DECONVU DNIEPER HS109 HS67 HS83 HS84 \
-		HS85 HS99EXP MCONCON OPTCNTRL QC QCNEW SSINE TRIGGER \
-		2> >(tee cutest_suite/maxiter_stderr.txt >&2)
-
-# Full CUTEst pipeline: prepare, run, report
-cutest: cutest-prepare cutest-run cutest-report
-	@echo "CUTEst benchmark complete. Report: cutest_suite/CUTEST_REPORT.md"
-
-# Run HS suite benchmark (ripopt + ipopt native)
-hs-run:
-	cargo run --bin hs_suite --features hs,ipopt-native --release \
-		> hs_suite/hs_ripopt_results.json \
-		2> >(tee hs_suite/hs_ripopt_stderr.txt >&2)
-	cargo run --bin ipopt_native --features ipopt-native --release \
-		> hs_suite/hs_ipopt_native_results.json \
-		2> >(tee hs_suite/hs_ipopt_native_stderr.txt >&2)
-	@echo "HS benchmark complete."
-
-# Run synthetic large-scale tests (5K to 100K variables)
-large-scale:
-	cargo test --release --features ipopt-native -- --ignored large_scale_vs_ipopt --nocapture \
-		2>&1 | tee large_scale_results.txt
-	@echo "Large-scale benchmark complete. Output: large_scale_results.txt"
-
-# Run electrolyte thermodynamics benchmark (ripopt + ipopt)
-electrolyte-run:
-	RESULTS_FILE=electrolyte_results.json \
-	cargo run --release --features ipopt-native --example electrolyte_benchmark \
-		2> >(tee electrolyte_stderr.txt >&2)
-	@echo "Electrolyte benchmark complete."
-
-# Run AC optimal power flow benchmark (ripopt + ipopt)
-opf-run:
-	RESULTS_FILE=opf_results.json \
-	cargo run --release --features ipopt-native --example opf_benchmark \
-		2> >(tee opf_stderr.txt >&2)
-	@echo "OPF benchmark complete."
-
-# Run CHO parameter estimation benchmark (ripopt + ipopt)
-cho-run:
-	RESULTS_FILE=cho_results.json \
-	cargo run --release --features ipopt-native --example cho_benchmark \
-		2> >(tee cho_stderr.txt >&2)
-	@echo "CHO benchmark complete."
-
-# Full benchmark: HS + CUTEst + domain + large-scale + unified report
-benchmark: hs-run cutest-run electrolyte-run opf-run large-scale benchmark-report
-	@echo "Full benchmark complete. Report: BENCHMARK_REPORT.md"
-
-# Generate unified benchmark report from existing results
-benchmark-report:
-	python benchmark_report.py
-	@echo "Report: BENCHMARK_REPORT.md"
+hs-run large-scale electrolyte-run grid-run cho-run gas-run water-run benchmark benchmark-report:
+	$(MAKE) -C benchmarks $@

@@ -25,7 +25,7 @@ Generated: 2026-04-10 16:56:46
 | HS | 120 | 116 (96.7%) | 116 (96.7%) | 2 | 2 | 114 | 106/114 |
 | CUTEst | 727 | 569 (78.3%) | 561 (77.2%) | 43 | 35 | 526 | 430/526 |
 | Electrolyte | 13 | 13 (100.0%) | 12 (92.3%) | 1 | 0 | 12 | 12/12 |
-| OPF | 4 | 3 (75.0%) | 4 (100.0%) | 0 | 1 | 3 | 2/3 |
+| Grid | 4 | 3 (75.0%) | 4 (100.0%) | 0 | 1 | 3 | 2/3 |
 | CHO | 1 | 0 (0.0%) | 0 (0.0%) | 0 | 0 | 0 | 0/1 |
 
 ## HS Suite — Performance
@@ -79,7 +79,7 @@ On 12 commonly-solved problems:
 - ripopt 10x+ faster: 7/12
 - Ipopt faster: 0/12
 
-## OPF Suite — Performance
+## Grid Suite — Performance
 
 On 3 commonly-solved problems:
 
@@ -131,7 +131,7 @@ On 3 commonly-solved problems:
 |-------------|--------|-------|
 | Infeasible | 0 | 1 |
 
-### OPF Suite
+### Grid Suite
 
 | Failure Mode | ripopt | Ipopt |
 |-------------|--------|-------|
@@ -185,7 +185,7 @@ On 3 commonly-solved problems:
 | TAXR13322 | CUTEst | 72 | 1261 | NumericalError | -3.429089e+02 |
 | THURBERLS | CUTEst | 7 | 0 | NumericalError | 5.642708e+03 |
 | VESUVIOLS | CUTEst | 8 | 0 | NumericalError | 9.914100e+02 |
-| case30_ieee | OPF | 72 | 142 | MaxIterations | 8.208515e+03 |
+| case30_ieee | Grid | 72 | 142 | MaxIterations | 8.208515e+03 |
 
 ## Wins (ripopt solves, Ipopt fails) — 46 problems
 

@@ -2,7 +2,7 @@
 //!
 //! Run with: cargo test --release -- --ignored large_scale --nocapture
 
-#[path = "common/large_scale_problems.rs"]
+#[path = "../benchmarks/large_scale/problems.rs"]
 mod problems;
 use problems::*;
 

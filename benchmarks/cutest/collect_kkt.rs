@@ -45,7 +45,7 @@ fn main() {
 /// The solve result is ignored — we want KKT matrices from all iterations,
 /// including those from problems that fail to converge.
 fn run_single(name: &str, output_dir: &Path) {
-    let suite_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("cutest_suite");
+    let suite_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("benchmarks").join("cutest");
     let problems_dir = suite_dir.join("problems");
 
     let lib_path = problems_dir.join(format!("lib{}.{}", name, std::env::consts::DLL_EXTENSION));
@@ -98,7 +98,7 @@ fn run_all(output_dir: &Path, problem_names: &[String]) {
         .and_then(|s| s.parse().ok())
         .unwrap_or(usize::MAX);
 
-    let suite_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("cutest_suite");
+    let suite_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("benchmarks").join("cutest");
     let problems_dir = suite_dir.join("problems");
 
     std::fs::create_dir_all(output_dir).unwrap_or_else(|e| {
@@ -238,7 +238,7 @@ fn parse_args(args: &[String]) -> (PathBuf, Vec<String>) {
         eprintln!("Usage: collect_kkt --output <dir> [PROBLEM1 PROBLEM2 ...]");
         eprintln!();
         eprintln!("  --output <dir>   Destination for KKT matrices (required)");
-        eprintln!("  PROBLEM...       Problem names; reads cutest_suite/problem_list.txt if omitted");
+        eprintln!("  PROBLEM...       Problem names; reads benchmarks/cutest/problem_list.txt if omitted");
         eprintln!();
         eprintln!("Env vars:");
         eprintln!("  CUTEST_TIMEOUT   Per-problem timeout in seconds (default: 60)");
@@ -247,7 +247,7 @@ fn parse_args(args: &[String]) -> (PathBuf, Vec<String>) {
     });
 
     if problem_names.is_empty() {
-        let suite_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("cutest_suite");
+        let suite_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("benchmarks").join("cutest");
         let list_path = suite_dir.join("problem_list.txt");
         if list_path.exists() {
             let contents =

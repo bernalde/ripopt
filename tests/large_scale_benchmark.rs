@@ -6,11 +6,11 @@
 //! ensuring a fair comparison.
 
 // Include problem definitions from the main large-scale test file
-#[path = "common/large_scale_problems.rs"]
+#[path = "../benchmarks/large_scale/problems.rs"]
 mod problems;
 
 use problems::*;
-use ripopt::{NlpProblem, SolveStatus, SolverOptions};
+use ripopt::{NlpProblem, SolverOptions};
 use std::time::Instant;
 
 // ---- Ipopt C API FFI (same as hs_suite/run_ipopt_native.rs) ----

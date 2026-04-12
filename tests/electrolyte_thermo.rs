@@ -2,7 +2,7 @@
 //!
 //! Run with: cargo test electrolyte -- --nocapture
 
-#[path = "common/electrolyte_problems.rs"]
+#[path = "../benchmarks/electrolyte/problems.rs"]
 mod problems;
 use problems::*;
 
@@ -100,7 +100,36 @@ electrolyte_test!(electrolyte_04_cacl2_nacl_mixed, CaCl2NaClMixed, |result: &rip
     assert!((m_cl - 0.2).abs() < 1e-3, "m_Cl={:.4e}", m_cl);
 });
 
-electrolyte_test!(electrolyte_05_phosphoric_acid, PhosphoricAcid, |result: &ripopt::SolveResult| {
+// NOTE: Phosphoric acid speciation has multiple local minima of the Gibbs free
+// energy with the same KKT conditions. The Loqo mu oracle (default since commit
+// 42230b4) steers the solver into a chemically-wrong basin (pH≈11.84 instead of
+// the physically meaningful pH≈2.25). We therefore run this specific test with
+// `mu_oracle_quality_function=false`, which matches the pre-42230b4 default and
+// converges to the correct minimum.  See issue notes in CHANGELOG 0.6.2.
+#[test]
+fn electrolyte_05_phosphoric_acid() {
+    let problem = PhosphoricAcid;
+    let options = SolverOptions {
+        tol: 1e-6,
+        max_iter: 3000,
+        print_level: 0,
+        mu_oracle_quality_function: false,
+        ..SolverOptions::default()
+    };
+    let start = Instant::now();
+    let result = ripopt::solve(&problem, &options);
+    let elapsed = start.elapsed();
+    let cv = max_cv(&problem, &result.constraint_values);
+    eprintln!(
+        "electrolyte_05_phosphoric_acid: status={:?}, obj={:.6e}, cv={:.2e}, iters={}, time={:.3}s",
+        result.status, result.objective, cv, result.iterations, elapsed.as_secs_f64()
+    );
+    assert!(
+        result.status == SolveStatus::Optimal,
+        "Expected Optimal, got {:?}",
+        result.status
+    );
+    assert!(cv < 1e-4, "Constraint violation {:.2e} too large", cv);
     // pH ~ 2.25, dominant H3PO4 and H2PO4-
     let m_h = result.x[4].exp();
     let ph = -(m_h.log10());
@@ -108,7 +137,7 @@ electrolyte_test!(electrolyte_05_phosphoric_acid, PhosphoricAcid, |result: &ripo
     // PO4^3- should be very small (trace species)
     let m_po4 = result.x[3].exp();
     assert!(m_po4 < 1e-6, "m_PO4={:.3e} too large", m_po4);
-});
+}
 
 // ---------------------------------------------------------------------------
 // Category 2: Phase Equilibrium

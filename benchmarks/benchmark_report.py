@@ -3,9 +3,9 @@
 Unified benchmark report for ripopt vs Ipopt.
 
 Reads results from:
-  - hs_suite/hs_ripopt_results.json      (HS suite, ripopt)
-  - hs_suite/hs_ipopt_native_results.json (HS suite, ipopt)
-  - cutest_suite/results.json             (CUTEst 727 suite)
+  - benchmarks/hs/hs_ripopt_results.json      (HS suite, ripopt)
+  - benchmarks/hs/hs_ipopt_native_results.json (HS suite, ipopt)
+  - benchmarks/cutest/results.json             (CUTEst 727 suite)
 
 Produces a single BENCHMARK_REPORT.md with per-suite and combined statistics.
 
@@ -78,8 +78,8 @@ def compute_stats(diffs):
 
 def load_hs_results():
     """Load HS suite results (separate files for each solver)."""
-    ripopt_path = os.path.join(SCRIPT_DIR, 'hs_suite', 'hs_ripopt_results.json')
-    ipopt_path = os.path.join(SCRIPT_DIR, 'hs_suite', 'hs_ipopt_native_results.json')
+    ripopt_path = os.path.join(SCRIPT_DIR, 'hs', 'hs_ripopt_results.json')
+    ipopt_path = os.path.join(SCRIPT_DIR, 'hs', 'hs_ipopt_native_results.json')
 
     if not os.path.exists(ripopt_path) or not os.path.exists(ipopt_path):
         return None
@@ -128,7 +128,7 @@ def load_hs_results():
 def load_cutest_results(path=None):
     """Load CUTEst results (single file with solver field)."""
     if path is None:
-        path = os.path.join(SCRIPT_DIR, 'cutest_suite', 'results.json')
+        path = os.path.join(SCRIPT_DIR, 'cutest', 'results.json')
 
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         return None
@@ -178,7 +178,7 @@ def load_cutest_results(path=None):
 
 
 def load_domain_results(path, suite_name):
-    """Load domain-specific benchmark results (electrolyte, OPF, CHO).
+    """Load domain-specific benchmark results (electrolyte, Grid, CHO).
 
     These use the same JSON format as CUTEst: [{solver, name, n, m, status, objective, iterations, solve_time}].
     """
@@ -231,7 +231,7 @@ def load_domain_results(path, suite_name):
 
 def load_large_scale_results():
     """Parse large_scale_results.txt for BENCH: lines with ripopt vs Ipopt comparison."""
-    path = os.path.join(SCRIPT_DIR, 'large_scale_results.txt')
+    path = os.path.join(SCRIPT_DIR, 'large_scale', 'large_scale_results.txt')
     if not os.path.exists(path):
         return None
 
@@ -661,23 +661,23 @@ def main():
         print("CUTEst suite: no results found (run `make cutest-run` first)")
 
     electrolyte = load_domain_results(
-        os.path.join(SCRIPT_DIR, 'electrolyte_results.json'), 'Electrolyte')
+        os.path.join(SCRIPT_DIR, 'electrolyte', 'electrolyte_results.json'), 'Electrolyte')
     if electrolyte:
         suites.append(("Electrolyte", electrolyte))
         print(f"Electrolyte suite: {len(electrolyte)} problems loaded")
     else:
         print("Electrolyte suite: no results found (run `make electrolyte-run` first)")
 
-    opf = load_domain_results(
-        os.path.join(SCRIPT_DIR, 'opf_results.json'), 'OPF')
-    if opf:
-        suites.append(("OPF", opf))
-        print(f"OPF suite: {len(opf)} problems loaded")
+    grid = load_domain_results(
+        os.path.join(SCRIPT_DIR, 'grid', 'grid_results.json'), 'Grid')
+    if grid:
+        suites.append(("Grid", grid))
+        print(f"Grid suite: {len(grid)} problems loaded")
     else:
-        print("OPF suite: no results found (run `make opf-run` first)")
+        print("Grid suite: no results found (run `make grid-run` first)")
 
     cho = load_domain_results(
-        os.path.join(SCRIPT_DIR, 'cho_results.json'), 'CHO')
+        os.path.join(SCRIPT_DIR, 'cho', 'cho_results.json'), 'CHO')
     if cho:
         suites.append(("CHO", cho))
         print(f"CHO suite: {len(cho)} problems loaded")
