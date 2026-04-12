@@ -1836,6 +1836,7 @@ impl NlpProblem for SeawaterSpeciation {
 // ===========================================================================
 
 /// Returns a list of (name, problem) pairs for all 13 problems.
+#[allow(dead_code)]
 pub fn all_problems() -> Vec<(&'static str, Box<dyn NlpProblem>)> {
     vec![
         ("Water autoionization", Box::new(WaterAutoionization)),

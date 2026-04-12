@@ -177,52 +177,39 @@ variables, where Fortran MUMPS begins to pull ahead on the very largest systems.
 
 ### 1. Convergence on Some Constrained Problems
 
-12 problems are solved by Ipopt but not ripopt:
+35 CUTEst problems are solved by Ipopt but not by ripopt. Grouped by
+ripopt's terminal status (from `benchmarks/BENCHMARK_REPORT.md`):
 
-| Problem | n | m | ripopt Status | Root Cause |
-|---------|---|---|---------------|------------|
-| ACOPR14 | 38 | 82 | MaxIterations | Slow convergence, needs more iterations |
-| ACOPR30 | 72 | 172 | RestorationFailed | Restoration cannot recover feasibility |
-| CRESC50 | 6 | 100 | RestorationFailed | Many constraints, restoration stalls |
-| HATFLDH | 4 | 7 | MaxIterations | Oscillating dual variables |
-| HS109 | 9 | 10 | MaxIterations | Slow convergence near degenerate point |
-| HS83 | 5 | 3 | MaxIterations | Restoration cycling |
-| MGH10SLS | 3 | 0 | MaxIterations | Stuck at wrong local minimum |
-| OET2 | 3 | 1002 | MaxIterations | Wrong basin, dual oscillation |
-| OET6 | 5 | 1002 | MaxIterations | Slow convergence (2999 iters vs Ipopt's 126) |
-| OET7 | 7 | 1002 | MaxIterations | Slow convergence (2999 iters vs Ipopt's 193) |
-| OSBORNEA | 5 | 0 | MaxIterations | Slow convergence (unconstrained) |
-| QCNEW | 9 | 3 | MaxIterations | Slow convergence near solution |
+**NumericalError (26):** ACOPP30, ACOPR30, ALLINITC, CERI651ALS, CORE1,
+DECONVBNE, DISCS, FLETCHER, HAHN1LS, HAIFAM, HIMMELBI, HS13, HYDC20LS,
+MAKELA3, MGH10LS, MGH10SLS, MSS1, MUONSINELS, OET2, OET6, OET7, PALMER3,
+QPCBLEND, QPNBLEND, STRATEC, SWOPF, TAXR13322, THURBERLS, VESUVIOLS —
+KKT factorization fails to produce a usable step, typically from a
+non-convex Hessian or ill-conditioned constraint Jacobian that the
+inertia-correction cascade cannot rehabilitate.
 
-The dominant pattern is **MaxIterations** (10/12), suggesting convergence is happening
-but too slowly. The OET family (3 problems) would likely be solved with sparse linear
-algebra. The remaining problems involve degenerate multipliers, wrong basins, or slow
-final convergence.
+**RestorationFailed (1):** CRESC50 — restoration stalls on a problem
+with many constraints (m=100).
 
-### 2. Iteration Counts on Some Problems
+**Timeout (3):** DUALC8 (m=503), LRCOVTYPE (n=54), OET4 (m=1002) — the
+30-second wall clock expires inside the IPM or a fallback.
 
-While ripopt is faster per iteration (median 23.1x on CUTEst), it sometimes requires significantly
-more iterations:
+**MaxIterations (2):** KIRBY2LS, OET5 — solver runs its 3000-iteration
+budget without converging to strict `Optimal`.
 
-| Problem | ripopt iters | Ipopt iters | Cause |
-|---------|-------------|-------------|-------|
-| GOFFIN | 2999 | 7 | Wrong basin, dual oscillation |
-| HS85 | 2999 | 13 | Slow convergence |
-| VESUVIOLS | 2999 | 10 | Stuck at saddle point |
-| LAUNCH | 2999 | 12 | Slow convergence |
-| HYDCAR6 | 1298 | 5 | Slow convergence |
-| METHANL8 | 608 | 4 | Slow convergence |
+The dominant pattern is **NumericalError** (74% of ripopt-only failures),
+pointing at linear-algebra robustness on non-convex KKT systems rather
+than at algorithmic structure.  The OET family and DUALC8 share a
+tall-narrow inequality structure (m >> n with many inequality
+constraints) where ripopt's dense condensed-KKT path is fast when it
+works but has a narrow margin for error.
 
-These cases suggest differences in the mu strategy, multiplier initialization, or
-second-order step computation that cause ripopt to take longer paths. In most cases
-ripopt still converges correctly (just slowly), but the iteration count difference
-indicates room for improvement in the adaptive mu oracle or the initial dual estimate.
+### 2. Solution Quality at Degenerate Points
 
-### 3. Solution Quality at Degenerate Points
-
-93 problems where both solvers converge produce different objectives (different local
-optima). While both solutions satisfy KKT conditions, Ipopt more often finds the
-globally better solution. This may reflect Ipopt's more mature mu strategy, better
+96 CUTEst problems where both solvers converge produce different
+objectives (different local optima). While both solutions satisfy KKT
+conditions, Ipopt more often finds the globally better solution. This
+may reflect Ipopt's more mature mu strategy, better
 multiplier initialization from decades of tuning, or differences in the starting point
 perturbation strategy.
 
@@ -248,15 +235,20 @@ perturbation strategy.
 
 ### High Impact
 
-1. **Adaptive mu tuning.** Several problems (GOFFIN, HS85, LAUNCH, HYDCAR6) show
-   ripopt taking 100x more iterations than Ipopt. Improving the mu oracle to better
-   estimate the optimal barrier parameter could reduce iteration counts significantly.
-   10/12 ripopt-only failures are MaxIterations -- this is the dominant failure mode.
-   Estimated gain: 3-5 problems, faster convergence on many others.
+1. **Linear-algebra robustness on non-convex KKT systems.** 26 of the 35
+   CUTEst-only failures terminate in `NumericalError`, meaning the
+   inertia-corrected factorization cannot produce a usable Newton step.
+   Tightening the inertia-correction cascade (more aggressive delta_w
+   escalation, Ruiz rescaling before factorization, or a fallback to
+   iterative refinement with modified LDL^T) should recover several of
+   these. Estimated gain: 5-10 problems.
 
-2. **Oscillation damping.** HATFLDH, HS83, OET2/6/7 cycle with oscillating dual
-   variables. Damping y updates (e.g., y_new = alpha*y_computed + (1-alpha)*y_old
-   with adaptive alpha) could stabilize convergence. Estimated gain: 3-5 problems.
+2. **Oscillation damping on tall-narrow inequalities.** The OET family
+   (OET2/4/5/6/7) shares m >> n structure and fails with a mix of
+   `NumericalError`, `Timeout`, and `MaxIterations`. Damping y updates
+   (e.g., y_new = alpha*y_computed + (1-alpha)*y_old with adaptive
+   alpha) could stabilize convergence when the condensed KKT path
+   oscillates. Estimated gain: 3-5 problems.
 
 ### Medium Impact
 

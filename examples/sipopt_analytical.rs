@@ -328,7 +328,7 @@ fn main() {
     let dp_pred = [0.0, 0.0, delta_c];
     let sens_pred = ctx2.compute_sensitivity(&p2, &[&dp_pred]).unwrap();
     let x_pred = ctx2.result.x[0] + sens_pred.dx_dp[0][0];
-    let y_pred = ctx2.result.x[1] + sens_pred.dx_dp[0][1];
+    let _y_pred = ctx2.result.x[1] + sens_pred.dx_dp[0][1];
     let p2b = EqualityQP { a: p2.a, b: p2.b, c: p2.c + delta_c };
     let r2b = ripopt::solve(&p2b, &opts);
     let x_exact = (p2b.c + p2b.a - p2b.b) / 2.0;

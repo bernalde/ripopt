@@ -613,8 +613,10 @@ fn main() {
             let m = p.num_constraints();
 
             let rp = solve_ripopt(&p, tol, max_iter);
+            #[allow(unused_mut)]
             let mut line = format!("{:<20} {:>6} {:>6} | {:>10.4e} {:>5} {:>8.3}",
                 $name, n, m, rp.objective, rp.iterations, rp.time_s);
+            #[allow(unused_mut)]
             let mut status_notes = Vec::new();
             if rp.status != "Optimal" { status_notes.push(format!("ripopt={}", rp.status)); }
 
