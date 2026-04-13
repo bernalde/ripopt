@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "rmumps"]
+members = [".", "rmumps", "ripopt-py"]
 
 [package]
 name = "ripopt"
