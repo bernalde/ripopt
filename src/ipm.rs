@@ -2034,10 +2034,12 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     problem.initial_point(&mut x0);
 
     // Objective scaling: obj_scaling = min(1, max_grad / ||∇f(x0)||∞)
-    // Use a floor of 1e-2 to prevent extreme downscaling that creates a mismatch
-    // with the unscaled log-barrier terms (we don't have explicit slack variables).
+    // Floor matches Ipopt's nlp_scaling_min_value default (1e-8) so that L1-penalty
+    // reformulations (min f + rho*||slacks||_1 with rho up to 1e8) get the tiny
+    // obj_scaling they need instead of being clamped into the pathological regime
+    // where the penalty gradient dominates every Newton direction.
     let nlp_scaling_max_gradient = 100.0;
-    let nlp_scaling_min_value = 1e-2;
+    let nlp_scaling_min_value = 1e-8;
     let mut grad_f0 = vec![0.0; n_sc];
     problem.gradient(&x0, &mut grad_f0);
     let grad_max = grad_f0
