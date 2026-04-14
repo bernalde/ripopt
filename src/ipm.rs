@@ -625,7 +625,7 @@ impl SolverState {
         // Large problems skip init LS (sparse J*J^T is expensive and initial point
         // is often far from feasible where LS multipliers are meaningless).
         // The sparse LS path is available for post-restoration recovery.
-        let y = if options.least_squares_mult_init && m > 0 && m <= 500 {
+        let mut y = if options.least_squares_mult_init && m > 0 && m <= 500 {
             let mut grad_f_init = vec![0.0; n];
             problem.gradient(&x, &mut grad_f_init);
 
@@ -639,6 +639,24 @@ impl SolverState {
         } else {
             vec![0.0; m]
         };
+
+        // Warm-start override: when warm_start is enabled and the problem
+        // supplies initial multipliers, overwrite the defaults computed
+        // above. WarmStartInitializer::initialize (called later in
+        // `solve()`) will still floor z_l/z_u and recompute mu from
+        // complementarity of the provided point.
+        if options.warm_start {
+            let mut ws_lam_g = vec![0.0; m];
+            let mut ws_z_l = vec![0.0; n];
+            let mut ws_z_u = vec![0.0; n];
+            if problem.initial_multipliers(&mut ws_lam_g, &mut ws_z_l, &mut ws_z_u) {
+                if m > 0 {
+                    y.copy_from_slice(&ws_lam_g);
+                }
+                z_l.copy_from_slice(&ws_z_l);
+                z_u.copy_from_slice(&ws_z_u);
+            }
+        }
 
         Self {
             x,
@@ -5038,7 +5056,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     }
 
     // At max_iter: log convergence diagnostics using same z_opt as convergence check (with gate)
-    {
+    if options.print_level >= 5 {
         let final_primal_inf = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
         let (z_l_opt_final, z_u_opt_final) = {
             let mut grad_jty = state.grad_f.clone();

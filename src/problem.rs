@@ -19,6 +19,28 @@ pub trait NlpProblem {
     /// Fill initial primal point.
     fn initial_point(&self, x0: &mut [f64]);
 
+    /// Optional: fill initial dual multipliers for warm-starting.
+    ///
+    /// Called by the IPM only when `options.warm_start` is true. The default
+    /// implementation returns `false`, leaving the solver to compute its own
+    /// initial multipliers (least-squares estimate for constraint multipliers,
+    /// `mu / slack` for bound multipliers).
+    ///
+    /// When overridden to return `true`, `lam_g` must be filled with the
+    /// constraint multipliers (one per constraint; sign follows the standard
+    /// Lagrangian `L = f + lam_g^T g`), and `z_l` / `z_u` with the bound
+    /// multipliers (one per variable; must be non-negative — the solver will
+    /// floor them to `warm_start_mult_bound_push`). Entries for unbounded
+    /// variables are ignored.
+    fn initial_multipliers(
+        &self,
+        _lam_g: &mut [f64],
+        _z_l: &mut [f64],
+        _z_u: &mut [f64],
+    ) -> bool {
+        false
+    }
+
     /// Evaluate objective f(x).
     fn objective(&self, x: &[f64]) -> f64;
 

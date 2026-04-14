@@ -37,9 +37,43 @@ res = minimize(
 print(res.x, res.fun)
 ```
 
+## Reusing a problem across many solves
+
+`minimize(...)` is a single-shot scipy-style API: every call re-traces and re-JITs `jax.hessian(lagrangian)`, which is the single most expensive step for a medium-sized problem. When you solve the *same* NLP structure many times in a row (e.g. closed-loop NMPC), use the persistent `Problem` class instead — it builds every JAX callback exactly once and reuses the XLA cache across all solves:
+
+```python
+import jax.numpy as jnp
+from ripopt import Problem
+
+def stage_cost(z, x0):
+    x, u = z[:N], z[N:]
+    return jnp.sum((x - r) ** 2) + 0.01 * jnp.sum(u ** 2)
+
+def dynamics(z, x0):
+    x, u = z[:N], z[N:]
+    x_prev = jnp.concatenate([jnp.atleast_1d(x0[0]), x[:-1]])
+    return x - A * x_prev - B * u
+
+prob = Problem(
+    stage_cost,
+    x0=np.zeros(2 * N),
+    bounds=(lb, ub),
+    constraints={"fun": dynamics, "lb": 0.0, "ub": 0.0},
+    params=jnp.array([x0_current]),   # extra traced arg threaded into fun and g
+    jac_mode="reverse",                # jacrev is typically cheaper when m ≤ n
+    options={"tol": 1e-6},
+)
+
+for step in range(100):
+    prob.update_parameters(jnp.array([x0_current]))
+    res = prob.solve()                 # warm-starts from previous x* by default
+```
+
+`examples/bench_nmpc.py` runs this same pattern 100 times and compares `minimize()` vs `Problem.solve()` — the persistent object is typically several× faster because JAX tracing and XLA lowering of the Lagrangian Hessian happen exactly once for the Problem's lifetime, not once per call.
+
 ## API
 
-`minimize(fun, x0, *, bounds=None, constraints=None, options=None, sparsity='dense') -> OptimizeResult`
+`minimize(fun, x0, *, bounds=None, constraints=None, options=None, sparsity='dense', params=None, jac_mode='forward') -> OptimizeResult`
 
 - `fun(x)` — scalar, JAX-traceable.
 - `bounds` — `None`, `(lb, ub)` with scalars or arrays of length n, or a scipy-style list of `(lb_i, ub_i)` pairs.

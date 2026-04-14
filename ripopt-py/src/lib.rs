@@ -37,6 +37,13 @@ struct PyProblem {
     jac_cols: Vec<usize>,
     hes_rows: Vec<usize>,
     hes_cols: Vec<usize>,
+    /// Warm-start initial constraint multipliers. When Some, the IPM uses
+    /// these instead of its least-squares estimate (requires warm_start=true).
+    init_lam_g: Option<Vec<f64>>,
+    /// Warm-start initial lower-bound multipliers.
+    init_z_l: Option<Vec<f64>>,
+    /// Warm-start initial upper-bound multipliers.
+    init_z_u: Option<Vec<f64>>,
     err: RefCell<Option<PyErr>>,
 }
 
@@ -87,6 +94,31 @@ impl NlpProblem for PyProblem {
 
     fn initial_point(&self, x0: &mut [f64]) {
         x0.copy_from_slice(&self.x0);
+    }
+
+    fn initial_multipliers(
+        &self,
+        lam_g: &mut [f64],
+        z_l: &mut [f64],
+        z_u: &mut [f64],
+    ) -> bool {
+        match (
+            self.init_lam_g.as_ref(),
+            self.init_z_l.as_ref(),
+            self.init_z_u.as_ref(),
+        ) {
+            (Some(lg), Some(zl), Some(zu)) => {
+                if lg.len() == lam_g.len() && zl.len() == z_l.len() && zu.len() == z_u.len() {
+                    lam_g.copy_from_slice(lg);
+                    z_l.copy_from_slice(zl);
+                    z_u.copy_from_slice(zu);
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
     }
 
     fn objective(&self, x: &[f64]) -> f64 {
@@ -316,6 +348,12 @@ fn build_options(options: &Bound<'_, PyDict>) -> PyResult<SolverOptions> {
             "compl_inf_tol" => opts.compl_inf_tol = v.extract()?,
             "max_wall_time" => opts.max_wall_time = v.extract()?,
             "mu_init" => opts.mu_init = v.extract()?,
+            "warm_start" => opts.warm_start = v.extract()?,
+            "warm_start_bound_push" => opts.warm_start_bound_push = v.extract()?,
+            "warm_start_bound_frac" => opts.warm_start_bound_frac = v.extract()?,
+            "warm_start_mult_bound_push" => {
+                opts.warm_start_mult_bound_push = v.extract()?
+            }
             "hessian_approximation" => {
                 let s: String = v.extract()?;
                 match s.as_str() {
@@ -347,6 +385,7 @@ fn build_options(options: &Bound<'_, PyDict>) -> PyResult<SolverOptions> {
     f, grad_f, g_fn, jac_g, hess_l,
     jac_rows, jac_cols, hes_rows, hes_cols,
     options,
+    init_lam_g=None, init_z_l=None, init_z_u=None,
 ))]
 fn _solve<'py>(
     py: Python<'py>,
@@ -367,6 +406,9 @@ fn _solve<'py>(
     hes_rows: Vec<usize>,
     hes_cols: Vec<usize>,
     options: &Bound<'py, PyDict>,
+    init_lam_g: Option<PyReadonlyArray1<'py, f64>>,
+    init_z_l: Option<PyReadonlyArray1<'py, f64>>,
+    init_z_u: Option<PyReadonlyArray1<'py, f64>>,
 ) -> PyResult<Py<PyDict>> {
     if x0.len()? != n || x_l.len()? != n || x_u.len()? != n {
         return Err(PyValueError::new_err("x0, x_l, x_u must have length n"));
@@ -377,6 +419,59 @@ fn _solve<'py>(
     if m > 0 && (g_fn.is_none() || jac_g.is_none()) {
         return Err(PyValueError::new_err(
             "constraints present but g_fn or jac_g missing",
+        ));
+    }
+
+    // Validate warm-start multiplier arrays if supplied. All three must be
+    // present (or all absent); any partial spec is an error.
+    let init_lam_g_vec = match &init_lam_g {
+        Some(a) => {
+            if a.len()? != m {
+                return Err(PyValueError::new_err(format!(
+                    "init_lam_g has length {}, expected m={}",
+                    a.len()?,
+                    m
+                )));
+            }
+            Some(a.as_slice()?.to_vec())
+        }
+        None => None,
+    };
+    let init_z_l_vec = match &init_z_l {
+        Some(a) => {
+            if a.len()? != n {
+                return Err(PyValueError::new_err(format!(
+                    "init_z_l has length {}, expected n={}",
+                    a.len()?,
+                    n
+                )));
+            }
+            Some(a.as_slice()?.to_vec())
+        }
+        None => None,
+    };
+    let init_z_u_vec = match &init_z_u {
+        Some(a) => {
+            if a.len()? != n {
+                return Err(PyValueError::new_err(format!(
+                    "init_z_u has length {}, expected n={}",
+                    a.len()?,
+                    n
+                )));
+            }
+            Some(a.as_slice()?.to_vec())
+        }
+        None => None,
+    };
+    let any_init = init_lam_g_vec.is_some()
+        || init_z_l_vec.is_some()
+        || init_z_u_vec.is_some();
+    let all_init = init_lam_g_vec.is_some()
+        && init_z_l_vec.is_some()
+        && init_z_u_vec.is_some();
+    if any_init && !all_init {
+        return Err(PyValueError::new_err(
+            "warm-start multipliers must be supplied as a complete triple (init_lam_g, init_z_l, init_z_u) or not at all",
         ));
     }
 
@@ -397,10 +492,18 @@ fn _solve<'py>(
         jac_cols,
         hes_rows,
         hes_cols,
+        init_lam_g: init_lam_g_vec,
+        init_z_l: init_z_l_vec,
+        init_z_u: init_z_u_vec,
         err: RefCell::new(None),
     };
 
-    let opts = build_options(options)?;
+    let mut opts = build_options(options)?;
+    // If the user supplied warm-start multipliers, enable warm_start so that
+    // SolverState::new actually calls our initial_multipliers hook.
+    if all_init {
+        opts.warm_start = true;
+    }
     let result = ripopt_solve(&prob, &opts);
 
     if let Some(e) = prob.err.into_inner() {
