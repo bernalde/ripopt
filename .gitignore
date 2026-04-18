@@ -80,8 +80,11 @@ _minted/
 
 # Personal/scratch files
 linkedin.org
+linkedin-*.md
 docs/book
 .claude/
+reproducers/
+benchmarks/cho/nl_export_results/*.png
 
 # Adversary agent (local testing, not part of crate)
 adversary/
