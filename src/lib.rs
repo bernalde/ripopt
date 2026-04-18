@@ -95,6 +95,7 @@ pub mod result;
 pub mod sensitivity;
 pub mod slack_formulation;
 pub mod sqp;
+pub mod trace;
 pub mod warmstart;
 
 pub use options::{SolverOptions, LinearSolverChoice};

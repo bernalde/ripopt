@@ -77,6 +77,10 @@ name = "compare_large_scale"
 required-features = ["ipopt-native"]
 
 [[example]]
+name = "diff_harness"
+required-features = ["ipopt-native"]
+
+[[example]]
 name = "autodiff_num_dual"
 required-features = ["num-dual"]
 

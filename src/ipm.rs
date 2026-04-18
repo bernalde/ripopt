@@ -66,6 +66,7 @@ fn new_fallback_solver(use_sparse: bool) -> Box<dyn LinearSolver> {
 use crate::options::SolverOptions;
 use crate::problem::NlpProblem;
 use crate::restoration::RestorationPhase;
+use crate::trace;
 use crate::restoration_nlp::RestorationNlp;
 use crate::result::{SolveResult, SolverDiagnostics, SolveStatus};
 use crate::slack_formulation::SlackFormulation;
@@ -2689,6 +2690,40 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             log_line_count += 1;
         }
 
+        // TSV trace for the direction-diff harness (env RIP_TRACE_TSV).
+        // Emits iter-level intermediates for side-by-side comparison with
+        // an equivalent Ipopt IntermediateCallback trace. Columns that
+        // aren't yet plumbed through (Mehrotra σ, α_aff, inertia δ) stay
+        // NaN for now — wire them in at the direction-compute block.
+        {
+            let dx_inf = state.dx.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+            let dzl_inf = state.dz_l.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+            let dzu_inf = state.dz_u.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+            trace::emit(&trace::TraceRow {
+                iter: iteration,
+                obj: state.obj / state.obj_scaling,
+                inf_pr: primal_inf,
+                inf_du: dual_inf,
+                compl: compl_inf_best,
+                mu: state.mu,
+                alpha_pr: state.alpha_primal,
+                alpha_du: state.alpha_dual,
+                alpha_aff_p: f64::NAN,
+                alpha_aff_d: f64::NAN,
+                mu_aff: f64::NAN,
+                sigma: last_mehrotra_sigma.unwrap_or(f64::NAN),
+                mu_pc: f64::NAN,
+                delta_w: inertia_params.delta_w_last,
+                delta_c: 0.0,
+                dx_inf,
+                dzl_inf,
+                dzu_inf,
+                mcc_iters: 0,
+                ls: ls_steps as u32,
+                accepted: true,
+            });
+        }
+
         // z_opt component-wise scaled dual infeasibility (fallback for unscaled gate)
         let dual_inf_unscaled_opt = convergence::dual_infeasibility_scaled(
             &state.grad_f,
@@ -5035,14 +5070,29 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                                 1.0
                             };
 
-                            // Loqo formula: sigma = 0.1 * min(0.05*(1-xi)/xi, 2)^3
+                            // Loqo formula: sigma = 0.1 * min(0.05*(1-xi)/xi, 2)^3.
+                            // Diagnostic (2026-04-18 direction diff vs Ipopt on the
+                            // 3-var log-band problem): ripopt's uncapped Loqo oracle
+                            // collapsed μ by 7 orders of magnitude in a single
+                            // iteration (e.g. 6.6e-3 → 9e-10) when the iterate was
+                            // well-centered (ξ ≈ 0.82 → σ ≈ 1e-7). Ipopt's
+                            // MonotoneMuUpdate floor (kappa_mu * μ, μ^sldp) bounds
+                            // the per-iteration decrease even in adaptive mode; apply
+                            // the same floor here so the Loqo-proposed μ can't
+                            // undershoot a gradual monotone schedule.
                             let ratio = if xi > 1e-20 {
                                 (0.05 * (1.0 - xi) / xi).min(2.0)
                             } else {
                                 2.0
                             };
                             let sigma = 0.1 * ratio.powi(3);
-                            let new_mu = (sigma * avg_compl).clamp(mu_floor, 1e5);
+                            let loqo_mu = sigma * avg_compl;
+                            let monotone_floor =
+                                (options.mu_linear_decrease_factor * state.mu)
+                                    .min(state.mu.powf(options.mu_superlinear_decrease_power));
+                            let new_mu = loqo_mu
+                                .max(monotone_floor)
+                                .clamp(mu_floor, 1e5);
 
                             if options.print_level >= 5 {
                                 rip_log!("ripopt: mu loqo: xi={:.4} sigma={:.4} avg_compl={:.3e} -> mu={:.3e}",
