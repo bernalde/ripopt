@@ -5012,7 +5012,16 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     continue;
                 }
             }
-            return make_result(&state, SolveStatus::EvaluationError);
+            // Post-step evaluation failure. Ipopt caches obj_trial/g_trial
+            // from the line-search acceptance test and does not re-evaluate
+            // at an accepted point (IpIpoptAlg.cpp:652 AcceptTrialPoint just
+            // promotes cached trial→curr), so this code path has no Ipopt
+            // counterpart. When the re-evaluation trips the element-wise
+            // NaN/Inf guard added in 42f4015, we can still finish via the
+            // outer fallback chain; return NumericalError (recoverable) not
+            // EvaluationError (hard-fatal label) so the conservative retry
+            // and sibling fallbacks at solve_ipm's caller can engage.
+            return make_result(&state, SolveStatus::NumericalError);
         }
 
         // Reset v_l, v_u from barrier equilibrium v = mu_ks / slack.
