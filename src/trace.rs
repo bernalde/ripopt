@@ -37,6 +37,10 @@ pub const COLUMNS: &[&str] = &[
     "mcc_iters",
     "ls",
     "accepted",
+    "alpha_primal_max",
+    "tau_used",
+    "sigma_cond",
+    "soc_accepted",
 ];
 
 struct TraceSink {
@@ -85,6 +89,18 @@ pub struct TraceRow {
     pub mcc_iters: u32,
     pub ls: u32,
     pub accepted: bool,
+    /// Fraction-to-boundary-limited primal step BEFORE the line search (per Ipopt
+    /// IpIpoptCalculatedQuantities::curr_primal_frac_to_the_bound). If this is
+    /// close to 1 on a theta-blowup iteration, the Newton direction itself is
+    /// over-large for the local region. If it's small and we still blow up, the
+    /// line search accepted a bad step.
+    pub alpha_primal_max: f64,
+    pub tau_used: f64,
+    /// log10(max Σ_i / min Σ_i) where Σ = Z/S. At low μ this can reach 10+
+    /// orders of magnitude and signal ill-conditioning that could corrupt
+    /// the Newton direction.
+    pub sigma_cond: f64,
+    pub soc_accepted: bool,
 }
 
 impl TraceRow {
@@ -98,6 +114,8 @@ impl TraceRow {
             delta_w: nan, delta_c: nan,
             dx_inf: nan, dzl_inf: nan, dzu_inf: nan,
             mcc_iters: 0, ls: 0, accepted: false,
+            alpha_primal_max: nan, tau_used: nan, sigma_cond: nan,
+            soc_accepted: false,
         }
     }
 }
@@ -108,7 +126,7 @@ pub fn emit(row: &TraceRow) {
     let Ok(mut guard) = sink.lock() else { return };
     let _ = writeln!(
         guard.file,
-        "{}\t{:.17e}\t{:.6e}\t{:.6e}\t{:.6e}\t{:.6e}\t{:.6e}\t{:.6e}\t{:.6e}\t{:.6e}\t{:.6e}\t{:.6e}\t{:.6e}\t{:.6e}\t{:.6e}\t{:.6e}\t{:.6e}\t{:.6e}\t{}\t{}\t{}",
+        "{}\t{:.17e}\t{:.6e}\t{:.6e}\t{:.6e}\t{:.6e}\t{:.6e}\t{:.6e}\t{:.6e}\t{:.6e}\t{:.6e}\t{:.6e}\t{:.6e}\t{:.6e}\t{:.6e}\t{:.6e}\t{:.6e}\t{:.6e}\t{}\t{}\t{}\t{:.6e}\t{:.6e}\t{:.6e}\t{}",
         row.iter,
         row.obj, row.inf_pr, row.inf_du, row.compl, row.mu,
         row.alpha_pr, row.alpha_du,
@@ -116,6 +134,8 @@ pub fn emit(row: &TraceRow) {
         row.delta_w, row.delta_c,
         row.dx_inf, row.dzl_inf, row.dzu_inf,
         row.mcc_iters, row.ls, if row.accepted { 1 } else { 0 },
+        row.alpha_primal_max, row.tau_used, row.sigma_cond,
+        if row.soc_accepted { 1 } else { 0 },
     );
     let _ = guard.file.flush();
 }

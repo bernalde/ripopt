@@ -2278,6 +2278,11 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     // Used in the Free-mode mu update: when sigma is available, mu = sigma * mu_current
     // gives a more aggressive (and adaptive) decrease than the Loqo oracle.
     let mut last_mehrotra_sigma: Option<f64> = None;
+    // Per-iteration trace intermediates captured during the line-search /
+    // direction-compute sub-phases, drained into the TSV at iteration-end.
+    let mut last_alpha_primal_max: Option<f64> = None;
+    let mut last_tau_used: Option<f64> = None;
+    let mut last_soc_accepted: bool = false;
 
     // Free/fixed mu mode state (replaces ad-hoc stall recovery)
     let mut mu_state = MuState::new();
@@ -2699,6 +2704,34 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             let dx_inf = state.dx.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
             let dzl_inf = state.dz_l.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
             let dzu_inf = state.dz_u.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+            // log10(max Σ_i / min Σ_i) where Σ_i = z_l_i/s_l_i + z_u_i/s_u_i.
+            // High values (~10+) signal ill-conditioning of the condensed KKT at
+            // low μ and are an α=1/low-μ direction-quality suspect.
+            let (sigma_min, sigma_max_val) = {
+                let mut mn = f64::INFINITY;
+                let mut mx = 0.0_f64;
+                for i in 0..n {
+                    let mut s_i = 0.0_f64;
+                    if state.x_l[i].is_finite() {
+                        let s = (state.x[i] - state.x_l[i]).max(1e-20);
+                        s_i += state.z_l[i] / s;
+                    }
+                    if state.x_u[i].is_finite() {
+                        let s = (state.x_u[i] - state.x[i]).max(1e-20);
+                        s_i += state.z_u[i] / s;
+                    }
+                    if s_i > 0.0 {
+                        mn = mn.min(s_i);
+                        mx = mx.max(s_i);
+                    }
+                }
+                (mn, mx)
+            };
+            let sigma_cond = if sigma_min.is_finite() && sigma_min > 0.0 && sigma_max_val > 0.0 {
+                (sigma_max_val / sigma_min).log10()
+            } else {
+                f64::NAN
+            };
             trace::emit(&trace::TraceRow {
                 iter: iteration,
                 obj: state.obj / state.obj_scaling,
@@ -2721,7 +2754,14 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 mcc_iters: 0,
                 ls: ls_steps as u32,
                 accepted: true,
+                alpha_primal_max: last_alpha_primal_max.unwrap_or(f64::NAN),
+                tau_used: last_tau_used.unwrap_or(f64::NAN),
+                sigma_cond,
+                soc_accepted: last_soc_accepted,
             });
+            last_alpha_primal_max = None;
+            last_tau_used = None;
+            last_soc_accepted = false;
         }
 
         // z_opt component-wise scaled dual infeasibility (fallback for unscaled gate)
@@ -4301,6 +4341,10 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
         alpha_primal_max = alpha_primal_max.clamp(0.0, 1.0);
 
+        // Capture for TSV trace.
+        last_alpha_primal_max = Some(alpha_primal_max);
+        last_tau_used = Some(tau);
+
         // Dual step: ensure z + alpha*dz > 0
         let alpha_dual_max_l = filter::fraction_to_boundary(&state.z_l, &state.dz_l, tau);
         let alpha_dual_max_u = filter::fraction_to_boundary(&state.z_u, &state.dz_u, tau);
@@ -4511,6 +4555,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
                 if let Some((x_soc, obj_soc, g_soc, alpha_soc)) = soc_accepted {
                     state.diagnostics.soc_corrections += 1;
+                    last_soc_accepted = true;
                     state.x = x_soc;
                     state.obj = obj_soc;
                     state.g = g_soc;
