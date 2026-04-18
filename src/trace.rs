@@ -64,6 +64,14 @@ fn sink() -> Option<&'static Mutex<TraceSink>> {
     .as_ref()
 }
 
+/// Is TSV tracing enabled (i.e. `RIP_TRACE_TSV` pointed at a writable file
+/// at first-call time)? Cheap — avoids building a `TraceRow` with its O(n)
+/// reductions (σ conditioning, step norms) when tracing is off. Hot paths
+/// should guard the row construction with this check.
+pub fn is_enabled() -> bool {
+    sink().is_some()
+}
+
 /// Per-iteration row; every field is f64 to keep the schema flat. Use NaN
 /// when a column doesn't apply (e.g. Mehrotra σ when PC is skipped).
 #[derive(Clone, Copy)]
