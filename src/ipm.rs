@@ -5252,18 +5252,33 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                                 1.0
                             };
 
-                            // Loqo formula: sigma = 0.1 * min(0.05*(1-xi)/xi, 2)^3
+                            // Loqo formula: sigma = 0.1 * min(0.05*(1-xi)/xi, 2)^3.
+                            // Diagnostic (2026-04-18 direction diff vs Ipopt on a
+                            // 3-var log-band problem): ripopt's uncapped Loqo oracle
+                            // collapsed μ by 7 orders of magnitude in a single
+                            // iteration (e.g. 6.6e-3 → 9e-10) when the iterate was
+                            // well-centered (ξ ≈ 0.82 → σ ≈ 1e-7). Ipopt's
+                            // MonotoneMuUpdate floor max(σ·avg_compl, min(κ_μ·μ, μ^sldp))
+                            // bounds the per-iteration decrease even in adaptive mode;
+                            // apply the same floor here so the Loqo-proposed μ can't
+                            // undershoot a gradual monotone schedule.
                             let ratio = if xi > 1e-20 {
                                 (0.05 * (1.0 - xi) / xi).min(2.0)
                             } else {
                                 2.0
                             };
                             let sigma = 0.1 * ratio.powi(3);
-                            let new_mu = (sigma * avg_compl).clamp(mu_floor, 1e5);
+                            let loqo_mu = sigma * avg_compl;
+                            let monotone_floor =
+                                (options.mu_linear_decrease_factor * state.mu)
+                                    .min(state.mu.powf(options.mu_superlinear_decrease_power));
+                            let new_mu = loqo_mu
+                                .max(monotone_floor)
+                                .clamp(mu_floor, 1e5);
 
                             if options.print_level >= 5 {
-                                rip_log!("ripopt: mu loqo: xi={:.4} sigma={:.4} avg_compl={:.3e} -> mu={:.3e}",
-                                    xi, sigma, avg_compl, new_mu);
+                                rip_log!("ripopt: mu loqo: xi={:.4} sigma={:.4} avg_compl={:.3e} floor={:.3e} -> mu={:.3e}",
+                                    xi, sigma, avg_compl, monotone_floor, new_mu);
                             }
                             state.mu = new_mu;
                         } else if avg_compl > 0.0 {
