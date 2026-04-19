@@ -723,10 +723,18 @@ impl SolverState {
         if !problem.objective(&self.x, new_x, &mut self.obj) { return false; }
         if !self.obj.is_finite() { return false; }
         if !problem.gradient(&self.x, false, &mut self.grad_f) { return false; }
-        if self.grad_f.iter().any(|v| !v.is_finite()) { return false; }
+        // NB: 42f4015 added element-wise is_finite checks on grad_f and g
+        // here. Benchmarking showed they caused regressions on CUTEst
+        // problems (BIGGS6NE, CERI651*, HS84/89/92, MAKELA3, OPTCNTRL, ...)
+        // where a transient NaN/Inf in an individual grad or constraint
+        // element at a boundary previously propagated but did not prevent
+        // convergence. Matches Ipopt: IpOrigIpoptNLP only checks Nrm2 of
+        // grad_f and its default `check_derivatives_for_naninf = false`
+        // means it does NOT check Jacobian element-wise either. Keep only
+        // the obj finite check (essential for convergence checks) and the
+        // user callback bool return.
         if self.m > 0 {
             if !problem.constraints(&self.x, false, &mut self.g) { return false; }
-            if self.g.iter().any(|v| !v.is_finite()) { return false; }
             if !problem.jacobian_values(&self.x, false, &mut self.jac_vals) { return false; }
         }
         self.x_last_eval.copy_from_slice(&self.x);

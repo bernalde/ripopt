@@ -18,7 +18,7 @@
     ],
     "constraint_values": [],
     "iterations": 25,
-    "solve_time": 0.000140417,
+    "solve_time": 0.000138583,
     "known_fopt": 0.0,
     "n": 2,
     "m": 0,
@@ -48,7 +48,7 @@
     ],
     "constraint_values": [],
     "iterations": 11,
-    "solve_time": 0.000342375,
+    "solve_time": 0.000474791,
     "known_fopt": null,
     "n": 2,
     "m": 0,
@@ -78,7 +78,7 @@
     ],
     "constraint_values": [],
     "iterations": 4,
-    "solve_time": 0.000152792,
+    "solve_time": 0.000179958,
     "known_fopt": 0.0,
     "n": 2,
     "m": 0,
@@ -108,7 +108,7 @@
     ],
     "constraint_values": [],
     "iterations": 2999,
-    "solve_time": 0.005222292,
+    "solve_time": 0.007700541,
     "known_fopt": 2.6666666666666665,
     "n": 2,
     "m": 0,
@@ -138,7 +138,7 @@
     ],
     "constraint_values": [],
     "iterations": 7,
-    "solve_time": 0.000045,
+    "solve_time": 0.000054375,
     "known_fopt": null,
     "n": 2,
     "m": 0,
@@ -172,7 +172,7 @@
       3.552713678800501e-13
     ],
     "iterations": 13,
-    "solve_time": 0.000164917,
+    "solve_time": 0.000177792,
     "known_fopt": 0.0,
     "n": 2,
     "m": 1,
@@ -206,7 +206,7 @@
       3.211786392398608e-11
     ],
     "iterations": 10,
-    "solve_time": 0.000120334,
+    "solve_time": 0.000148416,
     "known_fopt": null,
     "n": 2,
     "m": 1,
@@ -240,7 +240,7 @@
       -2.2737367544323206e-13
     ],
     "iterations": 3,
-    "solve_time": 0.000096291,
+    "solve_time": 0.000140958,
     "known_fopt": -0.5,
     "n": 2,
     "m": 1,
@@ -274,7 +274,7 @@
       -1.9744206269933784e-12
     ],
     "iterations": 19,
-    "solve_time": 0.000131167,
+    "solve_time": 0.000167042,
     "known_fopt": -1.0,
     "n": 2,
     "m": 1,
@@ -308,7 +308,7 @@
       -8.881784197001252e-16
     ],
     "iterations": 6,
-    "solve_time": 0.000116625,
+    "solve_time": 0.000143875,
     "known_fopt": null,
     "n": 2,
     "m": 1,
@@ -342,7 +342,7 @@
       -5.823537208016205e-10
     ],
     "iterations": 10,
-    "solve_time": 0.000123459,
+    "solve_time": 0.000150458,
     "known_fopt": -30.0,
     "n": 2,
     "m": 1,
@@ -376,7 +376,7 @@
       -2.2211031660557268e-6
     ],
     "iterations": 530,
-    "solve_time": 0.011971791,
+    "solve_time": 0.015071584,
     "known_fopt": 1.0,
     "n": 2,
     "m": 1,
@@ -412,7 +412,7 @@
       1.3200551762793111e-13
     ],
     "iterations": 5,
-    "solve_time": 0.000108292,
+    "solve_time": 0.000149542,
     "known_fopt": null,
     "n": 2,
     "m": 2,
@@ -448,7 +448,7 @@
       4.5000000293376194
     ],
     "iterations": 17,
-    "solve_time": 0.000417,
+    "solve_time": 0.000490125,
     "known_fopt": 3.065,
     "n": 2,
     "m": 2,
@@ -484,7 +484,7 @@
       0.4999996653259603
     ],
     "iterations": 19,
-    "solve_time": 0.000140625,
+    "solve_time": 0.000185583,
     "known_fopt": 0.25,
     "n": 2,
     "m": 2,
@@ -520,7 +520,7 @@
       0.0006837293814494147
     ],
     "iterations": 15,
-    "solve_time": 0.000111417,
+    "solve_time": 0.000139833,
     "known_fopt": 1.0,
     "n": 2,
     "m": 2,
@@ -556,7 +556,7 @@
       227.4999999079283
     ],
     "iterations": 16,
-    "solve_time": 0.000130208,
+    "solve_time": 0.000175583,
     "known_fopt": 5.0,
     "n": 2,
     "m": 2,
@@ -592,7 +592,7 @@
       -1.2931877790833823e-12
     ],
     "iterations": 16,
-    "solve_time": 0.000128584,
+    "solve_time": 0.00017625,
     "known_fopt": null,
     "n": 2,
     "m": 2,
@@ -630,7 +630,7 @@
       -9.811305767826184e-9
     ],
     "iterations": 13,
-    "solve_time": 0.000129,
+    "solve_time": 0.000160291,
     "known_fopt": null,
     "n": 2,
     "m": 3,
@@ -664,7 +664,7 @@
       10.000000000626198
     ],
     "iterations": 10,
-    "solve_time": 0.000104667,
+    "solve_time": 0.000149834,
     "known_fopt": -99.96,
     "n": 2,
     "m": 1,
@@ -700,7 +700,7 @@
       -2.0708657011425657e-11
     ],
     "iterations": 6,
-    "solve_time": 0.000092542,
+    "solve_time": 0.0001225,
     "known_fopt": 1.0,
     "n": 2,
     "m": 2,
@@ -742,7 +742,7 @@
       0.03685203848604868
     ],
     "iterations": 55,
-    "solve_time": 0.000232875,
+    "solve_time": 0.000301083,
     "known_fopt": 2.0,
     "n": 2,
     "m": 5,
@@ -780,7 +780,7 @@
       4.225597649565316e-10
     ],
     "iterations": 8,
-    "solve_time": 0.000173458,
+    "solve_time": 0.000171584,
     "known_fopt": -1.0,
     "n": 2,
     "m": 3,
@@ -817,7 +817,7 @@
       1.012442751857634e-8
     ],
     "iterations": 23,
-    "solve_time": 0.001750541,
+    "solve_time": 0.002440625,
     "known_fopt": 0.0,
     "n": 3,
     "m": 1,
@@ -854,7 +854,7 @@
       2.879249172680081e-9
     ],
     "iterations": 21,
-    "solve_time": 0.000135708,
+    "solve_time": 0.000191125,
     "known_fopt": 4.0,
     "n": 3,
     "m": 1,
@@ -891,7 +891,7 @@
       1.4285719274198527e-9
     ],
     "iterations": 1,
-    "solve_time": 0.000081792,
+    "solve_time": 0.000088792,
     "known_fopt": 0.0,
     "n": 3,
     "m": 1,
@@ -928,7 +928,7 @@
       -1.0940226502498263e-10
     ],
     "iterations": 10,
-    "solve_time": 0.000111,
+    "solve_time": 0.000126917,
     "known_fopt": null,
     "n": 3,
     "m": 1,
@@ -965,7 +965,7 @@
       9.259877753464707e-9
     ],
     "iterations": 15,
-    "solve_time": 0.000132125,
+    "solve_time": 0.000173416,
     "known_fopt": 1.0,
     "n": 3,
     "m": 1,
@@ -1002,7 +1002,7 @@
       -1.380118241911532e-12
     ],
     "iterations": 8,
-    "solve_time": 0.000106542,
+    "solve_time": 0.000112666,
     "known_fopt": 6.0,
     "n": 3,
     "m": 1,
@@ -1041,7 +1041,7 @@
       0.0
     ],
     "iterations": 23,
-    "solve_time": 0.000182208,
+    "solve_time": 0.000221041,
     "known_fopt": 1.0,
     "n": 3,
     "m": 2,
@@ -1080,7 +1080,7 @@
       5.8972793759437536e-8
     ],
     "iterations": 52,
-    "solve_time": 0.000286125,
+    "solve_time": 0.000326042,
     "known_fopt": null,
     "n": 3,
     "m": 2,
@@ -1119,7 +1119,7 @@
       2.5673365655620728e-9
     ],
     "iterations": 12,
-    "solve_time": 0.000144959,
+    "solve_time": 0.000134125,
     "known_fopt": null,
     "n": 3,
     "m": 2,
@@ -1156,7 +1156,7 @@
       5.155964544201197e-11
     ],
     "iterations": 7,
-    "solve_time": 0.000109792,
+    "solve_time": 0.000129667,
     "known_fopt": 0.1111111111111111,
     "n": 3,
     "m": 1,
@@ -1193,7 +1193,7 @@
       -8.428295572571187e-6
     ],
     "iterations": 83,
-    "solve_time": 0.001680625,
+    "solve_time": 0.002305708,
     "known_fopt": -3300.0,
     "n": 3,
     "m": 1,
@@ -1232,7 +1232,7 @@
       72.00000000039739
     ],
     "iterations": 11,
-    "solve_time": 0.000115167,
+    "solve_time": 0.000169834,
     "known_fopt": -3456.0,
     "n": 3,
     "m": 2,
@@ -1268,7 +1268,7 @@
     ],
     "constraint_values": [],
     "iterations": 25,
-    "solve_time": 0.000043833,
+    "solve_time": 0.000043416,
     "known_fopt": 0.0,
     "n": 4,
     "m": 0,
@@ -1310,7 +1310,7 @@
       1.4890311206239478e-12
     ],
     "iterations": 15,
-    "solve_time": 0.000109166,
+    "solve_time": 0.000160708,
     "known_fopt": -1.0,
     "n": 4,
     "m": 2,
@@ -1354,7 +1354,7 @@
       1.8726786787937044e-10
     ],
     "iterations": 3,
-    "solve_time": 0.00007925,
+    "solve_time": 0.000120417,
     "known_fopt": -0.25,
     "n": 4,
     "m": 3,
@@ -1394,7 +1394,7 @@
       0.0
     ],
     "iterations": 88,
-    "solve_time": 0.000548916,
+    "solve_time": 0.000792584,
     "known_fopt": 1.9259259259259258,
     "n": 4,
     "m": 1,
@@ -1436,7 +1436,7 @@
       2.220446049250313e-16
     ],
     "iterations": 4,
-    "solve_time": 0.0000755,
+    "solve_time": 0.000095291,
     "known_fopt": null,
     "n": 4,
     "m": 2,
@@ -1480,7 +1480,7 @@
       -1.0658141036401503e-14
     ],
     "iterations": 9,
-    "solve_time": 0.000101458,
+    "solve_time": 0.000172542,
     "known_fopt": -44.0,
     "n": 4,
     "m": 3,
@@ -1530,7 +1530,7 @@
       0.9999999988094004
     ],
     "iterations": 54,
-    "solve_time": 0.000320416,
+    "solve_time": 0.000471375,
     "known_fopt": -15.0,
     "n": 4,
     "m": 6,
@@ -1569,7 +1569,7 @@
     ],
     "constraint_values": [],
     "iterations": 81,
-    "solve_time": 0.000867292,
+    "solve_time": 0.001300209,
     "known_fopt": 1.0,
     "n": 5,
     "m": 0,
@@ -1614,7 +1614,7 @@
       -9.592326932761353e-13
     ],
     "iterations": 17,
-    "solve_time": 0.000139417,
+    "solve_time": 0.000156041,
     "known_fopt": 0.0,
     "n": 5,
     "m": 2,
@@ -1661,7 +1661,7 @@
       8.357825542759656e-11
     ],
     "iterations": 17,
-    "solve_time": 0.000125041,
+    "solve_time": 0.000211541,
     "known_fopt": 0.0,
     "n": 5,
     "m": 3,
@@ -1706,7 +1706,7 @@
       0.0
     ],
     "iterations": 2,
-    "solve_time": 0.000079208,
+    "solve_time": 0.000103667,
     "known_fopt": 0.0,
     "n": 5,
     "m": 2,
@@ -1751,7 +1751,7 @@
       0.0
     ],
     "iterations": 19,
-    "solve_time": 0.00012675,
+    "solve_time": 0.000169833,
     "known_fopt": 0.0,
     "n": 5,
     "m": 2,
@@ -1798,7 +1798,7 @@
       0.0
     ],
     "iterations": 8,
-    "solve_time": 0.000093166,
+    "solve_time": 0.000115583,
     "known_fopt": 0.0,
     "n": 5,
     "m": 3,
@@ -1845,7 +1845,7 @@
       -3.846153839859312e-9
     ],
     "iterations": 1,
-    "solve_time": 0.000071292,
+    "solve_time": 0.000110708,
     "known_fopt": 0.0,
     "n": 5,
     "m": 3,
@@ -1892,7 +1892,7 @@
       -3.606837051250977e-14
     ],
     "iterations": 2,
-    "solve_time": 0.000072958,
+    "solve_time": 0.000102959,
     "known_fopt": 5.326647564469914,
     "n": 5,
     "m": 3,
@@ -1939,7 +1939,7 @@
       4.75175454539567e-14
     ],
     "iterations": 4,
-    "solve_time": 0.000094291,
+    "solve_time": 0.000130667,
     "known_fopt": 4.093023255813954,
     "n": 5,
     "m": 3,
@@ -1994,7 +1994,7 @@
       4.999699992997882e-9
     ],
     "iterations": 2,
-    "solve_time": 0.000095708,
+    "solve_time": 0.000121042,
     "known_fopt": -3.456,
     "n": 7,
     "m": 4,
@@ -2032,7 +2032,7 @@
       3.144932092524755e-10
     ],
     "iterations": 12,
-    "solve_time": 0.000105334,
+    "solve_time": 0.000148,
     "known_fopt": 3.19033354957,
     "n": 2,
     "m": 3,
@@ -2069,7 +2069,7 @@
       3.90185661558462e-11
     ],
     "iterations": 7,
-    "solve_time": 0.000082708,
+    "solve_time": 0.000114958,
     "known_fopt": 0.0325682002513,
     "n": 3,
     "m": 1,
@@ -2108,7 +2108,7 @@
       -1.2434497875801753e-14
     ],
     "iterations": 10,
-    "solve_time": 0.000093792,
+    "solve_time": 0.000120791,
     "known_fopt": -143.646142201,
     "n": 3,
     "m": 2,
@@ -2147,7 +2147,7 @@
       1.6342482922482304e-13
     ],
     "iterations": 7,
-    "solve_time": 0.000100166,
+    "solve_time": 0.000131583,
     "known_fopt": 961.715172127,
     "n": 3,
     "m": 2,
@@ -2184,7 +2184,7 @@
       -3.0806561746032912e-9
     ],
     "iterations": 24,
-    "solve_time": 0.000129833,
+    "solve_time": 0.000171625,
     "known_fopt": 6299.84242821,
     "n": 3,
     "m": 1,
@@ -2221,7 +2221,7 @@
       -5.856335860698891e-9
     ],
     "iterations": 9,
-    "solve_time": 0.000100917,
+    "solve_time": 0.0001275,
     "known_fopt": 0.953528856757,
     "n": 3,
     "m": 1,
@@ -2260,7 +2260,7 @@
       2.4412671884022075e-8
     ],
     "iterations": 12,
-    "solve_time": 0.000096666,
+    "solve_time": 0.000124083,
     "known_fopt": 0.518163274159,
     "n": 3,
     "m": 2,
@@ -2302,7 +2302,7 @@
       -5.583567719291693e-9
     ],
     "iterations": 176,
-    "solve_time": 0.000879,
+    "solve_time": 0.001191166,
     "known_fopt": 17.0140172895,
     "n": 4,
     "m": 2,
@@ -2344,7 +2344,7 @@
       -3.451579300151053e-13
     ],
     "iterations": 13,
-    "solve_time": 0.000107375,
+    "solve_time": 0.000143291,
     "known_fopt": 727.67936,
     "n": 4,
     "m": 2,
@@ -2388,7 +2388,7 @@
       0.5909072448374859
     ],
     "iterations": 13,
-    "solve_time": 0.000217792,
+    "solve_time": 0.000311959,
     "known_fopt": -4.68181818182,
     "n": 4,
     "m": 3,
@@ -2433,7 +2433,7 @@
       -1.0658141036401503e-14
     ],
     "iterations": 9,
-    "solve_time": 0.000098083,
+    "solve_time": 0.000130834,
     "known_fopt": 0.241505128786,
     "n": 5,
     "m": 2,
@@ -2480,7 +2480,7 @@
       1.2008172234345693e-12
     ],
     "iterations": 4,
-    "solve_time": 0.00009175,
+    "solve_time": 0.000129166,
     "known_fopt": -2.91970040911,
     "n": 5,
     "m": 3,
@@ -2527,7 +2527,7 @@
       -3.887243638089899e-9
     ],
     "iterations": 4,
-    "solve_time": 0.00008675,
+    "solve_time": 0.000112583,
     "known_fopt": 0.0787768208538,
     "n": 5,
     "m": 3,
@@ -2574,7 +2574,7 @@
       8.268941087408166e-13
     ],
     "iterations": 10,
-    "solve_time": 0.0001015,
+    "solve_time": 0.000153791,
     "known_fopt": 0.0539498477624,
     "n": 5,
     "m": 3,
@@ -2621,7 +2621,7 @@
       -1.3512835295159675e-10
     ],
     "iterations": 50,
-    "solve_time": 0.000260125,
+    "solve_time": 0.00042025,
     "known_fopt": 0.0539498477749,
     "n": 5,
     "m": 3,
@@ -2683,7 +2683,7 @@
       9.313225746154785e-10
     ],
     "iterations": 17,
-    "solve_time": 0.0002175,
+    "solve_time": 0.000262042,
     "known_fopt": 7049.248,
     "n": 8,
     "m": 6,
@@ -2762,7 +2762,7 @@
       0.8604615834335273
     ],
     "iterations": 98,
-    "solve_time": 0.033208833,
+    "solve_time": 0.05537275,
     "known_fopt": -0.866025403841,
     "n": 9,
     "m": 13,
@@ -2834,7 +2834,7 @@
       50.02396179488551
     ],
     "iterations": 54,
-    "solve_time": 0.000415625,
+    "solve_time": 0.000734,
     "known_fopt": 24.3062090641,
     "n": 10,
     "m": 8,
@@ -2912,7 +2912,7 @@
       -4.802824804528427e-13
     ],
     "iterations": 100,
-    "solve_time": 0.014176375,
+    "solve_time": 0.02384,
     "known_fopt": -1768.80696344,
     "n": 10,
     "m": 11,
@@ -3007,7 +3007,7 @@
       -8.424419276210104e-15
     ],
     "iterations": 49,
-    "solve_time": 0.722704083,
+    "solve_time": 1.559493459,
     "known_fopt": 97.5884089805,
     "n": 13,
     "m": 15,
@@ -3037,7 +3037,7 @@
     ],
     "constraint_values": [],
     "iterations": 3,
-    "solve_time": 0.000024583,
+    "solve_time": 0.000044916,
     "known_fopt": 0.0,
     "n": 2,
     "m": 0,
@@ -3067,7 +3067,7 @@
     ],
     "constraint_values": [],
     "iterations": 4,
-    "solve_time": 0.000087541,
+    "solve_time": 0.00012975,
     "known_fopt": 0.0,
     "n": 2,
     "m": 0,
@@ -3097,7 +3097,7 @@
     ],
     "constraint_values": [],
     "iterations": 34,
-    "solve_time": 0.000038292,
+    "solve_time": 0.00004475,
     "known_fopt": 0.0,
     "n": 2,
     "m": 0,
@@ -3127,7 +3127,7 @@
     ],
     "constraint_values": [],
     "iterations": 13,
-    "solve_time": 0.000022792,
+    "solve_time": 0.000036583,
     "known_fopt": 0.0,
     "n": 2,
     "m": 0,
@@ -3157,7 +3157,7 @@
     ],
     "constraint_values": [],
     "iterations": 34,
-    "solve_time": 0.000211584,
+    "solve_time": 0.000389,
     "known_fopt": 0.0,
     "n": 2,
     "m": 0,
@@ -3187,7 +3187,7 @@
     ],
     "constraint_values": [],
     "iterations": 30,
-    "solve_time": 0.000132042,
+    "solve_time": 0.000214667,
     "known_fopt": 0.0,
     "n": 2,
     "m": 0,
@@ -3221,7 +3221,7 @@
       -3.139020521304651e-11
     ],
     "iterations": 6,
-    "solve_time": 0.00009675,
+    "solve_time": 0.00013075,
     "known_fopt": 0.0,
     "n": 2,
     "m": 1,
@@ -3255,7 +3255,7 @@
       -2.6645352591003757e-15
     ],
     "iterations": 7,
-    "solve_time": 0.000071959,
+    "solve_time": 0.000133,
     "known_fopt": 1.0,
     "n": 2,
     "m": 1,
@@ -3291,7 +3291,7 @@
       1.1678691347327685e-10
     ],
     "iterations": 8,
-    "solve_time": 0.000085667,
+    "solve_time": 0.000133958,
     "known_fopt": -0.8,
     "n": 2,
     "m": 2,
@@ -3325,7 +3325,7 @@
       -2.637242062839233e-9
     ],
     "iterations": 24,
-    "solve_time": 0.000086583,
+    "solve_time": 0.000166167,
     "known_fopt": 0.0,
     "n": 2,
     "m": 1,
@@ -3367,7 +3367,7 @@
       -1.5951684418147595e-12
     ],
     "iterations": 20,
-    "solve_time": 0.000105291,
+    "solve_time": 0.000169542,
     "known_fopt": -1.0,
     "n": 4,
     "m": 2,
@@ -3401,7 +3401,7 @@
       -1.5849543899548735e-11
     ],
     "iterations": 41,
-    "solve_time": 0.000118917,
+    "solve_time": 0.000221292,
     "known_fopt": 1.0,
     "n": 2,
     "m": 1,
@@ -3435,7 +3435,7 @@
       -4.4406123222984206e-10
     ],
     "iterations": 64,
-    "solve_time": 0.003066208,
+    "solve_time": 0.0059875,
     "known_fopt": -1.0,
     "n": 2,
     "m": 1,
@@ -3471,7 +3471,7 @@
       0.5817181715409547
     ],
     "iterations": 0,
-    "solve_time": 0.000035,
+    "solve_time": 0.00006525,
     "known_fopt": -0.834032445247956,
     "n": 2,
     "m": 2,
@@ -3511,7 +3511,7 @@
       -2.977333934950366e-10
     ],
     "iterations": 10,
-    "solve_time": 0.000087583,
+    "solve_time": 0.000123584,
     "known_fopt": -304.0,
     "n": 2,
     "m": 4,
@@ -3553,7 +3553,7 @@
       9.542997503331208e-10
     ],
     "iterations": 43,
-    "solve_time": 0.000146709,
+    "solve_time": 0.000230833,
     "known_fopt": 2.0,
     "n": 2,
     "m": 5,
@@ -3589,7 +3589,7 @@
       5.506419764600423e-10
     ],
     "iterations": 10,
-    "solve_time": 0.000089791,
+    "solve_time": 0.000140834,
     "known_fopt": null,
     "n": 2,
     "m": 2,
@@ -3625,7 +3625,7 @@
       0.0
     ],
     "iterations": 0,
-    "solve_time": 0.000034541,
+    "solve_time": 0.000061542,
     "known_fopt": 1.0,
     "n": 2,
     "m": 2,
@@ -3661,7 +3661,7 @@
       -4.246389906370496e-9
     ],
     "iterations": 5,
-    "solve_time": 0.000072458,
+    "solve_time": 0.000117209,
     "known_fopt": -3.0,
     "n": 2,
     "m": 2,
@@ -3691,7 +3691,7 @@
     ],
     "constraint_values": [],
     "iterations": 41,
-    "solve_time": 0.000030791,
+    "solve_time": 0.000020708,
     "known_fopt": 0.0,
     "n": 2,
     "m": 0,
@@ -3727,7 +3727,7 @@
       -4.999999969612645e-9
     ],
     "iterations": 2,
-    "solve_time": 0.000064167,
+    "solve_time": 0.000107416,
     "known_fopt": null,
     "n": 2,
     "m": 2,
@@ -3765,7 +3765,7 @@
       5.601261143795e-8
     ],
     "iterations": 7,
-    "solve_time": 0.000103166,
+    "solve_time": 0.000152625,
     "known_fopt": -1.0,
     "n": 2,
     "m": 3,
@@ -3799,7 +3799,7 @@
       0.00005770572533037033
     ],
     "iterations": 11,
-    "solve_time": 0.0000815,
+    "solve_time": 0.000121375,
     "known_fopt": -0.8,
     "n": 2,
     "m": 1,
@@ -3836,7 +3836,7 @@
       1.724509424150458e-12
     ],
     "iterations": 18,
-    "solve_time": 0.000087875,
+    "solve_time": 0.000147709,
     "known_fopt": 0.04,
     "n": 3,
     "m": 1,
@@ -3869,7 +3869,7 @@
     ],
     "constraint_values": [],
     "iterations": 3,
-    "solve_time": 0.000030083,
+    "solve_time": 0.000042709,
     "known_fopt": 0.0,
     "n": 3,
     "m": 0,
@@ -3908,7 +3908,7 @@
       -9.983569481987659e-12
     ],
     "iterations": 11,
-    "solve_time": 0.000091542,
+    "solve_time": 0.0001415,
     "known_fopt": -0.8,
     "n": 3,
     "m": 2,
@@ -3945,7 +3945,7 @@
       3.517689331335867e-11
     ],
     "iterations": 19,
-    "solve_time": 0.00022225,
+    "solve_time": 0.000388166,
     "known_fopt": 1.0,
     "n": 3,
     "m": 1,
@@ -3984,7 +3984,7 @@
       -8.429304983792463e-6
     ],
     "iterations": 83,
-    "solve_time": 0.001230917,
+    "solve_time": 0.002300917,
     "known_fopt": -3300.0,
     "n": 3,
     "m": 2,
@@ -4021,7 +4021,7 @@
       -3.9820235997467535e-10
     ],
     "iterations": 11,
-    "solve_time": 0.000081292,
+    "solve_time": 0.000132,
     "known_fopt": -3456.0,
     "n": 3,
     "m": 1,
@@ -4058,7 +4058,7 @@
       8.585423645380564e-9
     ],
     "iterations": 16,
-    "solve_time": 0.000081334,
+    "solve_time": 0.000153541,
     "known_fopt": 0.04,
     "n": 3,
     "m": 1,
@@ -4097,7 +4097,7 @@
       -6.427159693345175e-9
     ],
     "iterations": 19,
-    "solve_time": 0.000093167,
+    "solve_time": 0.000166416,
     "known_fopt": null,
     "n": 3,
     "m": 2,
@@ -4133,7 +4133,7 @@
     ],
     "constraint_values": [],
     "iterations": 81,
-    "solve_time": 0.000543583,
+    "solve_time": 0.001095959,
     "known_fopt": 0.0,
     "n": 4,
     "m": 0,
@@ -4169,7 +4169,7 @@
     ],
     "constraint_values": [],
     "iterations": 54,
-    "solve_time": 0.00001725,
+    "solve_time": 0.000050375,
     "known_fopt": 0.0,
     "n": 4,
     "m": 0,
@@ -4205,7 +4205,7 @@
     ],
     "constraint_values": [],
     "iterations": 10,
-    "solve_time": 0.000102042,
+    "solve_time": 0.00017475,
     "known_fopt": 0.0,
     "n": 4,
     "m": 0,
@@ -4241,7 +4241,7 @@
     ],
     "constraint_values": [],
     "iterations": 31,
-    "solve_time": 0.000029292,
+    "solve_time": 0.000060375,
     "known_fopt": 0.0,
     "n": 4,
     "m": 0,
@@ -4277,7 +4277,7 @@
     ],
     "constraint_values": [],
     "iterations": 35,
-    "solve_time": 0.000038375,
+    "solve_time": 0.000063833,
     "known_fopt": -8.544621,
     "n": 4,
     "m": 0,
@@ -4323,7 +4323,7 @@
       1.7763568394002505e-15
     ],
     "iterations": 78,
-    "solve_time": 0.001272667,
+    "solve_time": 0.002257333,
     "known_fopt": -10.0,
     "n": 4,
     "m": 4,
@@ -4369,7 +4369,7 @@
       -3.3894751215051663e-9
     ],
     "iterations": 19,
-    "solve_time": 0.00010625,
+    "solve_time": 0.000160375,
     "known_fopt": -1.0,
     "n": 4,
     "m": 4,
@@ -4413,7 +4413,7 @@
       -2.259969100748549e-9
     ],
     "iterations": 9,
-    "solve_time": 0.000091375,
+    "solve_time": 0.000161333,
     "known_fopt": -44.0,
     "n": 4,
     "m": 3,
@@ -4456,7 +4456,7 @@
       0.7424788791540209
     ],
     "iterations": 24,
-    "solve_time": 0.000134292,
+    "solve_time": 0.000215708,
     "known_fopt": -1.0,
     "n": 5,
     "m": 1,
@@ -4494,7 +4494,7 @@
       6.14897022188643e-10
     ],
     "iterations": 41,
-    "solve_time": 0.000145708,
+    "solve_time": 0.000247333,
     "known_fopt": 3.7913414,
     "n": 2,
     "m": 3,
@@ -4533,7 +4533,7 @@
       6.307628030999268e-14
     ],
     "iterations": 23,
-    "solve_time": 0.000089917,
+    "solve_time": 0.000178666,
     "known_fopt": null,
     "n": 3,
     "m": 2,
@@ -4572,7 +4572,7 @@
       -4.174613432716967e-11
     ],
     "iterations": 22,
-    "solve_time": 0.00010125,
+    "solve_time": 0.0001585,
     "known_fopt": -10.992806,
     "n": 3,
     "m": 2,
@@ -4609,7 +4609,7 @@
       1.0109158843363275e-7
     ],
     "iterations": 8,
-    "solve_time": 0.000088125,
+    "solve_time": 0.000132667,
     "known_fopt": 3.3616797,
     "n": 3,
     "m": 1,
@@ -4646,7 +4646,7 @@
       5.929479129918036e-12
     ],
     "iterations": 7,
-    "solve_time": 0.000068709,
+    "solve_time": 0.000123,
     "known_fopt": null,
     "n": 3,
     "m": 1,
@@ -4686,7 +4686,7 @@
       4.4991121939119694e-11
     ],
     "iterations": 9,
-    "solve_time": 0.000079333,
+    "solve_time": 0.000123208,
     "known_fopt": 0.11378385,
     "n": 4,
     "m": 1,
@@ -4812,7 +4812,7 @@
       0.0
     ],
     "iterations": 81,
-    "solve_time": 0.083244083,
+    "solve_time": 0.187625125,
     "known_fopt": 0.233264,
     "n": 10,
     "m": 35,
@@ -4898,7 +4898,7 @@
       9.128620082066163e-10
     ],
     "iterations": 125,
-    "solve_time": 0.240818333,
+    "solve_time": 0.338766542,
     "known_fopt": -4430.0879,
     "n": 10,
     "m": 15,
