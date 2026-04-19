@@ -3836,6 +3836,10 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         // Solve for search direction
         let t_dir = Instant::now();
         let mut cond_solver_for_soc: Option<DenseLdl> = None;
+        // Mehrotra affine-predictor vectors saved so the dz recovery below can
+        // include the cross-term. Only set when the corrector actually fires on
+        // the full-KKT else-branch; the condensed branch bypasses Mehrotra.
+        let mut mehrotra_aff: Option<(Vec<f64>, Vec<f64>, Vec<f64>, f64)> = None;
         let (dx, dy) = if let Some(ref cond) = condensed_system {
             // Try condensed solve first (faster for m >> n)
             let mut cond_solver = DenseLdl::new();
@@ -4008,7 +4012,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 let has_bounds = (0..n).any(|i| state.x_l[i].is_finite() || state.x_u[i].is_finite());
                 if has_bounds {
                     // Scope the immutable borrow so it ends before the mutable update below.
-                    let pc_rhs: Option<Vec<f64>> = {
+                    // pc_result carries both the corrector RHS and the affine vectors
+                    // we need later for a Mehrotra-aware dz recovery.
+                    let pc_result: Option<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, f64)> = {
                         let kkt = kkt_system_opt.as_ref().unwrap();
                         let rhs_aff = kkt::affine_predictor_rhs(
                             &kkt.rhs, &state.x, &state.x_l, &state.x_u, state.mu,
@@ -4074,10 +4080,12 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                                         "Mehrotra PC iter {}: σ={:.4} α_aff={:.4} μ: {:.2e}→{:.2e}",
                                         iteration, sigma, alpha_aff, state.mu, mu_pc
                                     );
-                                    Some(kkt::rebuild_rhs_with_mu(
+                                    let new_rhs = kkt::mehrotra_corrector_rhs(
                                         &kkt.rhs, &state.x, &state.x_l, &state.x_u,
+                                        &dx_aff, &dz_l_aff, &dz_u_aff,
                                         state.mu, mu_pc,
-                                    ))
+                                    );
+                                    Some((new_rhs, dx_aff, dz_l_aff, dz_u_aff, mu_pc))
                                 } else {
                                     None
                                 }
@@ -4090,9 +4098,10 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     }; // immutable borrow of kkt_system_opt ends here
 
                     // Apply the improved RHS to the KKT system
-                    if let Some(new_rhs) = pc_rhs {
+                    if let Some((new_rhs, dx_aff_v, dz_l_aff_v, dz_u_aff_v, mu_pc_used)) = pc_result {
                         kkt_system_opt.as_mut().unwrap().rhs = new_rhs;
                         mehrotra_applied = true;
+                        mehrotra_aff = Some((dx_aff_v, dz_l_aff_v, dz_u_aff_v, mu_pc_used));
                     }
                 }
             }
@@ -4221,6 +4230,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                                     dy_dir = dy_orig;
                                     // Restore original RHS for Gondzio MCC
                                     kkt_system_opt.as_mut().unwrap().rhs = orig_rhs.clone();
+                                    // The corrector was reverted — clear the affine
+                                    // cache so dz is recovered by the plain formula.
+                                    mehrotra_aff = None;
                                 }
                             }
                         }
@@ -4233,9 +4245,18 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
         timings.direction_solve += t_dir.elapsed();
 
-        // Recover bound multiplier steps
-        let (dz_l, dz_u) =
-            kkt::recover_dz(&state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, &dx, state.mu);
+        // Recover bound multiplier steps. If the Mehrotra corrector was applied,
+        // use the cross-term-aware recovery at μ_pc so dz stays consistent with
+        // the corrector complementarity equation; otherwise use the plain formula
+        // at state.mu.
+        let (dz_l, dz_u) = if let Some((ref dx_aff_v, ref dz_l_aff_v, ref dz_u_aff_v, mu_pc_used)) = mehrotra_aff {
+            kkt::recover_dz_mehrotra(
+                &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u,
+                &dx, dx_aff_v, dz_l_aff_v, dz_u_aff_v, mu_pc_used,
+            )
+        } else {
+            kkt::recover_dz(&state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, &dx, state.mu)
+        };
 
         state.dx = dx;
         state.dy = dy;

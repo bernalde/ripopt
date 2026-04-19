@@ -905,6 +905,89 @@ pub fn rebuild_rhs_with_mu(
     rhs_new
 }
 
+/// Build a full Mehrotra corrector RHS: rebuild with μ_new AND add the
+/// second-order cross-term from the affine-predictor step.
+///
+/// After the affine predictor (Δx_aff, Δz_L_aff, Δz_U_aff) is computed, the
+/// corrector complementarity equation becomes
+///   S_L · z_L + ΔS_L · z_L + Δz_L · S_L + ΔS_L_aff · Δz_L_aff = μ_new
+/// and analogously for the upper bound. Eliminating Δz into the primal block
+/// (see Ipopt `IpPDSearchDirCalc.cpp:88-110` plus the AugRhs_x folding at
+/// `IpPDFullSpaceSolver.cpp:418-420`) yields two additional per-bound terms
+/// on r_x:
+///   r_x[i] -= (Δx_aff[i] · Δz_L_aff[i]) / s_L[i]      (lower bound)
+///   r_x[i] -= (Δx_aff[i] · Δz_U_aff[i]) / s_U[i]      (upper bound)
+/// Both contributions carry a minus sign; the Δs_u = −Δx asymmetry is
+/// compensated by the `alpha = −1` that `AddMSinvZ` uses for the upper bound.
+pub fn mehrotra_corrector_rhs(
+    rhs: &[f64],
+    x: &[f64],
+    x_l: &[f64],
+    x_u: &[f64],
+    dx_aff: &[f64],
+    dz_l_aff: &[f64],
+    dz_u_aff: &[f64],
+    mu_old: f64,
+    mu_new: f64,
+) -> Vec<f64> {
+    let n = x.len();
+    let mut rhs_new = rebuild_rhs_with_mu(rhs, x, x_l, x_u, mu_old, mu_new);
+    for i in 0..n {
+        if x_l[i].is_finite() {
+            let s_l = (x[i] - x_l[i]).max(1e-20);
+            rhs_new[i] -= dx_aff[i] * dz_l_aff[i] / s_l;
+        }
+        if x_u[i].is_finite() {
+            let s_u = (x_u[i] - x[i]).max(1e-20);
+            rhs_new[i] -= dx_aff[i] * dz_u_aff[i] / s_u;
+        }
+    }
+    rhs_new
+}
+
+/// Recover Δz_L, Δz_U after a Mehrotra-corrected primal step Δx.
+///
+/// Unlike the plain `recover_dz`, this includes the second-order cross-term
+/// in the complementarity residual:
+///   s_L · z_L + ΔS_L · z_L + Δz_L · s_L + ΔS_L_aff · Δz_L_aff = μ_new
+/// giving
+///   Δz_L[i] = (μ_new − s_L·z_L − Δx_aff·Δz_L_aff) / s_L − (z_L/s_L) · Δx[i]
+/// and the symmetric upper-bound expression with Δs_u = −Δx. Without this,
+/// the recovered Δz inherits an O(Δaff²) complementarity error that defeats
+/// the whole point of the predictor-corrector.
+pub fn recover_dz_mehrotra(
+    x: &[f64],
+    x_l: &[f64],
+    x_u: &[f64],
+    z_l: &[f64],
+    z_u: &[f64],
+    dx: &[f64],
+    dx_aff: &[f64],
+    dz_l_aff: &[f64],
+    dz_u_aff: &[f64],
+    mu: f64,
+) -> (Vec<f64>, Vec<f64>) {
+    let n = x.len();
+    let mut dz_l = vec![0.0; n];
+    let mut dz_u = vec![0.0; n];
+    for i in 0..n {
+        if x_l[i].is_finite() {
+            let s_l = (x[i] - x_l[i]).max(1e-20);
+            dz_l[i] = (mu - z_l[i] * s_l - dx_aff[i] * dz_l_aff[i]) / s_l
+                - (z_l[i] / s_l) * dx[i];
+        }
+        if x_u[i].is_finite() {
+            let s_u = (x_u[i] - x[i]).max(1e-20);
+            // Δs_u = -Δx, so ΔS_u_aff · Δz_U_aff = -Δx_aff · Δz_U_aff.
+            // The complementarity eq is s_u z_u + ΔS_u z_u + Δz_u s_u + ΔS_u_aff · Δz_U_aff = μ,
+            // giving dz_u = (μ - s_u z_u + Δx_aff Δz_U_aff)/s_u + (z_u/s_u) Δx.
+            dz_u[i] = (mu - z_u[i] * s_u + dx_aff[i] * dz_u_aff[i]) / s_u
+                + (z_u[i] / s_u) * dx[i];
+        }
+    }
+    (dz_l, dz_u)
+}
+
 /// Solve the factored system with a custom RHS (backsolve only, no re-factorization).
 ///
 /// Used for Mehrotra predictor-corrector and Gondzio centrality corrections —
