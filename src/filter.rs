@@ -203,9 +203,16 @@ impl Filter {
         alpha_min.max(1e-15)
     }
 
-    /// Augment theta_max based on current violation (called before restoration).
-    pub fn augment_for_restoration(&mut self, theta_current: f64) {
+    /// Augment the filter at restoration entry (Ipopt's PrepareRestoPhaseStart,
+    /// IpFilterLSAcceptor.cpp:898-901). Adds an entry at
+    /// (phi - gamma_phi*theta, (1 - gamma_theta)*theta) so the restored iterate
+    /// cannot hand back a point "as bad or worse" than the pre-restoration one.
+    /// Also bumps theta_max.
+    pub fn augment_for_restoration(&mut self, theta_current: f64, phi_current: f64) {
         self.theta_max = self.theta_max.max(1e4 * theta_current.max(1e-4));
+        let guard_theta = (1.0 - self.gamma_theta) * theta_current;
+        let guard_phi = phi_current - self.gamma_phi * theta_current;
+        self.add(guard_theta, guard_phi);
     }
 
     /// Reset the filter (used when barrier parameter decreases).

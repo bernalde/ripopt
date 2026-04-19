@@ -5,6 +5,12 @@ use crate::logging::rip_log;
 pub enum SolveStatus {
     /// Converged to optimal solution within tolerance.
     Optimal,
+    /// Converged to an acceptable solution: KKT residuals within the
+    /// relaxed acceptable-level tolerances (matching Ipopt's
+    /// `Solved_To_Acceptable_Level`). Counted as "solved" by the
+    /// benchmark reporter — the iterate is at a stationary point that
+    /// Ipopt's default user-facing settings would also return.
+    Acceptable,
     /// Problem is infeasible.
     Infeasible,
     /// Local infeasibility detected: constraint violation is at a stationary
@@ -57,8 +63,13 @@ pub struct SolverDiagnostics {
     pub final_dual_inf: f64,
     /// Final dual infeasibility (z_opt, used in scaled gate).
     pub final_dual_inf_scaled: f64,
-    /// Final complementarity error.
+    /// Final complementarity error (iterative z, equals mu in barrier mode).
     pub final_compl: f64,
+    /// Final complementarity error using z_opt (from stationarity). At a true
+    /// KKT point with inactive bounds, z_opt=0 and compl_opt=0 even when
+    /// barrier mu is still large (e.g. IPM stalls at high mu due to singular
+    /// Hessian). Used in late-early-out promotion.
+    pub final_compl_opt: f64,
     /// Dual scaling factor s_d.
     pub final_s_d: f64,
     /// Total wall-clock time in seconds.

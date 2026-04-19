@@ -71,6 +71,7 @@ fn main() {
         env!("CARGO_PKG_VERSION"),
         match result.status {
             ripopt::SolveStatus::Optimal => "Optimal",
+            ripopt::SolveStatus::Acceptable => "Acceptable",
             ripopt::SolveStatus::Infeasible => "Infeasible",
             ripopt::SolveStatus::LocalInfeasibility => "LocalInfeasibility",
             ripopt::SolveStatus::MaxIterations => "MaxIterations",

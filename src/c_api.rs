@@ -312,7 +312,7 @@ impl NlpProblem for CApiProblem {
 #[repr(C)]
 pub enum RipoptReturnStatus {
     SolveSucceeded = 0,
-    // SolvedToAcceptableLevel = 1,  // not currently returned
+    SolvedToAcceptableLevel = 1,
     InfeasibleProblem = 2,
     SearchDirectionTooSmall = 3,
     DivergingIterates = 4,
@@ -332,6 +332,7 @@ pub enum RipoptReturnStatus {
 fn map_status(s: SolveStatus) -> RipoptReturnStatus {
     match s {
         SolveStatus::Optimal => RipoptReturnStatus::SolveSucceeded,
+        SolveStatus::Acceptable => RipoptReturnStatus::SolvedToAcceptableLevel,
         SolveStatus::Infeasible | SolveStatus::LocalInfeasibility => {
             RipoptReturnStatus::InfeasibleProblem
         }

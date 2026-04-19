@@ -105,12 +105,17 @@ impl<'a> RestorationNlp<'a> {
             inner.constraint_bounds(&mut g_l, &mut g_u);
         }
 
-        // For each constraint: violation = g(x_r) - target
-        // p_i = max(violation_i, 0) + mu_init_shift
-        // n_i = max(-violation_i, 0) + mu_init_shift
-        let mu_init_shift = mu_entry.max(1e-4);
+        // Ipopt's closed-form p/n init (IpRestoIterateInitializer.cpp:79-97):
+        // solve simultaneously p_i*n_i=mu and p_i - n_i = c_i, giving
+        //   a = mu/(2*rho) - c_i/2,  b = mu*c_i/(2*rho)
+        //   n_i = a + sqrt(a^2 + b),  p_i = c_i + n_i
+        // This guarantees p_i, n_i > 0 and the bound multipliers z_p=mu/p,
+        // z_n=mu/n satisfy complementarity from iteration zero. Without this,
+        // the inner IPM spends 50+ iters chasing a huge dual residual caused
+        // by grad_f[p]=rho ≈ 1000 vs z_p ≈ 1 after generic bound_push.
         let mut p_init = vec![0.0; m];
         let mut n_init = vec![0.0; m];
+        let safe_mu = mu_entry.max(1e-8);
         for i in 0..m {
             let target = if g_l[i].is_finite() && g_u[i].is_finite() {
                 g_r[i].clamp(g_l[i], g_u[i])
@@ -121,9 +126,15 @@ impl<'a> RestorationNlp<'a> {
             } else {
                 g_r[i]
             };
-            let viol = g_r[i] - target;
-            p_init[i] = viol.max(0.0) + mu_init_shift;
-            n_init[i] = (-viol).max(0.0) + mu_init_shift;
+            let c_i = g_r[i] - target;
+            let a = safe_mu / (2.0 * rho) - c_i / 2.0;
+            let b = safe_mu * c_i / (2.0 * rho);
+            let disc = (a * a + b).max(0.0);
+            let n_i = a + disc.sqrt();
+            let p_i = c_i + n_i;
+            // Numerical guard: keep strictly positive
+            n_init[i] = n_i.max(safe_mu / rho);
+            p_init[i] = p_i.max(safe_mu / rho);
         }
 
         RestorationNlp {

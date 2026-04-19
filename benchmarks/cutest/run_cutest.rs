@@ -35,6 +35,8 @@ struct CutestResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     final_dual_inf: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    final_dual_inf_scaled: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     final_compl: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     final_mu: Option<f64>,
@@ -342,6 +344,7 @@ fn ipopt_status_to_string(status: i32) -> String {
 fn ripopt_status_to_string(status: SolveStatus) -> String {
     match status {
         SolveStatus::Optimal => "Optimal".to_string(),
+        SolveStatus::Acceptable => "Acceptable".to_string(),
         SolveStatus::Infeasible => "Infeasible".to_string(),
         SolveStatus::MaxIterations => "MaxIterations".to_string(),
         SolveStatus::NumericalError => "NumericalError".to_string(),
@@ -544,6 +547,7 @@ fn run_single_solver(name: &str, solver: &str) {
                 solve_time: best_time,
                 final_primal_inf: Some(result.diagnostics.final_primal_inf),
                 final_dual_inf: Some(result.diagnostics.final_dual_inf),
+                final_dual_inf_scaled: Some(result.diagnostics.final_dual_inf_scaled),
                 final_compl: Some(result.diagnostics.final_compl),
                 final_mu: Some(result.diagnostics.final_mu),
             };
@@ -580,6 +584,7 @@ fn run_single_solver(name: &str, solver: &str) {
                 solve_time: best_time,
                 final_primal_inf: None,
                 final_dual_inf: None,
+                final_dual_inf_scaled: None,
                 final_compl: None,
                 final_mu: None,
             };
@@ -719,6 +724,7 @@ fn main() {
                             constraint_violation: f64::NAN, iterations: 0,
                             solve_time: timeout_secs as f64,
                             final_primal_inf: None, final_dual_inf: None,
+                            final_dual_inf_scaled: None,
                             final_compl: None, final_mu: None,
                         });
                         continue;

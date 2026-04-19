@@ -96,19 +96,26 @@ pub fn check_convergence(
         }
     }
 
-    // Internal near-tolerance check: BOTH scaled AND unscaled must pass.
-    // Used to detect "close but not optimal" states that trigger promotion strategies.
-    const NEAR_TOL_ITERS: usize = 10;
-    let near_primal_tol = 100.0 * options.tol;
-    let near_dual_tol = 100.0 * options.tol * s_d;
-    let near_compl_tol = 100.0 * options.tol * s_d;
+    // Acceptable-level check matching Ipopt defaults
+    // (IpOptErrorConvCheck.cpp:70-121):
+    //   acceptable_tol = 1e-6
+    //   acceptable_iter = 15 consecutive iterations
+    //   acceptable_dual_inf_tol = 1e10   (effectively disabled)
+    //   acceptable_constr_viol_tol = 1e-2
+    //   acceptable_compl_inf_tol = 1e-2
+    // Ipopt's acceptable_obj_change_tol = 1e20 (disabled by default).
+    const NEAR_TOL_ITERS: usize = 15;
+    const ACCEPTABLE_TOL: f64 = 1e-6;
+    const ACCEPTABLE_DUAL_INF_TOL: f64 = 1e10;
+    const ACCEPTABLE_CONSTR_VIOL_TOL: f64 = 1e-2;
+    const ACCEPTABLE_COMPL_INF_TOL: f64 = 1e-2;
 
-    let near_scaled_ok = info.primal_inf <= near_primal_tol
-        && info.dual_inf <= near_dual_tol
-        && info.compl_inf <= near_compl_tol;
-    let near_unscaled_ok = info.primal_inf <= 10.0 * options.constr_viol_tol
-        && info.dual_inf_unscaled <= 10.0 * options.dual_inf_tol
-        && info.compl_inf <= 10.0 * options.compl_inf_tol;
+    let near_scaled_ok = info.primal_inf <= ACCEPTABLE_TOL
+        && info.dual_inf <= ACCEPTABLE_TOL * s_d
+        && info.compl_inf <= ACCEPTABLE_TOL * s_d;
+    let near_unscaled_ok = info.primal_inf <= ACCEPTABLE_CONSTR_VIOL_TOL
+        && info.dual_inf_unscaled <= ACCEPTABLE_DUAL_INF_TOL
+        && info.compl_inf <= ACCEPTABLE_COMPL_INF_TOL;
 
     if near_scaled_ok && near_unscaled_ok
         && consecutive_acceptable >= NEAR_TOL_ITERS
@@ -117,9 +124,9 @@ pub fn check_convergence(
     }
     // Fallback near-tolerance check with z_opt (same reasoning as strict check)
     if near_scaled_ok && consecutive_acceptable >= NEAR_TOL_ITERS {
-        let near_unscaled_opt_ok = info.primal_inf <= 10.0 * options.constr_viol_tol
-            && info.dual_inf_unscaled_opt <= 10.0 * options.dual_inf_tol
-            && info.compl_inf_opt <= 10.0 * options.compl_inf_tol;
+        let near_unscaled_opt_ok = info.primal_inf <= ACCEPTABLE_CONSTR_VIOL_TOL
+            && info.dual_inf_unscaled_opt <= ACCEPTABLE_DUAL_INF_TOL
+            && info.compl_inf_opt <= ACCEPTABLE_COMPL_INF_TOL;
         if near_unscaled_opt_ok {
             return ConvergenceStatus::Acceptable;
         }
@@ -420,9 +427,9 @@ mod tests {
             multiplier_count: 0,
         };
         let opts = SolverOptions::default();
-        // Need enough consecutive near-tolerance iterations (hardcoded NEAR_TOL_ITERS=10)
+        // Need enough consecutive near-tolerance iterations (hardcoded NEAR_TOL_ITERS=15).
         assert_eq!(
-            check_convergence(&info, &opts, 10),
+            check_convergence(&info, &opts, 15),
             ConvergenceStatus::Acceptable
         );
     }
@@ -442,9 +449,9 @@ mod tests {
             multiplier_count: 0,
         };
         let opts = SolverOptions::default();
-        // Not enough consecutive iterations (9 < 10)
+        // Not enough consecutive iterations (14 < 15)
         assert_eq!(
-            check_convergence(&info, &opts, 9),
+            check_convergence(&info, &opts, 14),
             ConvergenceStatus::NotConverged
         );
     }

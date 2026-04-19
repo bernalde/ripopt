@@ -36,6 +36,37 @@
 
 **Tests must be honest:** If the solver cannot solve a problem to `Optimal`, the test should either fail (exposing the real limitation), be marked `#[ignore]` with a clear explanation, or be removed. A failing test that documents a real limitation is more valuable than a passing test that hides one.
 
+## Working on the solver: efficiency rules
+
+These are rules distilled from sessions that burned time on avoidable mistakes. Follow them for any non-trivial change to `src/ipm.rs`, `src/restoration*.rs`, `src/filter.rs`, `src/convergence.rs`, or `src/kkt.rs`.
+
+### Change one thing at a time
+Never stack 2+ solver-algorithm changes into one experiment. Each change gets its own commit-or-revert decision, measured in isolation. If the expert gives you a prioritized list of 4 fixes, apply and test fix #1 first; only move to #2 after #1 is understood. Stacking hides which change caused (or masked) any effect.
+
+### Read the function before changing its callsite
+Numerical code often has a constant whose meaning is set by the callee, not the caller. Before editing a call like `RestorationNlp::new(..., rho, 1.0)`, read `RestorationNlp::new` to understand what the `1.0` becomes. Don't rename or rescale based on the caller-side appearance alone.
+
+### Distinguish verified from inferred
+When answering a question about solver behavior, lead with one of: "measured:", "inferred from X:", or "unknown — would need Y". Do not present `Δf ≈ 0.5·H·Δx²` as evidence that x values differ — it's an analytical estimate, not a measurement. If the user asks "did you confirm?", you should be able to point at the measurement.
+
+### Narrow the test target
+If the fix is for CONCON, run CONCON. If it's for 9 problems in Category A, run those 9. Only run the full regression suite (48 problems, ~15 min) after the narrow target is green. Full-suite runs per iteration burn ~15 min each and make iteration loops unworkable.
+
+### Bash interrupt does not undo Edit
+If you have applied an Edit and the user interrupts a subsequent Bash call, the file on disk is still mutated. Explicitly revert the Edit before changing direction — don't assume "the patch is aborted". Verify with `git diff` if uncertain.
+
+### Don't chain unrelated commands with `&&`
+`cargo build && cargo test && cargo run -- benchmark | tail -3` hides intermediate failures: if tests fail silently or the output format changes, you see only the last step. Run build / test / benchmark as separate calls, capture output to known files, and inspect them explicitly. Piping to `tail -3` is especially dangerous because success summaries are often >3 lines.
+
+### One parameterized probe, not N probe files
+If you need to diagnose the same thing on 5 problems, write one binary that takes the problem name as a CLI arg. Five probe files (`vesuvio_probe.rs`, `concon_probe.rs`, ...) each trigger a fresh ~30s cargo build; one parameterized probe builds once and runs fast.
+
+### Don't retry a broken external build
+If `ipopt-sys` / `ipopt-native` / any external crate fails with a specific cmake or linker error, diagnose the failure before rerunning. Running the same broken configuration twice wastes ~10 min each. Check `brew list`, pkg-config paths, and the build.rs source before trying flags.
+
+### Use memory for durable findings
+Facts like "CONCON at iter 48 reaches KKT with pr=du=0 but compl stays at mu=2e-5" or "the LS-y residual only helps when m≤n or J has full rank" are exactly what the memory system exists for. Save them the moment you learn them; future sessions save days.
+
 ## Benchmark Versioning
 After each release, save tagged benchmark results so we can track improvement and regression across versions. Run `make hs-run` (or the full `make benchmark`) and copy the results:
 ```
