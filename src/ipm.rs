@@ -4068,27 +4068,24 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                                 // Store sigma for the cross-iteration mu update
                                 last_mehrotra_sigma = Some(sigma);
                                 let mu_pc = (sigma * state.mu).max(options.mu_min);
-                                // Apply PC only when the centering parameter suggests
-                                // a meaningful μ decrease (σ < 0.95) and the probe is
-                                // not degenerate. Skip early iterations to avoid
-                                // amplifying noise at poorly-scaled starting points.
-                                // Also skip when sigma is very small (near convergence,
-                                // α_aff → 1) to avoid over-aggressive barrier decrease.
-                                let sigma_skip_min = 0.05_f64;
-                                if mu_pc < state.mu * 0.95 && sigma >= sigma_skip_min && iteration >= 2 {
-                                    log::debug!(
-                                        "Mehrotra PC iter {}: σ={:.4} α_aff={:.4} μ: {:.2e}→{:.2e}",
-                                        iteration, sigma, alpha_aff, state.mu, mu_pc
-                                    );
-                                    let new_rhs = kkt::mehrotra_corrector_rhs(
-                                        &kkt.rhs, &state.x, &state.x_l, &state.x_u,
-                                        &dx_aff, &dz_l_aff, &dz_u_aff,
-                                        state.mu, mu_pc,
-                                    );
-                                    Some((new_rhs, dx_aff, dz_l_aff, dz_u_aff, mu_pc))
-                                } else {
-                                    None
-                                }
+                                // Always apply the Mehrotra corrector when the
+                                // affine probe succeeded. Ipopt's PDSearchDirCalc has
+                                // no skip gate (IpPDSearchDirCalc.cpp:81 gates only
+                                // on `mehrotra_algorithm_`); the earlier gate here
+                                // (mu_pc < state.mu*0.95 && sigma>=0.05 && iter>=2)
+                                // prevented the corrector from firing often enough
+                                // for its cross-term to matter on issue #5. Removing
+                                // it is fix #3 of the trajectory-alignment bundle.
+                                log::debug!(
+                                    "Mehrotra PC iter {}: σ={:.4} α_aff={:.4} μ: {:.2e}→{:.2e}",
+                                    iteration, sigma, alpha_aff, state.mu, mu_pc
+                                );
+                                let new_rhs = kkt::mehrotra_corrector_rhs(
+                                    &kkt.rhs, &state.x, &state.x_l, &state.x_u,
+                                    &dx_aff, &dz_l_aff, &dz_u_aff,
+                                    state.mu, mu_pc,
+                                );
+                                Some((new_rhs, dx_aff, dz_l_aff, dz_u_aff, mu_pc))
                             } else {
                                 None
                             }
