@@ -4390,6 +4390,11 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         let mut alpha = alpha_primal_max;
         let mut step_accepted = false;
         let min_alpha = filter.compute_alpha_min(theta_current, grad_phi_step);
+        // Snapshot x before the line search so we can roll back + halve α if the
+        // post-step gradient / Jacobian / Hessian eval trips the NaN/Inf guard
+        // (Ipopt's line search catches Eval_Error from these with α-backtracking,
+        // not a hard abort — IpBacktrackingLineSearch.cpp:776-784, 1158, 1193).
+        let x_pre_step = state.x.clone();
 
         // If primal divergence was detected, skip line search to force restoration entry.
         // The !step_accepted branch below handles filter updates and restoration.
@@ -4987,8 +4992,39 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         timings.problem_eval += t_eval.elapsed();
 
         if !eval_ok {
-            // Evaluation failed or produced NaN/Inf at accepted point.
-            // Try restoration before giving up.
+            // Post-step evaluation failure. Ipopt's Eval_Error catch in
+            // IpBacktrackingLineSearch.cpp:776-784 treats this as an α
+            // backtrack, not a fatal. Mirror that: halve α (and α_dual)
+            // from the accepted point toward the pre-step iterate and
+            // try again. Up to 5 halvings (α → α/32) before falling
+            // through to restoration.
+            let mut recovered = false;
+            let mut retry_alpha = state.alpha_primal;
+            let mut retry_alpha_dual = state.alpha_dual;
+            for _ in 0..5 {
+                retry_alpha *= 0.5;
+                retry_alpha_dual *= 0.5;
+                for i in 0..n {
+                    state.x[i] = x_pre_step[i] + retry_alpha * state.dx[i];
+                }
+                if state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode) {
+                    state.alpha_primal = retry_alpha;
+                    state.alpha_dual = retry_alpha_dual;
+                    if let Some(ref mut lbfgs) = lbfgs_state {
+                        let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
+                            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
+                        );
+                        lbfgs.update(&state.x, &lag_grad);
+                        lbfgs.fill_hessian(&mut state.hess_vals);
+                    }
+                    recovered = true;
+                    break;
+                }
+            }
+            if recovered {
+                continue;
+            }
+            // α halving exhausted. Try restoration before giving up.
             let (x_rest, success) = restoration.restore(
                 &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
                 &state.jac_rows, &state.jac_cols, n, m, options,
