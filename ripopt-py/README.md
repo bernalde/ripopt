@@ -71,6 +71,24 @@ for step in range(100):
 
 `examples/bench_nmpc.py` runs this same pattern 100 times and compares `minimize()` vs `Problem.solve()` — the persistent object is typically several× faster because JAX tracing and XLA lowering of the Lagrangian Hessian happen exactly once for the Problem's lifetime, not once per call.
 
+### Warm-starting from an external solution
+
+`Problem.solve()` accepts an explicit dual warm-start triple `(lam0, z_l0, z_u0)` — the constraint multipliers and upper/lower bound multipliers. This is the ripopt equivalent of seeding Ipopt with a cyipopt solution and lets you verify "is the reported x, λ, z_L, z_U a KKT point of this NLP?" independently of the solver's own initial-point and LS-estimate paths:
+
+```python
+# e.g. a cyipopt solution you want ripopt to verify
+x_star, lam_star, z_l_star, z_u_star = cyipopt_result
+
+res = prob.solve(
+    x0=x_star,
+    lam0=lam_star,
+    z_l0=z_l_star,
+    z_u0=z_u_star,
+)
+```
+
+All three dual arrays must be supplied together (partial specs raise `ValueError`); passing any of them implies `warm_start=True`. On plain NMPC-style restarts where you simply want to reuse the previous solve's multipliers, `prob.solve(warm_start=True)` is the shorter form.
+
 ## API
 
 `minimize(fun, x0, *, bounds=None, constraints=None, options=None, sparsity='dense', params=None, jac_mode='forward') -> OptimizeResult`
