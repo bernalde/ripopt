@@ -1000,6 +1000,31 @@ pub fn solve_with_custom_rhs(
     solver: &mut dyn LinearSolver,
     rhs: &[f64],
 ) -> Result<(Vec<f64>, Vec<f64>), SolverError> {
+    solve_with_custom_rhs_impl(n, dim, solver, rhs, None)
+}
+
+/// Same as `solve_with_custom_rhs` but also performs iterative refinement
+/// against the supplied matrix. Use this for Mehrotra/Gondzio backsolves where
+/// the cheap (no-refinement) variant would otherwise propagate factorization
+/// backward error into μ_aff, σ, and the corrector RHS — exactly the silent
+/// bug the ipopt-expert flagged on cho parmest.
+pub fn solve_with_custom_rhs_refined(
+    matrix: &KktMatrix,
+    n: usize,
+    dim: usize,
+    solver: &mut dyn LinearSolver,
+    rhs: &[f64],
+) -> Result<(Vec<f64>, Vec<f64>), SolverError> {
+    solve_with_custom_rhs_impl(n, dim, solver, rhs, Some(matrix))
+}
+
+fn solve_with_custom_rhs_impl(
+    n: usize,
+    dim: usize,
+    solver: &mut dyn LinearSolver,
+    rhs: &[f64],
+    refine_against: Option<&KktMatrix>,
+) -> Result<(Vec<f64>, Vec<f64>), SolverError> {
     if rhs.iter().any(|v| v.is_nan() || v.is_infinite()) {
         return Err(SolverError::NumericalFailure(
             "Custom RHS contains NaN/Inf".to_string(),
@@ -1011,6 +1036,39 @@ pub fn solve_with_custom_rhs(
         return Err(SolverError::NumericalFailure(
             "Custom solve solution contains NaN/Inf".to_string(),
         ));
+    }
+    if let Some(matrix) = refine_against {
+        // Up to 5 iterations of mixed-precision-style refinement against the
+        // matrix the caller actually wants solved. Cheaper than the 10-step
+        // refinement in `solve_for_direction` because backsolves dominate cost
+        // and backsolves used inside Mehrotra/Gondzio don't need 1e-12 accuracy
+        // — they just need the residual below the calling oracle's noise floor.
+        let max_refinements = 5;
+        let mut residual = vec![0.0; dim];
+        let mut prev_res_norm = f64::MAX;
+        for _ in 0..max_refinements {
+            matrix.matvec(&solution, &mut residual);
+            let mut res_norm: f64 = 0.0;
+            for i in 0..dim {
+                residual[i] = rhs[i] - residual[i];
+                res_norm = res_norm.max(residual[i].abs());
+            }
+            if res_norm < 1e-10 {
+                break;
+            }
+            // Stagnation guard (Ipopt convention — slow but steady accepted).
+            if res_norm > (1.0 - 1e-6) * prev_res_norm {
+                break;
+            }
+            prev_res_norm = res_norm;
+            let mut correction = vec![0.0; dim];
+            if solver.solve(&residual, &mut correction).is_err() {
+                break;
+            }
+            for i in 0..dim {
+                solution[i] += correction[i];
+            }
+        }
     }
     Ok((solution[..n].to_vec(), solution[n..].to_vec()))
 }
@@ -1226,9 +1284,41 @@ pub fn solve_condensed(
     let n = condensed.n;
     let m = condensed.m;
 
-    // Solve S · dx = rhs_condensed
+    // Solve S · dx = rhs_condensed, then refine against the assembled
+    // condensed matrix. Without refinement, factorization backward error
+    // propagates directly into dx and (via the J*dx − r_p recovery) into
+    // dy, with no protection — the silent backward-error bug the
+    // ipopt-expert flagged on cho parmest. The full-KKT path
+    // `solve_for_direction` already does iterative refinement; doing the
+    // same here closes the gap for problems that take the condensed path.
     let mut dx = vec![0.0; n];
     solver.solve(&condensed.rhs, &mut dx)?;
+
+    let max_refinements = 5;
+    let mut residual = vec![0.0; n];
+    let mut prev_res_norm = f64::MAX;
+    for _ in 0..max_refinements {
+        condensed.matrix.matvec(&dx, &mut residual);
+        let mut res_norm: f64 = 0.0;
+        for i in 0..n {
+            residual[i] = condensed.rhs[i] - residual[i];
+            res_norm = res_norm.max(residual[i].abs());
+        }
+        if res_norm < 1e-10 {
+            break;
+        }
+        if res_norm > (1.0 - 1e-6) * prev_res_norm {
+            break;
+        }
+        prev_res_norm = res_norm;
+        let mut correction = vec![0.0; n];
+        if solver.solve(&residual, &mut correction).is_err() {
+            break;
+        }
+        for i in 0..n {
+            dx[i] += correction[i];
+        }
+    }
 
     // Recover dy = (-D_c)^{-1} · (J · dx - r_p)
     // First compute J · dx

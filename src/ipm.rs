@@ -4019,8 +4019,8 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         let rhs_aff = kkt::affine_predictor_rhs(
                             &kkt.rhs, &state.x, &state.x_l, &state.x_u, state.mu,
                         );
-                        if let Ok((dx_aff, _)) = kkt::solve_with_custom_rhs(
-                            kkt.n, kkt.dim, lin_solver.as_mut(), &rhs_aff,
+                        if let Ok((dx_aff, _)) = kkt::solve_with_custom_rhs_refined(
+                            &kkt.matrix, kkt.n, kkt.dim, lin_solver.as_mut(), &rhs_aff,
                         ) {
                             // Complementarity steps for the affine predictor (μ=0)
                             let (dz_l_aff, dz_u_aff) = kkt::recover_dz(
@@ -4212,7 +4212,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             if mehrotra_applied {
                 if let Some(ref orig_rhs) = saved_rhs {
                     if let Some(ref kkt) = kkt_system_opt {
-                        if let Ok((dx_orig, dy_orig)) = kkt::solve_with_custom_rhs(kkt.n, kkt.dim, lin_solver.as_mut(), orig_rhs) {
+                        if let Ok((dx_orig, dy_orig)) = kkt::solve_with_custom_rhs_refined(&kkt.matrix, kkt.n, kkt.dim, lin_solver.as_mut(), orig_rhs) {
                             let norm_orig: f64 = dx_orig.iter().map(|v| v * v).sum::<f64>().sqrt();
                             let norm_pc: f64 = dx_dir.iter().map(|v| v * v).sum::<f64>().sqrt();
                             if norm_orig > 1e-30 && norm_pc > 1e-30 {
@@ -4335,7 +4335,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     }
 
                     // Solve for the centrality correction direction
-                    match kkt::solve_with_custom_rhs(kkt.n, kkt.dim, lin_solver.as_mut(), &rhs_mcc) {
+                    match kkt::solve_with_custom_rhs_refined(&kkt.matrix, kkt.n, kkt.dim, lin_solver.as_mut(), &rhs_mcc) {
                         Ok((ddx, ddy)) => {
                             // Compute bound-multiplier corrections from the Newton step:
                             //   S_l · ddz_l + Z_l · ddx = 0  (no centering in correction)
