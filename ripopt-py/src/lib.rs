@@ -121,43 +121,56 @@ impl NlpProblem for PyProblem {
         }
     }
 
-    fn objective(&self, x: &[f64]) -> f64 {
+    fn objective(&self, x: &[f64], _new_x: bool, obj: &mut f64) -> bool {
         if self.has_err() {
-            return 0.0;
+            *obj = 0.0;
+            return false;
         }
         Python::with_gil(|py| {
             if !self.check_signals(py) {
-                return 0.0;
+                *obj = 0.0;
+                return false;
             }
             let arr = PyArray1::from_slice_bound(py, x);
             match self.f.call1(py, (arr,)) {
-                Ok(r) => r.extract::<f64>(py).unwrap_or_else(|e| {
-                    self.stash(e);
-                    0.0
-                }),
+                Ok(r) => match r.extract::<f64>(py) {
+                    Ok(v) => {
+                        *obj = v;
+                        true
+                    }
+                    Err(e) => {
+                        self.stash(e);
+                        *obj = 0.0;
+                        false
+                    }
+                },
                 Err(e) => {
                     self.stash(e);
-                    0.0
+                    *obj = 0.0;
+                    false
                 }
             }
         })
     }
 
-    fn gradient(&self, x: &[f64], grad: &mut [f64]) {
+    fn gradient(&self, x: &[f64], _new_x: bool, grad: &mut [f64]) -> bool {
         if self.has_err() {
             grad.fill(0.0);
-            return;
+            return false;
         }
         Python::with_gil(|py| {
             if !self.check_signals(py) {
                 grad.fill(0.0);
-                return;
+                return false;
             }
             let arr = PyArray1::from_slice_bound(py, x);
             match self.grad_f.call1(py, (arr,)) {
                 Ok(r) => match r.extract::<PyReadonlyArray1<f64>>(py) {
                     Ok(v) => match v.as_slice() {
-                        Ok(s) if s.len() == grad.len() => grad.copy_from_slice(s),
+                        Ok(s) if s.len() == grad.len() => {
+                            grad.copy_from_slice(s);
+                            true
+                        }
                         Ok(s) => {
                             self.stash(PyValueError::new_err(format!(
                                 "gradient returned length {} (expected {})",
@@ -165,44 +178,51 @@ impl NlpProblem for PyProblem {
                                 grad.len()
                             )));
                             grad.fill(0.0);
+                            false
                         }
                         Err(e) => {
                             self.stash(e);
                             grad.fill(0.0);
+                            false
                         }
                     },
                     Err(e) => {
                         self.stash(e);
                         grad.fill(0.0);
+                        false
                     }
                 },
                 Err(e) => {
                     self.stash(e);
                     grad.fill(0.0);
+                    false
                 }
             }
-        });
+        })
     }
 
-    fn constraints(&self, x: &[f64], g: &mut [f64]) {
+    fn constraints(&self, x: &[f64], _new_x: bool, g: &mut [f64]) -> bool {
         if self.m == 0 {
-            return;
+            return true;
         }
         if self.has_err() {
             g.fill(0.0);
-            return;
+            return false;
         }
         let gfn = self.g_fn.as_ref().expect("constraints present => g_fn set");
         Python::with_gil(|py| {
             if !self.check_signals(py) {
                 g.fill(0.0);
-                return;
+                return false;
             }
             let arr = PyArray1::from_slice_bound(py, x);
             match gfn.call1(py, (arr,)) {
                 Ok(r) => match r.extract::<PyReadonlyArray1<f64>>(py) {
                     Ok(v) => match v.as_slice() {
-                        Ok(s) if s.len() == g.len() => g.copy_from_slice(s),
+                        Ok(s) if s.len() == g.len() => {
+                            g.copy_from_slice(s);
+                            true
+                        }
                         Ok(s) => {
                             self.stash(PyValueError::new_err(format!(
                                 "constraints returned length {} (expected {})",
@@ -210,42 +230,46 @@ impl NlpProblem for PyProblem {
                                 g.len()
                             )));
                             g.fill(0.0);
+                            false
                         }
                         Err(e) => {
                             self.stash(e);
                             g.fill(0.0);
+                            false
                         }
                     },
                     Err(e) => {
                         self.stash(e);
                         g.fill(0.0);
+                        false
                     }
                 },
                 Err(e) => {
                     self.stash(e);
                     g.fill(0.0);
+                    false
                 }
             }
-        });
+        })
     }
 
     fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
         (self.jac_rows.clone(), self.jac_cols.clone())
     }
 
-    fn jacobian_values(&self, x: &[f64], vals: &mut [f64]) {
+    fn jacobian_values(&self, x: &[f64], _new_x: bool, vals: &mut [f64]) -> bool {
         if self.m == 0 {
-            return;
+            return true;
         }
         if self.has_err() {
             vals.fill(0.0);
-            return;
+            return false;
         }
         let jfn = self.jac_g.as_ref().expect("constraints present => jac_g set");
         Python::with_gil(|py| {
             if !self.check_signals(py) {
                 vals.fill(0.0);
-                return;
+                return false;
             }
             let arr = PyArray1::from_slice_bound(py, x);
             let res = match jfn.call1(py, (arr,)) {
@@ -253,7 +277,7 @@ impl NlpProblem for PyProblem {
                 Err(e) => {
                     self.stash(e);
                     vals.fill(0.0);
-                    return;
+                    return false;
                 }
             };
             let v = match res.extract::<PyReadonlyArray2<f64>>(py) {
@@ -261,7 +285,7 @@ impl NlpProblem for PyProblem {
                 Err(e) => {
                     self.stash(e);
                     vals.fill(0.0);
-                    return;
+                    return false;
                 }
             };
             let n = self.n;
@@ -275,29 +299,37 @@ impl NlpProblem for PyProblem {
                     vals[k] = a[[i, j]];
                 }
             }
-        });
+            true
+        })
     }
 
     fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
         (self.hes_rows.clone(), self.hes_cols.clone())
     }
 
-    fn hessian_values(&self, x: &[f64], obj_factor: f64, lambda: &[f64], vals: &mut [f64]) {
+    fn hessian_values(
+        &self,
+        x: &[f64],
+        _new_x: bool,
+        obj_factor: f64,
+        lambda: &[f64],
+        vals: &mut [f64],
+    ) -> bool {
         if self.has_err() {
             vals.fill(0.0);
-            return;
+            return false;
         }
         let hfn = match self.hess_l.as_ref() {
             Some(h) => h,
             None => {
                 vals.fill(0.0);
-                return;
+                return false;
             }
         };
         Python::with_gil(|py| {
             if !self.check_signals(py) {
                 vals.fill(0.0);
-                return;
+                return false;
             }
             let xa = PyArray1::from_slice_bound(py, x);
             let la = PyArray1::from_slice_bound(py, lambda);
@@ -306,7 +338,7 @@ impl NlpProblem for PyProblem {
                 Err(e) => {
                     self.stash(e);
                     vals.fill(0.0);
-                    return;
+                    return false;
                 }
             };
             let v = match res.extract::<PyReadonlyArray2<f64>>(py) {
@@ -314,7 +346,7 @@ impl NlpProblem for PyProblem {
                 Err(e) => {
                     self.stash(e);
                     vals.fill(0.0);
-                    return;
+                    return false;
                 }
             };
             let n = self.n;
@@ -328,13 +360,76 @@ impl NlpProblem for PyProblem {
                     vals[k] = a[[i, j]];
                 }
             }
-        });
+            true
+        })
+    }
+}
+
+/// Options accepted by `build_options`. Listed in the error message for
+/// unknown keys so callers migrating from cyipopt can see what's available
+/// without having to read the source.
+const KNOWN_OPTIONS: &[&str] = &[
+    "tol",
+    "max_iter",
+    "print_level",
+    "constr_viol_tol",
+    "dual_inf_tol",
+    "compl_inf_tol",
+    "max_wall_time",
+    "mu_init",
+    "mu_strategy",
+    "warm_start",
+    "warm_start_init_point",
+    "warm_start_bound_push",
+    "warm_start_bound_frac",
+    "warm_start_mult_bound_push",
+    "hessian_approximation",
+    "bound_push",
+    "bound_frac",
+    "sb",
+    // accepted-and-ignored (with a stderr warning) for cyipopt option-dict
+    // compatibility — these keys are common in cyipopt tutorials but ripopt
+    // either uses its own fixed value, has no corresponding setting, or
+    // uses a different name. Accepting them lets users paste cyipopt option
+    // dicts into ripopt without rewriting keys.
+    "linear_solver",
+    "nlp_scaling_method",
+    "acceptable_tol",
+    "acceptable_iter",
+    "acceptable_constr_viol_tol",
+    "acceptable_dual_inf_tol",
+    "acceptable_compl_inf_tol",
+    "acceptable_obj_change_tol",
+    "limited_memory_max_history",
+    "limited_memory_update_type",
+];
+
+fn warn_ignored(key: &str, reason: &str) {
+    eprintln!(
+        "ripopt: ignoring option {:?} ({}). Accepted for cyipopt compatibility.",
+        key, reason
+    );
+}
+
+fn extract_yes_no(key: &str, v: &Bound<'_, PyAny>) -> PyResult<bool> {
+    if let Ok(b) = v.extract::<bool>() {
+        return Ok(b);
+    }
+    let s: String = v.extract()?;
+    match s.as_str() {
+        "yes" => Ok(true),
+        "no" => Ok(false),
+        other => Err(PyValueError::new_err(format!(
+            "{}: unknown value {:?} (expected 'yes' or 'no')",
+            key, other
+        ))),
     }
 }
 
 /// Translate a Python options dict into ripopt's SolverOptions.
 ///
-/// Known keys are whitelisted; unknown keys raise `ValueError`.
+/// Known keys are whitelisted; unknown keys raise `ValueError` with the
+/// full accepted-key list in the error message.
 fn build_options(options: &Bound<'_, PyDict>) -> PyResult<SolverOptions> {
     let mut opts = SolverOptions::default();
     for (k, v) in options.iter() {
@@ -348,12 +443,30 @@ fn build_options(options: &Bound<'_, PyDict>) -> PyResult<SolverOptions> {
             "compl_inf_tol" => opts.compl_inf_tol = v.extract()?,
             "max_wall_time" => opts.max_wall_time = v.extract()?,
             "mu_init" => opts.mu_init = v.extract()?,
-            "warm_start" => opts.warm_start = v.extract()?,
+            "mu_strategy" => {
+                let s: String = v.extract()?;
+                match s.as_str() {
+                    "adaptive" => opts.mu_strategy_adaptive = true,
+                    "monotone" => opts.mu_strategy_adaptive = false,
+                    other => {
+                        return Err(PyValueError::new_err(format!(
+                            "mu_strategy: unknown value {:?} (expected 'adaptive' or 'monotone')",
+                            other
+                        )))
+                    }
+                }
+            }
+            "warm_start" => opts.warm_start = extract_yes_no("warm_start", &v)?,
+            "warm_start_init_point" => {
+                opts.warm_start = extract_yes_no("warm_start_init_point", &v)?;
+            }
             "warm_start_bound_push" => opts.warm_start_bound_push = v.extract()?,
             "warm_start_bound_frac" => opts.warm_start_bound_frac = v.extract()?,
             "warm_start_mult_bound_push" => {
                 opts.warm_start_mult_bound_push = v.extract()?
             }
+            "bound_push" => opts.bound_push = v.extract()?,
+            "bound_frac" => opts.bound_frac = v.extract()?,
             "hessian_approximation" => {
                 let s: String = v.extract()?;
                 match s.as_str() {
@@ -367,10 +480,48 @@ fn build_options(options: &Bound<'_, PyDict>) -> PyResult<SolverOptions> {
                     }
                 }
             }
+            "sb" => {
+                // Ipopt's 'sb' suppresses the startup banner. ripopt has no
+                // startup banner — accept silently so copy-pasted cyipopt
+                // option dicts don't break.
+                let _ = extract_yes_no("sb", &v)?;
+            }
+            "linear_solver" => {
+                let s: String = v.extract()?;
+                warn_ignored(
+                    "linear_solver",
+                    &format!(
+                        "ripopt uses its own Rust linear solver; value {:?} ignored",
+                        s
+                    ),
+                );
+            }
+            "nlp_scaling_method" => {
+                let s: String = v.extract()?;
+                warn_ignored(
+                    "nlp_scaling_method",
+                    &format!(
+                        "ripopt always uses gradient-based scaling; value {:?} ignored",
+                        s
+                    ),
+                );
+            }
+            "acceptable_tol"
+            | "acceptable_iter"
+            | "acceptable_constr_viol_tol"
+            | "acceptable_dual_inf_tol"
+            | "acceptable_compl_inf_tol"
+            | "acceptable_obj_change_tol" => {
+                warn_ignored(&key, "ripopt uses Ipopt's default acceptable thresholds");
+            }
+            "limited_memory_max_history" | "limited_memory_update_type" => {
+                warn_ignored(&key, "ripopt's L-BFGS does not expose this setting");
+            }
             other => {
                 return Err(PyValueError::new_err(format!(
-                    "unknown option: {}",
-                    other
+                    "unknown option: {:?}. Accepted options: {}",
+                    other,
+                    KNOWN_OPTIONS.join(", ")
                 )))
             }
         }

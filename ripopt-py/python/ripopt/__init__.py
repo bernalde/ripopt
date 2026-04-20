@@ -661,7 +661,14 @@ def minimize(
         Optional solver options dict. Recognized keys: ``tol``, ``max_iter``,
         ``print_level``, ``constr_viol_tol``, ``dual_inf_tol``,
         ``compl_inf_tol``, ``max_wall_time``, ``mu_init``,
-        ``hessian_approximation`` (``'exact'`` or ``'limited-memory'``).
+        ``mu_strategy`` (``'adaptive'`` or ``'monotone'``; default adaptive),
+        ``bound_push``, ``bound_frac``, ``sb`` (``'yes'``/``'no'``; accepted
+        for cyipopt compatibility), ``warm_start`` / ``warm_start_init_point``
+        (aliases), ``hessian_approximation`` (``'exact'`` or
+        ``'limited-memory'``). Several Ipopt options common in cyipopt code
+        (``linear_solver``, ``nlp_scaling_method``, ``acceptable_*``,
+        ``limited_memory_max_history``) are accepted but ignored with a
+        stderr warning so cyipopt option dicts can be reused verbatim.
     sparsity
         Sparsity strategy for Jacobian and Hessian structure:
 
