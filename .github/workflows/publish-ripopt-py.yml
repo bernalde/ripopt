@@ -1,0 +1,85 @@
+name: Publish ripopt-py
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build wheel (${{ matrix.os }}-${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            runner: ubuntu-latest
+            target: x86_64
+            manylinux: auto
+          - os: linux
+            runner: ubuntu-24.04-arm
+            target: aarch64
+            manylinux: auto
+          # Both macOS wheels build on an Apple-silicon runner. x86_64 is a
+          # cross-compile via maturin-action (it installs the
+          # x86_64-apple-darwin rustup target and sets MACOSX_DEPLOYMENT_TARGET).
+          # Avoids the flaky `macos-13` runner dispatch errors we hit on v0.6.2.
+          - os: macos
+            runner: macos-14
+            target: x86_64
+          - os: macos
+            runner: macos-14
+            target: aarch64
+          - os: windows
+            runner: windows-latest
+            target: x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build wheel (abi3)
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: ripopt-py
+          target: ${{ matrix.target }}
+          args: --release --out dist
+          manylinux: ${{ matrix.manylinux || '' }}
+          sccache: 'true'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}-${{ matrix.target }}
+          path: ripopt-py/dist/*.whl
+
+  # Note: no sdist job. ripopt-py depends on the sibling `ripopt` crate via a
+  # path dependency (`ripopt = { path = ".." }`), so a maturin sdist built from
+  # ripopt-py/ alone is not self-contained and would fail to build on PyPI.
+  # Users install via the per-platform wheels above.
+
+  publish:
+    name: Publish to PyPI
+    needs: [build]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # for trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

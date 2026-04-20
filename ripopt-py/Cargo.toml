@@ -1,6 +1,6 @@
 [package]
 name = "ripopt-py"
-version = "0.1.0"
+version = "0.6.2"
 edition = "2021"
 license = "EPL-2.0"
 description = "Python bindings for ripopt (interior-point NLP solver) with JAX autodiff"
@@ -12,6 +12,6 @@ name = "_ripopt"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.22", features = ["extension-module"] }
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py39"] }
 numpy = "0.22"
 ripopt = { path = ".." }
