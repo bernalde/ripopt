@@ -73,6 +73,10 @@ path = "benchmarks/cutest/collect_kkt.rs"
 required-features = ["cutest"]
 
 [[example]]
+name = "cat_a_probe"
+required-features = ["cutest"]
+
+[[example]]
 name = "compare_large_scale"
 required-features = ["ipopt-native"]
 
