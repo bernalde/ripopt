@@ -24,12 +24,17 @@ jobs:
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             wheel-plat: manylinux_2_17_aarch64
+          # Both macOS wheels build on an Apple-silicon runner. x86_64 is a
+          # cross-compile (rustup installs the x86_64-apple-darwin target),
+          # which avoids the flaky `macos-13` runner dispatch errors we hit on
+          # v0.6.2. Cross-compiling a plain binary (no linking against system
+          # frameworks beyond libc/libSystem) is straightforward.
           - os: macos
-            runner: macos-13
+            runner: macos-14
             target: x86_64-apple-darwin
             wheel-plat: macosx_10_12_x86_64
           - os: macos
-            runner: macos-latest
+            runner: macos-14
             target: aarch64-apple-darwin
             wheel-plat: macosx_11_0_arm64
           - os: windows

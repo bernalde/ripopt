@@ -15,7 +15,11 @@ Replace `vX.Y.Z` with the new version number throughout (e.g. `v0.6.2`).
 - [ ] Pulled latest from origin
 - [ ] `cargo check --workspace --all-targets` — no errors
 - [ ] `cargo check --examples` — every example compiles (catches stale trait sigs)
-- [ ] `cargo build --release` — release build clean, no warnings
+- [ ] `cargo build --release` — release build clean, no **new** warnings
+  introduced since the previous release (a handful of pre-existing
+  `unused_variables`/`unused_imports` warnings in `src/preprocessing.rs` and
+  `src/c_api.rs` are tracked separately; the release gate is that the
+  warning count has not grown)
 - [ ] `cargo test --release --no-fail-fast` — **all** test binaries green
   (use `--no-fail-fast` so a single failure doesn't hide later ones)
 - [ ] `cargo test --release -p rmumps` — workspace member tests green
@@ -44,14 +48,18 @@ Replace `vX.Y.Z` with the new version number throughout (e.g. `v0.6.2`).
   problems from MINLPLib). Does NOT feed into `BENCHMARK_REPORT.md`; inspect
   the per-problem console output and `benchmarks/water/*.sol` files manually.
 
-### Domain benchmarks individually (if `make benchmark` doesn't include all)
+### Domain benchmarks to re-run individually (for debugging a single suite)
+
+`make benchmark` already runs HS, CUTEst, electrolyte, grid, CHO, and
+large-scale. Use the targets below to re-run **one** suite in isolation
+when you're debugging a regression without paying the full ~2 hours:
 
 - [ ] `make hs-run` — HS suite
 - [ ] `make electrolyte-run` — electrolyte thermodynamics
 - [ ] `make grid-run` — Grid (AC OPF)
 - [ ] `make cho-run` — CHO parameter estimation (if applicable)
-- [ ] `make gas-run` — gas pipeline NLPs
-- [ ] `make water-run` — water distribution network NLPs
+- [ ] `make gas-run` — gas pipeline NLPs (also listed above — not in `make benchmark`)
+- [ ] `make water-run` — water distribution network NLPs (also listed above — not in `make benchmark`)
 - [ ] CUTEst full sweep: `RESULTS_FILE=benchmarks/cutest/results.json cargo run --bin cutest_suite --features cutest,ipopt-native --release`
 
 ---
@@ -107,11 +115,18 @@ and Ipopt-only counts, electrolyte/grid results.
 ## 5. Bump version numbers (every place that hard-codes a version)
 
 These must all match. A grep for the **old** version after bumping is the
-safest way to confirm nothing was missed:
+safest way to confirm nothing was missed. Use two passes: one for quoted
+versions (Cargo/pyproject/Markdown prose) and one for raw numeric tokens
+(the C header's `#define` macros are unquoted):
 
 ```
+# Pass 1: quoted "X.Y.Z" occurrences
 grep -rn '"X\.Y\.Z"' --include='*.toml' --include='*.h' --include='*.rs' \
-     --include='*.md' --include='*.py' . | grep -v target/ | grep -v ref/
+     --include='*.md' --include='*.py' . \
+  | grep -v target/ | grep -v ref/ | grep -v benchmarks/
+
+# Pass 2: unquoted version tokens in the C header + inline constants
+grep -rn -E '\b[0-9]+\.[0-9]+\.[0-9]+\b' ripopt.h
 ```
 
 - [ ] `Cargo.toml` — `[package].version`
@@ -125,6 +140,11 @@ grep -rn '"X\.Y\.Z"' --include='*.toml' --include='*.h' --include='*.rs' \
 - [ ] `pyomo-ripopt/pyproject.toml` — `[project].version`
 - [ ] `pyomo-ripopt/pyomo_ripopt.egg-info/PKG-INFO` — auto-regenerates on
   `pip install`, but verify it after the install step below
+- [ ] `ripopt-py/Cargo.toml` — `[package].version`
+- [ ] `ripopt-py/pyproject.toml` — `[project].version` (must match the
+  `ripopt-py/Cargo.toml` version; both are bumped together with the main
+  `ripopt` crate so a single `vX.Y.Z` tag publishes consistent binaries to
+  PyPI via `.github/workflows/publish-ripopt-py.yml`)
 - [ ] `Ripopt.jl/Project.toml` — **only if** there are changes that affect
   the Julia binding (FFI signature changes, new C API functions, behavior
   changes Ripopt.jl exposes). Otherwise leave Ripopt.jl on its current
@@ -141,8 +161,9 @@ grep -rn '"X\.Y\.Z"' --include='*.toml' --include='*.h' --include='*.rs' \
 ## 6. Verify each language interface end-to-end
 
 Each interface should be exercised against the freshly built binary, not a
-stale install. Best done in order: native Rust → C → AMPL → Pyomo → Julia →
-GAMS, since each layer depends on the one below it.
+stale install. Best done in order: native Rust → C → AMPL → Pyomo plugin →
+ripopt-py bindings → Julia → GAMS → tutorials, since each later layer
+depends (directly or indirectly) on the ones before it.
 
 ### 6a. Native Rust library
 
@@ -166,6 +187,8 @@ GAMS, since each layer depends on the one below it.
 - [ ] `ripopt --version` and `ripopt --help` work
 - [ ] Solve at least one `.nl` file (e.g. an HS problem) and verify it
   reports correct status + objective
+- [ ] Confirm `~/.cargo/bin/ripopt` (after `make install`) is on `$PATH` so
+  `pyomo-ripopt`'s `SolverFactory('ripopt')` can resolve it in §6d
 
 ### 6d. Pyomo solver plugin
 
@@ -175,7 +198,18 @@ GAMS, since each layer depends on the one below it.
 - [ ] Confirm `pyomo_ripopt.egg-info/PKG-INFO` shows the new version
 - [ ] If publishing to PyPI: `python -m build` then check the wheel metadata
 
-### 6e. Julia/JuMP interface (`Ripopt.jl`)
+### 6e. Direct Python bindings (`ripopt-py`, PyPI name `ripopt`)
+
+- [ ] `pip install -e ./ripopt-py` from a clean Python env (builds via maturin)
+- [ ] `python -c "from ripopt import minimize; print(minimize)"`
+- [ ] Run a small HS/Rosenbrock end-to-end and confirm `success=True`
+- [ ] Confirm `ripopt-py/Cargo.toml` and `ripopt-py/pyproject.toml` versions
+  match the ripopt `vX.Y.Z` tag — PyPI release is driven by
+  `.github/workflows/publish-ripopt-py.yml` on tag push
+- [ ] (Optional local smoke) `cd ripopt-py && maturin build --release` and
+  inspect the produced wheel in `target/wheels/`
+
+### 6f. Julia/JuMP interface (`Ripopt.jl`)
 
 Skip this section entirely if the release contains no changes that affect
 Ripopt.jl (most patch releases). Otherwise:
@@ -187,7 +221,7 @@ Ripopt.jl (most patch releases). Otherwise:
 - [ ] On Apple Silicon: confirm no closure-cfunction warnings (the
   module-level `@cfunction` rule from 0.6.0 must hold)
 
-### 6f. GAMS solver link
+### 6g. GAMS solver link
 
 - [ ] `cargo build --release` (gams link links against `libripopt`)
 - [ ] `make -C gams` (build the GAMS bridge)
@@ -195,11 +229,6 @@ Ripopt.jl (most patch releases). Otherwise:
 - [ ] `sudo make -C gams test` — solves HS071 and checks the result
 - [ ] If you don't have GAMS locally, document this as a manual step the
   release manager must run on a GAMS-equipped machine
-
-### 6g. ASL/AMPL solver runtime sanity (Pyomo path)
-
-- [ ] Confirm `~/.cargo/bin/ripopt` is on `$PATH` so `SolverFactory('ripopt')`
-  resolves it (this is the default install location after `make install`)
 
 ### 6h. Tutorial notebooks
 
@@ -375,25 +404,110 @@ These let us compare per-problem timing across versions later:
 - [ ] `cargo publish --dry-run -p ripopt`
 - [ ] Read the diff of `Cargo.lock` and make sure no surprise dep updates
   snuck in
+- [ ] **PyPI publish readiness** — before pushing the tag, confirm the
+  Trusted Publishers are configured (one-time setup, but re-verify every
+  release):
+  - [ ] PyPI project `pyomo-ripopt` has a Trusted Publisher bound to
+    this repo + `publish-pyomo.yml` + environment `pypi`
+  - [ ] PyPI project `ripopt` has a Trusted Publisher bound to this repo
+    + `publish-ripopt-py.yml` + environment `pypi`
+  - [ ] GitHub repo has a `pypi` environment configured (Settings →
+    Environments)
+  - [ ] Neither workflow file has been renamed/moved since the last
+    successful release; if renamed, the Trusted Publisher binding on
+    PyPI must be updated to match **before** tagging
+  - [ ] See `PYPI_PUBLISHING.md` for full setup details
+- [ ] **Python wheel manifests** — quick sanity check that the Python
+  packages won't ship stray files:
+  - [ ] `cd pyomo-ripopt && python -m build --wheel && unzip -l dist/*.whl | head -40`
+    — verify no `tests/`, `build/`, or `__pycache__/` in the wheel
+  - [ ] `cd ripopt-py && maturin build --release && unzip -l target/wheels/*.whl | head -40`
+    — verify the `_ripopt.abi3.so` is present and no probe/test scripts
+    leaked in
 
 ---
 
 ## 10. Tag and publish
 
-Order matters: rmumps first (because ripopt depends on it on crates.io),
-then ripopt, then language bindings.
+Publishing fans out over three independent channels once the tag is
+pushed. **Only the crates.io channel has an internal ordering**:
+`cargo publish -p rmumps` must land and be indexed before
+`cargo publish -p ripopt`, because the ripopt crate depends on rmumps. The
+two PyPI workflows (`publish-pyomo.yml` and `publish-ripopt-py.yml`) build
+their own copy of ripopt from the tagged repo source — they do **not**
+fetch from crates.io and are independent of the cargo publishes below.
+
+```
+                              git push origin vX.Y.Z
+                                          |
+                ,-------------------------+-------------------------,
+                |                         |                         |
+         crates.io (manual)        publish-pyomo.yml        publish-ripopt-py.yml
+         rmumps → ripopt           (auto, tag trigger)      (auto, tag trigger)
+```
+
+### 10a. Push the tag
 
 - [ ] `git add -A` (review carefully — there will be benchmark JSON, the
   manuscript pdf, and many docs)
 - [ ] `git commit -m "release: vX.Y.Z"` with full release notes in body
 - [ ] `git tag -a vX.Y.Z -m "ripopt vX.Y.Z"`
 - [ ] `git push origin main`
-- [ ] `git push origin vX.Y.Z`
+- [ ] `git push origin vX.Y.Z` — **this starts both PyPI workflows
+  immediately**; keep the Actions tab open to monitor them
+
+### 10b. Publish crates.io (manual, ordered)
+
 - [ ] `cargo publish -p rmumps`
-- [ ] Wait for crates.io to index rmumps (~30s)
+- [ ] Wait for crates.io to index rmumps (~30s — `cargo search rmumps`
+  should return the new version)
 - [ ] `cargo publish -p ripopt`
-- [ ] (Optional) Publish `pyomo-ripopt` to PyPI: `python -m build && twine upload dist/*`
-- [ ] (Optional) Register/tag Ripopt.jl release if bumping it
+
+### 10c. Monitor PyPI workflows (automatic)
+
+- [ ] `.github/workflows/publish-pyomo.yml` — confirm all 5 wheel jobs +
+  sdist job + publish job succeeded in the Actions tab
+- [ ] `.github/workflows/publish-ripopt-py.yml` — same check (5 wheel
+  jobs, publish job; no sdist by design)
+- [ ] If either workflow failed during wheel builds (flaky runner, etc.),
+  re-run the failed jobs from the Actions UI — the `publish` job will
+  wait for them and then upload. Partial uploads are OK: PyPI rejects
+  duplicate wheels, so re-running is safe.
+
+### 10d. Other bindings
+
+- [ ] (Optional) Manual PyPI fallback if a workflow is broken beyond a
+  re-run: `cd pyomo-ripopt && python -m build && twine upload dist/*`
+  (same for `ripopt-py` via `maturin publish`). Requires an API token,
+  since Trusted Publishing only fires from the workflow.
+- [ ] (Optional) Register/tag `Ripopt.jl` release if bumping it
+
+### 10e. Rollback if something goes wrong
+
+If the release blows up after the tag push but before any artifact hits
+the public (crates.io, PyPI), rolling back cleanly:
+
+1. **Cancel in-flight workflows** — GitHub Actions UI → any running
+   `publish-*` run → "Cancel workflow". This stops wheel builds and
+   prevents the `publish` job from firing.
+2. **Delete the tag locally and remotely**:
+   ```bash
+   git tag -d vX.Y.Z
+   git push --delete origin vX.Y.Z
+   ```
+3. **If a GitHub release was auto-created** (e.g. a downstream workflow
+   `gh release create`d one), delete it via `gh release delete vX.Y.Z`.
+4. **Zenodo** auto-archives on GitHub release creation, not tag push.
+   If a Zenodo version was minted, it cannot be deleted — but you can
+   publish a `vX.Y.Z+1` immediately and Zenodo will supersede it.
+5. **crates.io**: `cargo yank --version X.Y.Z -p rmumps` (and ripopt) if
+   a broken crate was published. Yank is reversible but prevents new
+   `cargo install` of that version.
+6. **PyPI**: broken wheels can be deleted from the project page within
+   a few days, but the version number is burned — you cannot re-upload
+   `X.Y.Z`. Bump to `X.Y.Z+1` instead.
+
+Prefer catching problems in §9 to avoid any of this.
 
 ---
 
@@ -412,6 +526,18 @@ then ripopt, then language bindings.
 - [ ] On crates.io, confirm both `ripopt` and `rmumps` show the new version
 - [ ] `cargo install ripopt --version X.Y.Z` from a clean directory and run
   `ripopt --version` to confirm the published binary works
+- [ ] **PyPI end-to-end** — from a **fresh** venv (not the development one):
+  ```bash
+  python -m venv /tmp/ripopt-release-check
+  source /tmp/ripopt-release-check/bin/activate
+  pip install pyomo-ripopt==X.Y.Z
+  pip install ripopt==X.Y.Z
+  python -c "from pyomo.environ import SolverFactory; print(SolverFactory('ripopt').available())"
+  python -c "from ripopt import minimize; import numpy as np; r = minimize(lambda x: (x[0]-1)**2, np.zeros(1)); print(r['success'], r['x'])"
+  ```
+  Both packages should resolve a wheel (not fall back to sdist on a
+  supported platform). The sanity checks should return `True` and
+  `True [1.]` respectively.
 - [ ] **Zenodo DOI** — Zenodo is linked to the GitHub repo and auto-archives
   every published release (metadata in `.zenodo.json`). Wait a few minutes
   after the GitHub release in Section 11, then check
