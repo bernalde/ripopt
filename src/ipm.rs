@@ -5232,11 +5232,23 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 mu_state.dual_inf_window.push(du_now);
             }
 
+            // Ipopt-style barrier-subproblem stop test (IpMonotoneMuUpdate.cpp:135-194).
+            // Decrease mu only when the current barrier subproblem is approximately
+            // solved: barrier_err <= kappa_eps * mu (kappa_eps = barrier_tol_factor,
+            // default 10). Without this gate, mu collapses every iteration regardless
+            // of whether the line search is actually making progress on the current
+            // subproblem — observed on cho parmest where mu went 1e-1 -> 1e-9 in 9
+            // iters while inf_pr stayed pinned at 19. The check_sufficient_progress
+            // gate below is a relative-history check; this is the absolute gate.
+            let barrier_err_for_gate = compute_barrier_error(&state);
+            let barrier_subproblem_solved =
+                barrier_err_for_gate <= options.barrier_tol_factor * state.mu;
+
             match mu_state.mode {
                 MuMode::Free => {
                     // Consume Mehrotra sigma for use as quality function candidate
                     let _sigma_mu = last_mehrotra_sigma.take();
-                    if sufficient && !mu_state.tiny_step {
+                    if sufficient && !mu_state.tiny_step && barrier_subproblem_solved {
                         mu_state.consecutive_insufficient = 0;
                         mu_state.remember_accepted(kkt_error);
                         let avg_compl = compute_avg_complementarity(&state);
@@ -5313,7 +5325,11 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             state.mu = (options.mu_linear_decrease_factor * state.mu)
                                 .max(options.mu_min);
                         }
-                        // In free mode: reset filter each iteration
+                        // Reset filter on mu change (Ipopt convention,
+                        // IpFilterLSAcceptor.cpp:524-532). Now that the barrier-
+                        // stop gate above ensures mu only changes when the
+                        // subproblem is approximately solved, this happens at
+                        // the same low frequency as in Ipopt — not every iter.
                         filter.reset();
                         let theta_new = state.constraint_violation();
                         filter.set_theta_min_from_initial(theta_new);
@@ -5351,22 +5367,25 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             filter.reset();
                             let theta_new = state.constraint_violation();
                             filter.set_theta_min_from_initial(theta_new);
-                        } else {
-                            // Stay in Free mode with conservative mu decrease
+                        } else if barrier_subproblem_solved {
+                            // Stay in Free mode with conservative mu decrease —
+                            // only when the barrier subproblem is approximately
+                            // solved. Without this gate, mu collapses unconditionally
+                            // even when the line search is making no progress
+                            // (observed on cho parmest: mu 0.1 -> 0.02 at iter 1
+                            // despite barrier_err=1.4e4).
                             let avg_compl = compute_avg_complementarity(&state);
                             if avg_compl > 0.0 {
-                                let barrier_err = compute_barrier_error(&state);
-                                let mu_floor = if barrier_err <= options.barrier_tol_factor * state.mu {
-                                    options.mu_min
-                                } else {
-                                    (state.mu / 5.0).max(options.mu_min)
-                                };
+                                let mu_floor = options.mu_min;
                                 state.mu = (avg_compl / options.kappa).clamp(mu_floor, 1e5);
                             } else {
                                 state.mu = (options.mu_linear_decrease_factor * state.mu)
                                     .max(options.mu_min);
                             }
                         }
+                        // When !barrier_subproblem_solved, mu stays put and we
+                        // wait for the line search to make progress on the current
+                        // subproblem.
                     }
                 }
                 MuMode::Fixed => {

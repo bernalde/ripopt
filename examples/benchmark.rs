@@ -386,6 +386,7 @@ impl NlpProblem for PureBoundConstrained {
 fn status_string(s: SolveStatus) -> &'static str {
     match s {
         SolveStatus::Optimal => "Optimal",
+        SolveStatus::Acceptable => "Acceptable",
         SolveStatus::Infeasible => "Infeasible",
         SolveStatus::MaxIterations => "MaxIterations",
         SolveStatus::NumericalError => "NumericalError",
