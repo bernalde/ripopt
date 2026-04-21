@@ -802,6 +802,26 @@ pub fn solve_for_direction(
         if residual_ratio > 1e-10 {
             log::debug!("KKT residual ratio {:.2e} (above target 1e-10, proceeding)", residual_ratio);
         }
+
+        // Solution-magnitude safeguard. Ipopt's residual_ratio check caps
+        // ||sol|| at 1e6·||rhs|| in the denominator (IpPDFullSpaceSolver.cpp:815
+        // "ToDo: ... safeguard against incredibly large solution vectors"), so
+        // when J is rank-deficient iterative refinement can converge to a
+        // null-space solution with tiny residual but enormous norm. Fraction-
+        // to-boundary then drives α→0 and the solver stalls.
+        //
+        // Rule: if ||sol||_inf / max(||rhs||_inf, 1) > κ, treat as pretend-
+        // singular so the upstream chain applies δ_c (lifting the rank
+        // deficiency) and re-solves. κ=1e10 is permissive enough for
+        // genuinely ill-conditioned (but not rank-deficient) systems.
+        let magnitude_ratio = nrm_res / nrm_rhs.max(1.0);
+        if magnitude_ratio > 1e10 {
+            log::debug!(
+                "KKT ||sol||={:.2e} vs ||rhs||={:.2e} (ratio {:.2e}) — pretend singular (rank-def guard)",
+                nrm_res, nrm_rhs, magnitude_ratio,
+            );
+            return Err(SolverError::PretendSingular);
+        }
     }
 
     // Unscale solution when Ruiz equilibration was applied.
@@ -1349,6 +1369,37 @@ pub fn solve_condensed(
             condensed.d_c[i]
         };
         dy[i] = (jdx[i] - condensed.rhs_constraint[i]) / (-d_c_eff);
+    }
+
+    // Solution-magnitude safeguard. The condensed system uses d_c = -1e-16 as
+    // a "very stiff spring" for equality constraints, so any rank deficiency
+    // in J amplifies by 1e16 in the dy recovery step. When this happens the
+    // solution is physically meaningless (seen on case30_ieee: ||dy||=1e16
+    // with ||rhs||≈63), fraction-to-boundary drives α→0, and the solver
+    // stalls. Unlike the full-KKT path, the condensed path has no δ_c knob,
+    // so the only fix is to reject the step and let the caller fall back to
+    // the full KKT, which does apply δ_c via inertia correction.
+    let nrm_rhs: f64 = condensed
+        .rhs_primal
+        .iter()
+        .chain(condensed.rhs_constraint.iter())
+        .map(|v| v.abs())
+        .fold(0.0_f64, f64::max);
+    let nrm_sol: f64 = dx
+        .iter()
+        .chain(dy.iter())
+        .map(|v| v.abs())
+        .fold(0.0_f64, f64::max);
+    let magnitude_ratio = nrm_sol / nrm_rhs.max(1.0);
+    if magnitude_ratio > 1e10 {
+        log::debug!(
+            "Condensed ||sol||={:.2e} vs ||rhs||={:.2e} (ratio {:.2e}) — rank-def, falling back to full KKT",
+            nrm_sol, nrm_rhs, magnitude_ratio,
+        );
+        return Err(SolverError::NumericalFailure(format!(
+            "Condensed solution magnitude {:.2e} exceeds {:.2e}×RHS (rank-deficient)",
+            nrm_sol, nrm_rhs.max(1.0) * 1e10,
+        )));
     }
 
     Ok((dx, dy))

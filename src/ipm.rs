@@ -4275,6 +4275,20 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     // Solve for the centrality correction direction
                     match kkt::solve_with_custom_rhs_refined(&kkt.matrix, kkt.n, kkt.dim, lin_solver.as_mut(), &rhs_mcc) {
                         Ok((ddx, ddy)) => {
+                            // Reject absurd corrections — same rank-deficiency
+                            // pathology as solve_for_direction's magnitude guard,
+                            // but solve_with_custom_rhs has no such check. A
+                            // null-space correction blows up dx, drives α→0, and
+                            // stalls the main IPM (case30_ieee).
+                            let nrm_rhs: f64 = rhs_mcc.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+                            let nrm_sol: f64 = ddx.iter().chain(ddy.iter()).map(|v| v.abs()).fold(0.0_f64, f64::max);
+                            if nrm_sol > 1e10 * nrm_rhs.max(1.0) {
+                                log::debug!(
+                                    "Gondzio MCC iter {}: ||sol||={:.2e}, ||rhs||={:.2e} — rejecting",
+                                    iteration, nrm_sol, nrm_rhs,
+                                );
+                                break;
+                            }
                             // Compute bound-multiplier corrections from the Newton step:
                             //   S_l · ddz_l + Z_l · ddx = 0  (no centering in correction)
                             //   ddz_l[i] = -(z_l[i] / s_l[i]) * ddx[i]
