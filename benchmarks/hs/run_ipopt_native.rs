@@ -339,7 +339,6 @@ macro_rules! solve_problem {
             m: HS_PROBLEMS[$idx].m,
             final_primal_inf: 0.0,
             final_dual_inf: 0.0,
-            final_dual_inf_scaled: 0.0,
             final_compl: 0.0,
             final_mu: 0.0,
             final_s_d: 0.0,
