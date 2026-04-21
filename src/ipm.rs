@@ -6039,13 +6039,17 @@ fn apply_restoration_success<P: NlpProblem>(
             state.z_u[i] = if state.x_u[i].is_finite() { 1.0 } else { 0.0 };
         }
     }
-    // Compute least-squares multiplier estimate at the restored point.
-    // This avoids the "dead start" (y=0) that causes the filter to reject every
-    // post-restoration step. Uses sparse J*J^T for large problems.
+    // Compute least-squares multiplier estimate at the restored point,
+    // INCLUDING the reset z_L/z_U contribution. Otherwise any deviation
+    // between z_true = mu/slack (huge at tight slack) and the reset value
+    // (1.0) appears entirely in inf_du, driving a bad first Newton step.
+    // Matches Ipopt DefaultIterateInitializer::least_square_mults which
+    // uses grad_L (= grad_f - z_L + z_U), not grad_f.
     if m > 0 {
-        if let Some(y_ls) = compute_ls_multiplier_estimate(
+        if let Some(y_ls) = compute_ls_multiplier_estimate_with_z(
             &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
             &state.g_l, &state.g_u, n, m, options.constr_mult_init_max,
+            Some(&state.z_l), Some(&state.z_u),
         ) {
             state.y.copy_from_slice(&y_ls);
         } else {
@@ -6346,20 +6350,54 @@ fn compute_ls_multiplier_estimate(
     m: usize,
     max_abs_threshold: f64,
 ) -> Option<Vec<f64>> {
+    compute_ls_multiplier_estimate_with_z(
+        grad_f, jac_rows, jac_cols, jac_vals, g_l, g_u, n, m, max_abs_threshold, None, None,
+    )
+}
+
+/// LS multiplier estimate with optional bound-multiplier contributions.
+///
+/// Minimizes ||grad_f + J^T y - z_L + z_U||², yielding the normal equation
+///   (J J^T) y = -J * (grad_f - z_L + z_U)
+/// If `z_l`/`z_u` are `None`, they are treated as zero (cold-start / pre-z
+/// initialization). Post-restoration callers must pass them so the reset z
+/// values are absorbed into y, otherwise inf_du = ||grad_f + J^T y - z_L + z_U||
+/// stays large and the next Newton step is ill-directed.
+fn compute_ls_multiplier_estimate_with_z(
+    grad_f: &[f64],
+    jac_rows: &[usize],
+    jac_cols: &[usize],
+    jac_vals: &[f64],
+    g_l: &[f64],
+    g_u: &[f64],
+    n: usize,
+    m: usize,
+    max_abs_threshold: f64,
+    z_l: Option<&[f64]>,
+    z_u: Option<&[f64]>,
+) -> Option<Vec<f64>> {
     // For large problems, use sparse J*J^T factorization
     if m > 500 {
         return compute_ls_multiplier_estimate_sparse(
             grad_f, jac_rows, jac_cols, jac_vals, g_l, g_u, n, m, max_abs_threshold, None,
+            z_l, z_u,
         );
     }
     if m == 0 {
         return None;
     }
 
-    // Compute b = -J * grad_f  (m-vector)
+    // b = -J * (grad_f - z_L + z_U)
+    let mut rhs_grad = grad_f.to_vec();
+    if let Some(zl) = z_l {
+        for i in 0..n { rhs_grad[i] -= zl[i]; }
+    }
+    if let Some(zu) = z_u {
+        for i in 0..n { rhs_grad[i] += zu[i]; }
+    }
     let mut b = vec![0.0; m];
     for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
-        b[row] -= jac_vals[idx] * grad_f[col];
+        b[row] -= jac_vals[idx] * rhs_grad[col];
     }
 
     // Compute A = J * J^T  (m x m dense symmetric matrix)
@@ -6411,16 +6449,25 @@ fn compute_ls_multiplier_estimate_sparse(
     m: usize,
     max_abs_threshold: f64,
     solver: Option<&mut Box<dyn LinearSolver>>,
+    z_l: Option<&[f64]>,
+    z_u: Option<&[f64]>,
 ) -> Option<Vec<f64>> {
     use crate::linear_solver::SparseSymmetricMatrix;
     if m == 0 {
         return None;
     }
 
-    // Compute b = -J * grad_f  (m-vector)
+    // b = -J * (grad_f - z_L + z_U)
+    let mut rhs_grad = grad_f.to_vec();
+    if let Some(zl) = z_l {
+        for i in 0..n { rhs_grad[i] -= zl[i]; }
+    }
+    if let Some(zu) = z_u {
+        for i in 0..n { rhs_grad[i] += zu[i]; }
+    }
     let mut b = vec![0.0; m];
     for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
-        b[row] -= jac_vals[idx] * grad_f[col];
+        b[row] -= jac_vals[idx] * rhs_grad[col];
     }
 
     // Build sparse J*J^T: group Jacobian entries by column, then for each
