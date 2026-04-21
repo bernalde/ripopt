@@ -547,7 +547,7 @@ fn run_single_solver(name: &str, solver: &str) {
                 solve_time: best_time,
                 final_primal_inf: Some(result.diagnostics.final_primal_inf),
                 final_dual_inf: Some(result.diagnostics.final_dual_inf),
-                final_dual_inf_scaled: Some(result.diagnostics.final_dual_inf_scaled),
+                final_dual_inf_scaled: Some(result.diagnostics.final_dual_inf),
                 final_compl: Some(result.diagnostics.final_compl),
                 final_mu: Some(result.diagnostics.final_mu),
             };
