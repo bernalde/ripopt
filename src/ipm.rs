@@ -6004,42 +6004,39 @@ fn apply_restoration_success<P: NlpProblem>(
         lbfgs.fill_hessian(&mut state.hess_vals);
     }
 
-    // Reset multipliers after restoration (Ipopt-style).
+    // Reset bound multipliers after restoration, matching Ipopt
+    // IpRestoMinC_1Nrm.cpp:374-419:
+    //   1. Tentatively set z = mu/slack per bound (no element-wise clamp).
+    //   2. If max(|z|) exceeds bound_mult_reset_threshold (default 1e3),
+    //      *nuclear reset*: set ALL z_L, z_U (and v_L, v_U below) to 1.0.
+    //   3. Otherwise keep z = mu/slack as-is.
+    // An element-wise clamp at 1e3 (which we had before) leaves inf_du
+    // stuck at ~mu/slack - 1000 when slack is tight — the least-squares y
+    // computed after can't absorb that.
     let bound_mult_reset_threshold = 1000.0;
     let mu_for_reset = state.mu;
-    let mut any_large = false;
+    let mut z_max: f64 = 0.0;
     for i in 0..n {
         if state.x_l[i].is_finite() {
             let slack = (state.x[i] - state.x_l[i]).max(1e-12);
-            let z_new = mu_for_reset / slack;
-            if z_new > bound_mult_reset_threshold {
-                any_large = true;
-            }
-            state.z_l[i] = z_new.min(bound_mult_reset_threshold);
+            state.z_l[i] = mu_for_reset / slack;
+            z_max = z_max.max(state.z_l[i]);
+        } else {
+            state.z_l[i] = 0.0;
         }
         if state.x_u[i].is_finite() {
             let slack = (state.x_u[i] - state.x[i]).max(1e-12);
-            let z_new = mu_for_reset / slack;
-            if z_new > bound_mult_reset_threshold {
-                any_large = true;
-            }
-            state.z_u[i] = z_new.min(bound_mult_reset_threshold);
+            state.z_u[i] = mu_for_reset / slack;
+            z_max = z_max.max(state.z_u[i]);
+        } else {
+            state.z_u[i] = 0.0;
         }
     }
-    if any_large {
+    let nuclear_reset = z_max > bound_mult_reset_threshold;
+    if nuclear_reset {
         for i in 0..n {
-            if state.x_l[i].is_finite() {
-                let slack = (state.x[i] - state.x_l[i]).max(1e-12);
-                state.z_l[i] = (mu_for_reset / slack).min(bound_mult_reset_threshold);
-            } else {
-                state.z_l[i] = 0.0;
-            }
-            if state.x_u[i].is_finite() {
-                let slack = (state.x_u[i] - state.x[i]).max(1e-12);
-                state.z_u[i] = (mu_for_reset / slack).min(bound_mult_reset_threshold);
-            } else {
-                state.z_u[i] = 0.0;
-            }
+            state.z_l[i] = if state.x_l[i].is_finite() { 1.0 } else { 0.0 };
+            state.z_u[i] = if state.x_u[i].is_finite() { 1.0 } else { 0.0 };
         }
     }
     // Compute least-squares multiplier estimate at the restored point.
@@ -6062,7 +6059,9 @@ fn apply_restoration_success<P: NlpProblem>(
         }
     }
 
-    // Reset constraint slack barrier multipliers v_l, v_u from mu/slack.
+    // Reset constraint slack barrier multipliers v_l, v_u, mirroring the
+    // nuclear-reset semantics above. If bound multipliers triggered the
+    // all-to-1.0 path, also reset v to 1.0; else use v = mu/slack uncapped.
     let mu_r = state.mu;
     for i in 0..m {
         let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
@@ -6074,13 +6073,13 @@ fn apply_restoration_success<P: NlpProblem>(
         }
         if state.g_l[i].is_finite() {
             let slack = (state.g[i] - state.g_l[i]).max(1e-12);
-            state.v_l[i] = (mu_r / slack).min(bound_mult_reset_threshold);
+            state.v_l[i] = if nuclear_reset { 1.0 } else { mu_r / slack };
         } else {
             state.v_l[i] = 0.0;
         }
         if state.g_u[i].is_finite() {
             let slack = (state.g_u[i] - state.g[i]).max(1e-12);
-            state.v_u[i] = (mu_r / slack).min(bound_mult_reset_threshold);
+            state.v_u[i] = if nuclear_reset { 1.0 } else { mu_r / slack };
         } else {
             state.v_u[i] = 0.0;
         }
