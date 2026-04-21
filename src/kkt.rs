@@ -103,26 +103,35 @@ pub fn assemble_kkt(
         matrix.add(n + row, col, jac_vals[idx]);
     }
 
-    // RHS: dual residual r_d (first n entries)
-    // Ipopt convention (L = f + y^T g): stationarity is ∇f + J^T y - z_l + z_u = 0
+    // RHS: dual residual r_d (first n entries).
     //
-    // After eliminating dz from the full Newton system, the z_l and z_u terms
-    // cancel algebraically: correct condensed RHS = -∇f - J^T*y + μ/s_l - μ/s_u.
-    // However, keeping the z terms (r_d = -∇f + z_l - z_u + μ/s_l - μ/s_u - J^T*y)
-    // provides better convergence in practice by tracking the dual residual,
-    // especially when z deviates from μ/s due to safeguarding (kappa_sigma).
+    // Derivation: the full primal-dual Newton system has stationarity
+    //   H*Δx + J^T*Δy - Δz_L + Δz_U = -(∇f + J^T*y - z_L + z_U)
+    // and linearized complementarity S·Δz + Z·Δx = μ·e - Z·S·e. Eliminating
+    //   Δz_L = (μ - z_L*s_L)/s_L - (z_L/s_L)·Δx
+    // (and the symmetric upper-bound form) and substituting, the z_L and z_U
+    // terms cancel algebraically. The condensed primal-block RHS is:
+    //   r_d[i] = -∇f[i] - (J^T*y)[i] + μ/s_L[i] - μ/s_U[i]
+    // with Σ[i][i] = z_L[i]/s_L[i] + z_U[i]/s_U[i] on the diagonal of the (1,1)
+    // block. This matches Ipopt's IpPDFullSpaceSolver.cpp:418-420 augRhs_x
+    // assembly (rhs_x = grad_Lag_x augmented with -μ·Σ⁻¹·e terms from bounds,
+    // with z eliminated).
+    //
+    // Earlier versions of this code added `+z_L - z_U` to r_d with a comment
+    // claiming it "tracked the dual residual" and helped convergence under
+    // the kappa_sigma clamp. That was double-counting: the z deviation from
+    // μ/s is ALREADY carried by the dz recovery formula, and adding it here
+    // perturbed dx by O(z) / (H + Σ)_ii. On problems with active bounds at
+    // optimum (e.g. HS071 with x[0]=1), this produced a period-2 limit cycle
+    // in z_L at the active bound and prevented stationarity convergence.
     for i in 0..n {
         let mut rd = -grad_f[i];
-        rd += z_l[i];
-        rd -= z_u[i];
-
         if x_l[i].is_finite() {
             rd += mu / (x[i] - x_l[i]);
         }
         if x_u[i].is_finite() {
             rd -= mu / (x_u[i] - x[i]);
         }
-
         rhs[i] = rd;
     }
 
@@ -1149,11 +1158,11 @@ pub fn assemble_condensed_kkt(
     }
 
     // --- RHS: dual residual r_d (n-vector) ---
+    // See full derivation in build_kkt_system above. After eliminating dz, the
+    // z terms cancel and r_d reduces to -∇f - J^T*y + μ/s_L - μ/s_U.
     let mut rhs_primal = vec![0.0; n];
     for i in 0..n {
         let mut rd = -grad_f[i];
-        rd += z_l[i];
-        rd -= z_u[i];
         if x_l[i].is_finite() {
             rd += mu / (x[i] - x_l[i]);
         }
@@ -1473,12 +1482,11 @@ pub fn assemble_sparse_condensed_kkt(
         matrix.add(i, i, sigma[i]);
     }
 
-    // RHS: dual residual r_d
+    // RHS: dual residual r_d. z terms cancel after dz elimination — see
+    // full derivation in build_kkt_system.
     let mut rhs_primal = vec![0.0; n];
     for i in 0..n {
         let mut rd = -grad_f[i];
-        rd += z_l[i];
-        rd -= z_u[i];
         if x_l[i].is_finite() {
             rd += mu / (x[i] - x_l[i]);
         }

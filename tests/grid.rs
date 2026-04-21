@@ -76,9 +76,7 @@ fn opf_case5_pjm() {
     // OPF is non-convex; any locally optimal feasible solution is acceptable.
 }
 
-// TODO(z_opt-refactor): blocked by dz-step corruption at active bounds exposed by z_opt removal.
 #[test]
-#[ignore = "blocked by hs071 dz-step corruption exposed by z_opt removal"]
 fn opf_case14_ieee() {
     let problem = case14_ieee();
     let options = default_options();

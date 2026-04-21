@@ -75,9 +75,7 @@ fn hs_tp035() {
 }
 
 // Linear inequality, n=4
-// TODO(z_opt-refactor): blocked by dz-step corruption at active bounds exposed by z_opt removal.
 #[test]
-#[ignore = "blocked by hs071 dz-step corruption exposed by z_opt removal"]
 fn hs_tp044() {
     assert_hs_solved(&hs_problems::HsTp044);
 }
@@ -97,9 +95,7 @@ fn hs_tp048() {
 }
 
 // Mixed constraints (HS071), n=4
-// TODO(z_opt-refactor): blocked by dz-step corruption at active bounds exposed by z_opt removal.
 #[test]
-#[ignore = "blocked by hs071 dz-step corruption exposed by z_opt removal"]
 fn hs_tp071() {
     assert_hs_solved(&hs_problems::HsTp071);
 }

@@ -4009,9 +4009,19 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                                     "Mehrotra PC iter {}: σ={:.4} α_aff={:.4} μ: {:.2e}→{:.2e}",
                                     iteration, sigma, alpha_aff, state.mu, mu_pc
                                 );
-                                let new_rhs = kkt::mehrotra_corrector_rhs(
+                                // Ipopt filter-LS mode uses r_x = grad_L - mu·Σ·e
+                                // (plain rebuild with mu_new) and does NOT add the
+                                // second-order cross-term dx_aff·dz_aff/s. Ipopt's
+                                // mehrotra_algorithm flag (which adds the cross-term)
+                                // is a *separate* mode that also sets
+                                // accept_every_trial_step=yes, corrector_type=none;
+                                // it is incompatible with the filter line search.
+                                // Mixing them caused period-2 limit cycles on HS071
+                                // (cross-term persistently offsets z by O(||d_aff||^2)).
+                                // See IpPDSearchDirCalc.cpp:81-110 and
+                                // IpIpoptAlg.cpp:138-182.
+                                let new_rhs = kkt::rebuild_rhs_with_mu(
                                     &kkt.rhs, &state.x, &state.x_l, &state.x_u,
-                                    &dx_aff, &dz_l_aff, &dz_u_aff,
                                     state.mu, mu_pc,
                                 );
                                 Some((new_rhs, dx_aff, dz_l_aff, dz_u_aff, mu_pc))
@@ -4175,14 +4185,13 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         // use the cross-term-aware recovery at μ_pc so dz stays consistent with
         // the corrector complementarity equation; otherwise use the plain formula
         // at state.mu.
-        let (dz_l, dz_u) = if let Some((ref dx_aff_v, ref dz_l_aff_v, ref dz_u_aff_v, mu_pc_used)) = mehrotra_aff {
-            kkt::recover_dz_mehrotra(
-                &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u,
-                &dx, dx_aff_v, dz_l_aff_v, dz_u_aff_v, mu_pc_used,
-            )
-        } else {
-            kkt::recover_dz(&state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, &dx, state.mu)
-        };
+        // Mirror the RHS choice above: filter-LS mode does not apply the
+        // Mehrotra cross-term, so dz recovery uses the plain Fiacco formula
+        // dz_L[i] = (mu - z_L*s_L)/s_L - (z_L/s_L)*dx[i] at mu_new.
+        let mu_for_dz = mehrotra_aff.as_ref().map(|t| t.3).unwrap_or(state.mu);
+        let (dz_l, dz_u) = kkt::recover_dz(
+            &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, &dx, mu_for_dz,
+        );
 
         state.dx = dx;
         state.dy = dy;

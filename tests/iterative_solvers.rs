@@ -422,9 +422,7 @@ fn iterative_rosenbrock_small() {
     assert!((result.x[1] - 1.0).abs() < 1e-3, "x2 should be ~1, got {}", result.x[1]);
 }
 
-// TODO(z_opt-refactor): blocked by dz-step corruption at active bounds exposed by z_opt removal.
 #[test]
-#[ignore = "blocked by hs071 dz-step corruption exposed by z_opt removal"]
 fn iterative_hs071_small() {
     let mut opts = iterative_options();
     opts.sparse_threshold = 0;
@@ -494,9 +492,7 @@ fn hybrid_rosenbrock_small() {
     assert!(result.objective < 1e-6, "f* should be ~0, got {}", result.objective);
 }
 
-// TODO(z_opt-refactor): blocked by dz-step corruption at active bounds exposed by z_opt removal.
 #[test]
-#[ignore = "blocked by hs071 dz-step corruption exposed by z_opt removal"]
 fn hybrid_hs071_small() {
     let mut opts = hybrid_options();
     opts.sparse_threshold = 0;

@@ -135,10 +135,7 @@ impl ParametricNlpProblem for HS071Parametric {
     }
 }
 
-// TODO(z_opt-refactor): HS071 exposes iterative-z corruption at active bounds;
-// sensitivity needs a converged solve so blocks on the underlying fix.
 #[test]
-#[ignore = "blocked by hs071 dz-step corruption exposed by z_opt removal"]
 fn test_hs071_sensitivity_vs_finite_differences() {
     let p0 = 40.0;
     let problem = HS071Parametric { p: p0 };
@@ -183,9 +180,7 @@ fn test_hs071_sensitivity_vs_finite_differences() {
     }
 }
 
-// TODO(z_opt-refactor): same blocker as test_hs071_sensitivity_vs_finite_differences.
 #[test]
-#[ignore = "blocked by hs071 dz-step corruption exposed by z_opt removal"]
 fn test_sensitivity_linear_prediction_accuracy() {
     // Verify x(p + Δp) ≈ x(p) + (dx/dp)·Δp for small Δp
     let p0 = 40.0;

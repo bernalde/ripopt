@@ -93,9 +93,7 @@ unsafe extern "C" fn hs071_eval_h(_n: c_int, x: *const c_double, _new_x: c_int, 
     1
 }
 
-// TODO(z_opt-refactor): blocked by hs071 dz-step corruption exposed by z_opt removal.
 #[test]
-#[ignore = "blocked by hs071 dz-step corruption exposed by z_opt removal"]
 fn c_api_hs071_basic() {
     let x_l = [1.0, 1.0, 1.0, 1.0];
     let x_u = [5.0, 5.0, 5.0, 5.0];
@@ -123,9 +121,7 @@ fn c_api_hs071_basic() {
     }
 }
 
-// TODO(z_opt-refactor): blocked by hs071 dz-step corruption exposed by z_opt removal.
 #[test]
-#[ignore = "blocked by hs071 dz-step corruption exposed by z_opt removal"]
 fn c_api_hs071_multiplier_extraction() {
     let x_l = [1.0, 1.0, 1.0, 1.0];
     let x_u = [5.0, 5.0, 5.0, 5.0];
@@ -167,9 +163,7 @@ fn c_api_hs071_multiplier_extraction() {
     }
 }
 
-// TODO(z_opt-refactor): blocked by hs071 dz-step corruption exposed by z_opt removal.
 #[test]
-#[ignore = "blocked by hs071 dz-step corruption exposed by z_opt removal"]
 fn c_api_null_output_params() {
     let x_l = [1.0, 1.0, 1.0, 1.0];
     let x_u = [5.0, 5.0, 5.0, 5.0];

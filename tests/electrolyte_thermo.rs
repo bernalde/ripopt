@@ -16,15 +16,13 @@ fn default_options() -> SolverOptions {
         print_level: 0,
         // Gibbs-energy minimisation problems in exp(x) coordinates have
         // multiple KKT stationary points (spurious local minima at higher
-        // Gibbs energies that still satisfy mass/charge balance). Since the
-        // IPM/KKT refresh in 2026-04 (Loqo mu-oracle + Mehrotra corrector
-        // changes) the default mu_init=0.1 trajectory lands in the wrong
-        // basin on Co2WaterSpeciation (pH ~ 3.35, obj -4.5e-3 instead of
-        // pH ~ 5.6, obj -6.9e-3). A tighter mu_init=1e-4 routes the adaptive
-        // trajectory to the chemically-correct minimum on every problem in
-        // this suite. Same mechanism handled per-test for phosphoric acid —
-        // see electrolyte_05 below.
-        mu_init: 1e-4,
+        // Gibbs energies that still satisfy mass/charge balance). The
+        // default mu_init=0.1 trajectory lands in a high-pH basin on
+        // Co2WaterSpeciation; mu_init=1e-3 steers the adaptive trajectory
+        // to the chemically-correct acidic minimum (pH ~ 4.9, obj -6.93e-3)
+        // on every problem in this suite. Same mechanism handled per-test
+        // for phosphoric acid — see electrolyte_05 below.
+        mu_init: 1e-3,
         ..SolverOptions::default()
     }
 }
@@ -93,9 +91,7 @@ electrolyte_test!(electrolyte_02_co2_water, Co2WaterSpeciation, |result: &ripopt
     assert!(m_h2co3 > 1e-4 && m_h2co3 < 2e-3, "m_H2CO3={:.3e} unexpected", m_h2co3);
 });
 
-// TODO(z_opt-refactor): blocked by dz-step corruption at active bounds exposed by z_opt removal.
 #[test]
-#[ignore = "blocked by hs071 dz-step corruption exposed by z_opt removal"]
 fn electrolyte_03_nacl_speciation() {
     let problem = NaClSpeciation;
     let options = default_options();

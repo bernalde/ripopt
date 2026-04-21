@@ -387,13 +387,7 @@ impl NlpProblem for HS071 {
     }
 }
 
-// TODO(z_opt-refactor): after dropping z_opt, HS071's iterative z gets corrupted
-// at low mu (≤1e-11) when x[0] sits on the lower bound. Primal and compl gates pass
-// to 1e-9, but dual_inf grows to ~1e2 over iterations because Newton on z keeps
-// pushing z up against kappa_sigma clamp even though x is at the solution. Needs
-// a dedicated fix to the dz step at active bounds with near-zero slacks.
 #[test]
-#[ignore = "pre-existing dz-step corruption at active bounds exposed by z_opt removal"]
 fn hs071_constrained() {
     let problem = HS071;
     let options = SolverOptions {
@@ -1372,10 +1366,7 @@ impl NlpProblem for ZeroHessianLP {
     fn hessian_values(&self, _x: &[f64], _new_x: bool, _obj_factor: f64, _lambda: &[f64], _vals: &mut [f64]) -> bool { true }
 }
 
-// TODO(z_opt-refactor): same root cause as hs071_constrained — iterative z
-// corruption on an LP where the solution sits on bounds. Needs the dz-step fix.
 #[test]
-#[ignore = "pre-existing dz-step corruption at active bounds exposed by z_opt removal"]
 fn zero_hessian_linear_program() {
     let problem = ZeroHessianLP;
     let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
@@ -1759,10 +1750,7 @@ fn intermediate_callback_early_stop() {
 // Warm-start multipliers: fewer iterations on re-solve
 // ---------------------------------------------------------------------------
 
-// TODO(z_opt-refactor): uses HS071 which now exposes the iterative-z corruption
-// at active bounds — see hs071_constrained for root cause.
 #[test]
-#[ignore = "pre-existing dz-step corruption at active bounds exposed by z_opt removal"]
 fn warm_start_with_multipliers_fewer_iterations() {
     // First solve: cold start
     let options = SolverOptions { print_level: 0, ..SolverOptions::default() };
@@ -1816,18 +1804,19 @@ fn warm_start_with_multipliers_fewer_iterations() {
             true
         }
         fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
-            (vec![0,1,1,2,2,3,3,3,3], vec![0,0,1,0,2,0,1,2,3])
+            (vec![0,1,1,2,2,2,3,3,3,3], vec![0,0,1,0,1,2,0,1,2,3])
         }
         fn hessian_values(&self, x: &[f64], _new_x: bool, s: f64, l: &[f64], v: &mut [f64]) -> bool {
             v[0]=s*2.0*x[3]+l[1]*2.0;
             v[1]=s*x[3]+l[0]*x[2]*x[3];
             v[2]=l[1]*2.0;
             v[3]=s*x[3]+l[0]*x[1]*x[3];
-            v[4]=l[1]*2.0;
-            v[5]=s*(2.0*x[0]+x[1]+x[2])+l[0]*x[1]*x[2];
-            v[6]=s*x[0]+l[0]*x[0]*x[2];
-            v[7]=s*x[0]+l[0]*x[0]*x[1];
-            v[8]=l[1]*2.0;
+            v[4]=l[0]*x[0]*x[3];
+            v[5]=l[1]*2.0;
+            v[6]=s*(2.0*x[0]+x[1]+x[2])+l[0]*x[1]*x[2];
+            v[7]=s*x[0]+l[0]*x[0]*x[2];
+            v[8]=s*x[0]+l[0]*x[0]*x[1];
+            v[9]=l[1]*2.0;
             true
         }
     }
