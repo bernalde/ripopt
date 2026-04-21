@@ -1,8 +1,10 @@
 # ripopt
 
 [![Crates.io](https://img.shields.io/crates/v/ripopt.svg)](https://crates.io/crates/ripopt)
+[![PyPI - ripopt](https://img.shields.io/pypi/v/ripopt.svg?label=pypi%20ripopt)](https://pypi.org/project/ripopt/)
+[![PyPI - pyomo-ripopt](https://img.shields.io/pypi/v/pyomo-ripopt.svg?label=pypi%20pyomo-ripopt)](https://pypi.org/project/pyomo-ripopt/)
 [![Tests](https://github.com/jkitchin/ripopt/actions/workflows/test.yml/badge.svg)](https://github.com/jkitchin/ripopt/actions/workflows/test.yml)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19542664.svg)](https://doi.org/10.5281/zenodo.19542664)
+[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.19542664-blue.svg)](https://doi.org/10.5281/zenodo.19542664)
 
 ![img](./ipopt-rust.png)
 
