@@ -6057,14 +6057,30 @@ fn apply_restoration_success<P: NlpProblem>(
     // INCLUDING the reset z_L/z_U contribution. Otherwise any deviation
     // between z_true = mu/slack (huge at tight slack) and the reset value
     // (1.0) appears entirely in inf_du, driving a bad first Newton step.
-    // Matches Ipopt DefaultIterateInitializer::least_square_mults which
-    // uses grad_L (= grad_f - z_L + z_U), not grad_f.
+    //
+    // Uses the Ipopt-exact augmented saddle-point system
+    //   [ I   J^T ] [ r ] = [ grad_f - z_L + z_U ]
+    //   [ J    0  ] [ y ]   [ 0                   ]
+    // (matches IpLeastSquareMults::CalculateMultipliers with W=0, δ=0).
+    // This is far better conditioned than the normal equations J*J^T*y = rhs
+    // when J is nearly rank-deficient (as happens on AC-OPF with gauge
+    // freedom — case30_ieee hits this at a post-restoration feasible iterate).
     if m > 0 {
-        if let Some(y_ls) = compute_ls_multiplier_estimate_with_z(
+        let y_ls_result = compute_ls_multiplier_estimate_augmented(
             &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-            &state.g_l, &state.g_u, n, m, options.constr_mult_init_max,
+            &state.g_l, &state.g_u, n, m,
             Some(&state.z_l), Some(&state.z_u),
-        ) {
+        );
+        // Apply the constr_mult_init_max cap externally (matches Ipopt
+        // DefaultIterateInitializer::least_square_mults, IpDefaultIterateInitializer.cpp:722-727).
+        let y_accepted = match y_ls_result {
+            Some(y_ls) => {
+                let max_abs = y_ls.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+                if max_abs > options.constr_mult_init_max { None } else { Some(y_ls) }
+            }
+            None => None,
+        };
+        if let Some(y_ls) = y_accepted {
             state.y.copy_from_slice(&y_ls);
         } else {
             for i in 0..m {
@@ -6367,6 +6383,97 @@ fn compute_ls_multiplier_estimate(
     compute_ls_multiplier_estimate_with_z(
         grad_f, jac_rows, jac_cols, jac_vals, g_l, g_u, n, m, max_abs_threshold, None, None,
     )
+}
+
+/// Compute least-squares multiplier estimate via the Ipopt-exact augmented
+/// saddle-point system (matches IpLeastSquareMults::CalculateMultipliers with
+/// W=0, δ=0, no inertia correction).
+///
+/// Solves the (n+m)×(n+m) system
+///   [ I    J^T ] [ r ]   [ grad_f - z_L + z_U ]
+///   [ J     0  ] [ y ] = [ 0                  ]
+/// and returns the y block.
+///
+/// This is algebraically equivalent to the normal-equations form
+/// (J·J^T)·y = J·(grad_f − z_L + z_U), but is numerically far better
+/// conditioned when J is nearly rank-deficient. The normal-equations form
+/// fails outright (J·J^T singular) for AC-OPF problems with gauge symmetry
+/// at post-restoration iterates (case30_ieee), whereas the augmented form's
+/// LDL^T handles the indefinite saddle point via Bunch-Kaufman pivoting
+/// without explicitly forming J·J^T.
+///
+/// On factorization failure, returns None. Matches Ipopt behavior at
+/// IpLeastSquareMults.cpp:82-87 — no δ_c retry, no Tikhonov regularization.
+/// Callers apply the `constr_mult_init_max` cap externally.
+fn compute_ls_multiplier_estimate_augmented(
+    grad_f: &[f64],
+    jac_rows: &[usize],
+    jac_cols: &[usize],
+    jac_vals: &[f64],
+    g_l: &[f64],
+    g_u: &[f64],
+    n: usize,
+    m: usize,
+    z_l: Option<&[f64]>,
+    z_u: Option<&[f64]>,
+) -> Option<Vec<f64>> {
+    use crate::linear_solver::SparseSymmetricMatrix;
+    if m == 0 {
+        return None;
+    }
+
+    // RHS: [grad_f − z_L + z_U; 0]
+    let mut rhs = vec![0.0_f64; n + m];
+    for i in 0..n {
+        rhs[i] = grad_f[i];
+        if let Some(zl) = z_l { rhs[i] -= zl[i]; }
+        if let Some(zu) = z_u { rhs[i] += zu[i]; }
+    }
+
+    // Build augmented matrix in upper-triangle triplet form (row ≤ col):
+    //   (i, i) = 1         for i in 0..n           (identity (1,1) block)
+    //   (col, n+row) = J_{row,col}                 (J^T off-diagonal)
+    //   (n+j, n+j) = 0     for j in 0..m           (structural zero on (2,2) diag)
+    let nnz_est = n + jac_rows.len() + m;
+    let mut ssm = SparseSymmetricMatrix {
+        n: n + m,
+        triplet_rows: Vec::with_capacity(nnz_est),
+        triplet_cols: Vec::with_capacity(nnz_est),
+        triplet_vals: Vec::with_capacity(nnz_est),
+    };
+    for i in 0..n {
+        ssm.triplet_rows.push(i);
+        ssm.triplet_cols.push(i);
+        ssm.triplet_vals.push(1.0);
+    }
+    for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
+        // J^T at (col, n+row). Since col < n ≤ n+row, this is always upper triangle.
+        ssm.triplet_rows.push(col);
+        ssm.triplet_cols.push(n + row);
+        ssm.triplet_vals.push(jac_vals[idx]);
+    }
+    for j in 0..m {
+        ssm.triplet_rows.push(n + j);
+        ssm.triplet_cols.push(n + j);
+        ssm.triplet_vals.push(0.0);
+    }
+
+    let matrix = KktMatrix::Sparse(ssm);
+    let mut solver = new_sparse_solver();
+    if solver.factor(&matrix).is_err() {
+        return None;
+    }
+    let mut sol = vec![0.0_f64; n + m];
+    if solver.solve(&rhs, &mut sol).is_err() {
+        return None;
+    }
+    if sol.iter().any(|v| !v.is_finite()) {
+        return None;
+    }
+
+    let mut y_ls: Vec<f64> = sol[n..].to_vec();
+    fix_inequality_mult_signs(&mut y_ls, g_l, g_u, m);
+    Some(y_ls)
 }
 
 /// LS multiplier estimate with optional bound-multiplier contributions.
