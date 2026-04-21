@@ -543,10 +543,11 @@ Prefer catching problems in §9 to avoid any of this.
   after the GitHub release in Section 11, then check
   https://doi.org/10.5281/zenodo.19542664 (the concept DOI — the parent
   record for all versions) and confirm `vX.Y.Z` appears in the version
-  list. The README badge points at the concept DOI, so the SVG and link
-  both auto-update — no file edits needed. (Avoid the
-  `zenodo.org/badge/<repo_id>.svg` redirect form: GitHub Camo doesn't
-  follow it reliably and the badge won't render.)
+  list. The README badge is a static `img.shields.io/badge/...` SVG that
+  hard-codes the concept DOI, so it doesn't need to be regenerated per
+  release. (Avoid both the `zenodo.org/badge/<repo_id>.svg` redirect form
+  and the `zenodo.org/badge/DOI/...svg` direct form: Zenodo rate-limits
+  GitHub Camo, which then caches a 403 and the badge stops rendering.)
 - [ ] Update `MEMORY.md` HS/CUTEst status sections with the new release
   numbers if you didn't already in step 3
 - [ ] Bump `Cargo.toml` to the next `+dev` working version if you use that
