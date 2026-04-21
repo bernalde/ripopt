@@ -18,7 +18,7 @@ pub struct KktSystem {
     /// Used by iterative refinement to recover the original (unregularized) matvec.
     pub delta_c_diag: Vec<f64>,
     /// Ruiz equilibration scaling factors. When active, the factored system is
-    /// D*A*D and the solution must be unscaled: x[i] = scale[i] * x_scaled[i].
+    /// D*A*D and the solution must be unscaled: x\[i\] = scale\[i\] * x_scaled\[i\].
     pub scale_factors: Option<Vec<f64>>,
 }
 
@@ -289,7 +289,7 @@ pub fn compute_sigma(
 /// quality and factorization accuracy.
 ///
 /// Returns the cumulative scaling factors. After solving the scaled system,
-/// the solution must be unscaled: x_original[i] = scale[i] * x_scaled[i].
+/// the solution must be unscaled: x_original\[i\] = scale\[i\] * x_scaled\[i\].
 ///
 /// Matches MUMPS SimScale schedule (KEEP(52)=7 for SYM=2):
 /// 1 iteration of inf-norm equilibration + 3 iterations of one-norm equilibration.
@@ -937,8 +937,8 @@ pub fn rebuild_rhs_with_mu(
 /// (see Ipopt `IpPDSearchDirCalc.cpp:88-110` plus the AugRhs_x folding at
 /// `IpPDFullSpaceSolver.cpp:418-420`) yields two additional per-bound terms
 /// on r_x:
-///   r_x[i] -= (Δx_aff[i] · Δz_L_aff[i]) / s_L[i]      (lower bound)
-///   r_x[i] -= (Δx_aff[i] · Δz_U_aff[i]) / s_U[i]      (upper bound)
+///   r_x\[i\] -= (Δx_aff\[i\] · Δz_L_aff\[i\]) / s_L\[i\]      (lower bound)
+///   r_x\[i\] -= (Δx_aff\[i\] · Δz_U_aff\[i\]) / s_U\[i\]      (upper bound)
 /// Both contributions carry a minus sign; the Δs_u = −Δx asymmetry is
 /// compensated by the `alpha = −1` that `AddMSinvZ` uses for the upper bound.
 pub fn mehrotra_corrector_rhs(
@@ -973,7 +973,7 @@ pub fn mehrotra_corrector_rhs(
 /// in the complementarity residual:
 ///   s_L · z_L + ΔS_L · z_L + Δz_L · s_L + ΔS_L_aff · Δz_L_aff = μ_new
 /// giving
-///   Δz_L[i] = (μ_new − s_L·z_L − Δx_aff·Δz_L_aff) / s_L − (z_L/s_L) · Δx[i]
+///   Δz_L\[i\] = (μ_new − s_L·z_L − Δx_aff·Δz_L_aff) / s_L − (z_L/s_L) · Δx\[i\]
 /// and the symmetric upper-bound expression with Δs_u = −Δx. Without this,
 /// the recovered Δz inherits an O(Δaff²) complementarity error that defeats
 /// the whole point of the predictor-corrector.
