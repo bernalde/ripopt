@@ -442,16 +442,11 @@ pub fn factor_with_inertia_correction(
             && (inertia.positive as isize - n as isize).unsigned_abs() <= 1
             && (inertia.negative as isize - m as isize).unsigned_abs() <= 1;
         if inertia_ok || approx_ok {
-            // For large systems, accept once inertia is correct. With a permissive
-            // pivot threshold (1e-6), small pivots are common and produce large
-            // factorization backward error. Iterative refinement in solve_for_direction
-            // recovers solve accuracy; the factorization just needs correct inertia.
-            if (n + m) >= 100 {
-                params.delta_w_last = 0.0;
-                params.degeneracy_count = 0;
-                return Ok((0.0, 0.0));
-            }
-            // For small systems: verify backward error is acceptable
+            // Always verify backward error. faer's sign-based inertia can pass
+            // rank-deficient KKT matrices with zero perturbation (AC-OPF angle
+            // gauge: J has a null direction, but all pivot signs match expected).
+            // The backward-error probe does a test solve and catches rank
+            // deficiency that inertia counts miss.
             if check_factorization_backward_error(kkt, solver) {
                 params.delta_w_last = 0.0;
                 params.degeneracy_count = 0;
@@ -699,16 +694,14 @@ pub fn solve_for_direction(
     delta_c_ic: f64,
 ) -> Result<(Vec<f64>, Vec<f64>), crate::linear_solver::SolverError> {
     let dim = kkt.dim;
-    // Refine against the assembled system (undoing IC perturbation) when IC was
-    // triggered AND assembly-time δ_c is present. The δ_c makes the assembled
-    // system non-singular, so undoing IC produces a well-conditioned target.
-    // When IC triggers for other reasons (indefinite Hessian without δ_c),
-    // the original system is ill-conditioned and refinement would diverge.
-    // Only use IC-undoing refinement for large systems (where backward error
-    // failures from near-zero pivots are the primary issue). Small systems
-    // with indefinite Hessians need IC perturbation and shouldn't be undone.
-    let use_ic_refinement = kkt.m > 0 && (kkt.n + kkt.m) >= 100
-        && (delta_w > 0.0 || delta_c_ic > 0.0);
+    // Ipopt measures residuals against the assembled *regularized* KKT matrix
+    // (IpPDFullSpaceSolver.cpp:701-732 + ComputeResidualRatio:795-820). The
+    // IC-phase (δ_w, δ_c_ic) are *part of* the system being solved, not a
+    // perturbation to be undone. If J is rank-deficient, δ_c_ic > 0 makes the
+    // assembled system non-singular and its residual ratio is near machine
+    // epsilon; Ipopt accepts that step without complaint.
+    let _ = (delta_w, delta_c_ic);
+    let use_ic_refinement = false;
 
     // NaN guard on RHS — if the RHS has NaN, the problem evaluation is broken
     if kkt.rhs.iter().any(|v| v.is_nan() || v.is_infinite()) {
