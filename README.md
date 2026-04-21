@@ -786,36 +786,41 @@ Current coverage by module:
 
 | Module                   | Line Coverage |
 |--------------------------|---------------|
-| slack_formulation.rs     | 99%           |
 | options.rs               | 100%          |
-| kkt.rs                   | 91%           |
-| filter.rs                | 96%           |
+| slack_formulation.rs     | 97%           |
+| warmstart.rs             | 97%           |
+| filter.rs                | 95%           |
 | restoration_nlp.rs       | 93%           |
-| sqp.rs                   | 92%           |
-| warmstart.rs             | 98%           |
-| sensitivity.rs           | 89%           |
-| preprocessing.rs         | 91%           |
-| convergence.rs           | 90%           |
-| c_api.rs                 | 91%           |
-| dense.rs (linear solver) | 90%           |
-| restoration.rs           | 90%           |
-| nl/header.rs             | 92%           |
-| banded.rs                | 92%           |
-| linear_solver/mod.rs     | 87%           |
-| sparse.rs                | 84%           |
-| lbfgs.rs                 | 76%           |
+| convergence.rs           | 92%           |
+| sensitivity.rs           | 91%           |
+| dense.rs (linear solver) | 91%           |
+| banded.rs                | 91%           |
+| nl/header.rs             | 91%           |
+| sqp.rs                   | 90%           |
+| preprocessing.rs         | 85%           |
+| linear_solver/mod.rs     | 84%           |
+| sparse.rs                | 82%           |
+| kkt.rs                   | 81%           |
+| restoration.rs           | 79%           |
+| multifrontal.rs          | 78%           |
 | nl/autodiff.rs           | 74%           |
-| nl/parser.rs             | 72%           |
-| multifrontal.rs          | 70%           |
-| augmented_lagrangian.rs  | 70%           |
-| iterative.rs             | 76%           |
-| linearity.rs             | 58%           |
-| ipm.rs                   | 57%           |
-| nl/problem_impl.rs       | 59%           |
-| nl/expr.rs               | 38%           |
-| hybrid.rs                | 36%           |
+| lbfgs.rs                 | 70%           |
+| nl/parser.rs             | 70%           |
+| augmented_lagrangian.rs  | 66%           |
+| c_api.rs                 | 61%           |
+| nl/problem_impl.rs       | 58%           |
+| linearity.rs             | 53%           |
+| ipm.rs                   | 52%           |
+| nl/expr.rs               | 37%           |
+| hybrid.rs                | 0%            |
+| iterative.rs             | 0%            |
 
-**Overall: 61% line coverage** (230 tests)
+**Overall: 62% line coverage** (248 tests)
+
+The `hybrid.rs` and `iterative.rs` modules implement opt-in linear
+solvers (`LinearSolverChoice::Hybrid`, `::Iterative`) that no test
+currently exercises — they are never selected by the default solver
+path. Their coverage is reported as 0% until dedicated tests land.
 
 ## Architecture
 
