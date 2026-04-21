@@ -23,17 +23,12 @@ pub enum ConvergenceStatus {
 pub struct ConvergenceInfo {
     /// Primal infeasibility: max |c_i(x)| for violated constraints.
     pub primal_inf: f64,
-    /// Dual infeasibility: ||grad_f + J^T y - z||_inf (using z_opt for scaled check).
+    /// Dual infeasibility: ||grad_f + J^T y - z_l + z_u||_inf using iterative z.
     pub dual_inf: f64,
     /// Dual infeasibility using iterative z with component-wise scaling (for unscaled gate).
     pub dual_inf_unscaled: f64,
-    /// Dual infeasibility using z_opt with component-wise scaling.
-    /// Fallback for unscaled gate when iterative z is corrupted by kappa_sigma safeguarding.
-    pub dual_inf_unscaled_opt: f64,
-    /// Complementarity: best of iterative z and z_opt.
+    /// Complementarity error using iterative z.
     pub compl_inf: f64,
-    /// Complementarity using z_opt only.
-    pub compl_inf_opt: f64,
     /// Current barrier parameter.
     pub mu: f64,
     /// Current objective value.
@@ -69,9 +64,7 @@ pub fn check_convergence(
     let compl_tol = options.tol * s_d;
 
     // Strict convergence: BOTH scaled AND unscaled must pass.
-    // Scaled check uses z_opt for dual_inf (fast convergence for LPs/QPs).
-    // Unscaled check uses iterative z for dual_inf (catches false convergence
-    // where z_opt absorbs gradient residuals into bound multipliers).
+    // All checks use iterative z (matches Ipopt's curr_dual_infeasibility).
     let scaled_ok = info.primal_inf <= primal_tol
         && info.dual_inf <= dual_tol
         && info.compl_inf <= compl_tol;
@@ -80,20 +73,6 @@ pub fn check_convergence(
         && info.compl_inf <= options.compl_inf_tol;
     if scaled_ok && unscaled_ok {
         return ConvergenceStatus::Converged;
-    }
-    // Fallback: when the scaled gate passes but the unscaled gate fails only
-    // because iterative z is corrupted (kappa_sigma safeguard inflation), try
-    // the unscaled gate with z_opt instead. This is safe because z_opt passing
-    // BOTH dual feasibility AND complementarity is strong evidence of a true
-    // optimum -- the complementarity check prevents z_opt from hiding a real
-    // infeasibility by assigning artificially large bound multipliers.
-    if scaled_ok {
-        let unscaled_opt_ok = info.primal_inf <= options.constr_viol_tol
-            && info.dual_inf_unscaled_opt <= options.dual_inf_tol
-            && info.compl_inf_opt <= options.compl_inf_tol;
-        if unscaled_opt_ok {
-            return ConvergenceStatus::Converged;
-        }
     }
 
     // Acceptable-level check matching Ipopt defaults
@@ -121,15 +100,6 @@ pub fn check_convergence(
         && consecutive_acceptable >= NEAR_TOL_ITERS
     {
         return ConvergenceStatus::Acceptable;
-    }
-    // Fallback near-tolerance check with z_opt (same reasoning as strict check)
-    if near_scaled_ok && consecutive_acceptable >= NEAR_TOL_ITERS {
-        let near_unscaled_opt_ok = info.primal_inf <= ACCEPTABLE_CONSTR_VIOL_TOL
-            && info.dual_inf_unscaled_opt <= ACCEPTABLE_DUAL_INF_TOL
-            && info.compl_inf_opt <= ACCEPTABLE_COMPL_INF_TOL;
-        if near_unscaled_opt_ok {
-            return ConvergenceStatus::Acceptable;
-        }
     }
 
     // Check divergence (use 1e50 — constrained problems can have large feasible objectives,
@@ -355,9 +325,7 @@ mod tests {
             primal_inf: 1e-10,
             dual_inf: 1e-10,
             dual_inf_unscaled: 1e-10,
-            dual_inf_unscaled_opt: 1e-10,
             compl_inf: 1e-10,
-            compl_inf_opt: 1e-10,
             mu: 1e-11,
             objective: 17.0,
             multiplier_sum: 0.0,
@@ -376,9 +344,7 @@ mod tests {
             primal_inf: 1e-3,
             dual_inf: 1e-3,
             dual_inf_unscaled: 1e-3,
-            dual_inf_unscaled_opt: 1e-3,
             compl_inf: 1e-3,
-            compl_inf_opt: 1e-3,
             mu: 0.01,
             objective: 17.0,
             multiplier_sum: 0.0,
@@ -397,9 +363,7 @@ mod tests {
             primal_inf: 1e-3,
             dual_inf: 1e-3,
             dual_inf_unscaled: 1e-3,
-            dual_inf_unscaled_opt: 1e-3,
             compl_inf: 1e-3,
-            compl_inf_opt: 1e-3,
             mu: 1e-11,
             objective: 1e51,
             multiplier_sum: 0.0,
@@ -418,9 +382,7 @@ mod tests {
             primal_inf: 1e-7,
             dual_inf: 1e-7,
             dual_inf_unscaled: 1e-7,
-            dual_inf_unscaled_opt: 1e-7,
             compl_inf: 1e-7,
-            compl_inf_opt: 1e-7,
             mu: 1e-8,
             objective: 5.0,
             multiplier_sum: 0.0,
@@ -440,9 +402,7 @@ mod tests {
             primal_inf: 1e-7,
             dual_inf: 1e-7,
             dual_inf_unscaled: 1e-7,
-            dual_inf_unscaled_opt: 1e-7,
             compl_inf: 1e-7,
-            compl_inf_opt: 1e-7,
             mu: 1e-8,
             objective: 5.0,
             multiplier_sum: 0.0,
@@ -463,9 +423,7 @@ mod tests {
             primal_inf: 1e-10,
             dual_inf: 5e-5, // Would fail without scaling
             dual_inf_unscaled: 5e-5,
-            dual_inf_unscaled_opt: 5e-5,
             compl_inf: 1e-10,
-            compl_inf_opt: 1e-10,
             mu: 1e-11,
             objective: 1.0,
             multiplier_sum: 1e6, // Large multipliers
@@ -484,7 +442,6 @@ mod tests {
         let info2 = ConvergenceInfo {
             dual_inf: 5e-6,
             dual_inf_unscaled: 5e-6,
-            dual_inf_unscaled_opt: 5e-6,
             ..info
         };
         assert_eq!(
@@ -495,88 +452,30 @@ mod tests {
 
     #[test]
     fn test_convergence_unscaled_gate_blocks_false_convergence() {
-        // z_opt says converged (dual_inf small), but iterative z says not (dual_inf_unscaled large).
-        // z_opt component-wise scaled also large (confirming real infeasibility).
+        // Scaled dual_inf small, but iterative dual_inf_unscaled large.
         let info = ConvergenceInfo {
             primal_inf: 1e-10,
-            dual_inf: 1e-10, // z_opt-based: looks converged
-            dual_inf_unscaled: 1.5, // iterative z: clearly not converged (> dual_inf_tol=1.0)
-            dual_inf_unscaled_opt: 1.5, // z_opt component-wise also large: real infeasibility
+            dual_inf: 1e-10,
+            dual_inf_unscaled: 1.5, // > dual_inf_tol=1.0
             compl_inf: 1e-10,
-            compl_inf_opt: 1e-10,
             mu: 1e-11,
             objective: 1.0,
             multiplier_sum: 0.0,
             multiplier_count: 0,
         };
         let opts = SolverOptions::default();
-        // Should NOT converge: both unscaled checks fail
         assert_eq!(
             check_convergence(&info, &opts, 0),
             ConvergenceStatus::NotConverged
         );
 
-        // Now with unscaled also passing
         let info2 = ConvergenceInfo {
-            dual_inf_unscaled: 0.5, // below dual_inf_tol=1.0
-            dual_inf_unscaled_opt: 0.5,
+            dual_inf_unscaled: 0.5,
             ..info
         };
         assert_eq!(
             check_convergence(&info2, &opts, 0),
             ConvergenceStatus::Converged
-        );
-    }
-
-    #[test]
-    fn test_convergence_zopt_fallback_on_corrupted_iterative_z() {
-        // Issue #7: iterative z corrupted by kappa_sigma, but z_opt is correct.
-        // Scaled gate passes (z_opt dual_inf is small).
-        // Unscaled gate with iterative z fails (du_u=100 >> dual_inf_tol=1.0).
-        // But z_opt component-wise scaled is small (du_u_opt=0), and z_opt
-        // complementarity is also small. Fallback should accept convergence.
-        let info = ConvergenceInfo {
-            primal_inf: 1e-10,
-            dual_inf: 1e-10,          // z_opt raw: converged
-            dual_inf_unscaled: 100.0,  // iterative z component-wise: corrupted!
-            dual_inf_unscaled_opt: 1e-10, // z_opt component-wise: converged
-            compl_inf: 1e-10,          // best of iterative/z_opt: fine
-            compl_inf_opt: 1e-10,      // z_opt complementarity: fine
-            mu: 1e-11,
-            objective: 26.0855,
-            multiplier_sum: 0.0,
-            multiplier_count: 0,
-        };
-        let opts = SolverOptions::default();
-        // Should converge via the z_opt fallback path
-        assert_eq!(
-            check_convergence(&info, &opts, 0),
-            ConvergenceStatus::Converged
-        );
-    }
-
-    #[test]
-    fn test_convergence_zopt_fallback_blocked_by_bad_complementarity() {
-        // z_opt dual is small, but z_opt complementarity is large.
-        // This means z_opt is absorbing gradient residuals with artificially
-        // large bound multipliers. The fallback should NOT accept this.
-        let info = ConvergenceInfo {
-            primal_inf: 1e-10,
-            dual_inf: 1e-10,
-            dual_inf_unscaled: 100.0,
-            dual_inf_unscaled_opt: 1e-10,
-            compl_inf: 1e-10,
-            compl_inf_opt: 0.1,       // z_opt complementarity is large: suspicious!
-            mu: 1e-11,
-            objective: 1.0,
-            multiplier_sum: 0.0,
-            multiplier_count: 0,
-        };
-        let opts = SolverOptions::default();
-        // Should NOT converge: z_opt complementarity fails unscaled gate
-        assert_eq!(
-            check_convergence(&info, &opts, 0),
-            ConvergenceStatus::NotConverged
         );
     }
 

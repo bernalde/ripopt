@@ -59,17 +59,10 @@ pub struct SolverDiagnostics {
     pub final_mu: f64,
     /// Final primal infeasibility.
     pub final_primal_inf: f64,
-    /// Final dual infeasibility (iterative z, used in unscaled gate).
+    /// Final dual infeasibility (iterative z).
     pub final_dual_inf: f64,
-    /// Final dual infeasibility (z_opt, used in scaled gate).
-    pub final_dual_inf_scaled: f64,
-    /// Final complementarity error (iterative z, equals mu in barrier mode).
+    /// Final complementarity error (iterative z).
     pub final_compl: f64,
-    /// Final complementarity error using z_opt (from stationarity). At a true
-    /// KKT point with inactive bounds, z_opt=0 and compl_opt=0 even when
-    /// barrier mu is still large (e.g. IPM stalls at high mu due to singular
-    /// Hessian). Used in late-early-out promotion.
-    pub final_compl_opt: f64,
     /// Dual scaling factor s_d.
     pub final_s_d: f64,
     /// Total wall-clock time in seconds.

@@ -1892,46 +1892,32 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     // Applied AFTER all fallbacks so the conservative retry has a chance to fix
     // wrong local minima before we promote them.
     //
-    // Uses z_opt-based dual infeasibility (`final_dual_inf_scaled`) rather than
-    // iterative z. At convergence, the iterative z can be polluted by the
-    // kappa_sigma safeguard (which keeps z*s in [mu/kappa_sigma, kappa_sigma*mu]
-    // — at mu=1e-11 with small slacks this can inflate z). The least-squares
-    // z_opt estimate instead asks "what multipliers would zero ∇L at the current
-    // x?" — if that's small, the iterate IS at a KKT point even if ripopt's
-    // internal z bookkeeping says otherwise. Observed on VESUVIOLS (ripopt x
-    // matches Ipopt x to 1e-12, but iterative-z du shows 3e-4).
-    //
-    // Also extended to MaxIterations: some problems like MGH10LS reach pr=du=co=0
-    // on the final iteration but the counter-based Acceptable check didn't
-    // accumulate 15 consecutive passes.
+    // Uses iterative-z residuals (Ipopt semantics). A stalled iterate that still
+    // meets the KKT gates per the honest residual is promoted to Optimal.
     if matches!(result.status, SolveStatus::NumericalError | SolveStatus::MaxIterations | SolveStatus::Acceptable) {
         let d = &result.diagnostics;
         let pr_ok = d.final_primal_inf <= options.constr_viol_tol;
-        // Use the tighter of iterative-z compl and z_opt compl. z_opt compl=0
-        // when bounds are inactive, which exposes true KKT convergence at
-        // iterates stuck at high mu due to Hessian singularity.
-        let co_ok = d.final_compl.min(d.final_compl_opt) <= options.compl_inf_tol;
-        // Strict Optimal via z_opt (tighter tol)
-        let du_strict_ok = d.final_dual_inf_scaled <= options.dual_inf_tol
-            && d.final_dual_inf_scaled <= options.tol * 1000.0;
+        let co_ok = d.final_compl <= options.compl_inf_tol;
+        let du_strict_ok = d.final_dual_inf <= options.dual_inf_tol
+            && d.final_dual_inf <= options.tol * 1000.0;
         if pr_ok && co_ok && du_strict_ok {
             if options.print_level >= 5 {
                 rip_log!(
-                    "ripopt: Late-optimal via z_opt (pr={:.2e}, du_opt={:.2e}, co={:.2e}), returning Optimal",
-                    d.final_primal_inf, d.final_dual_inf_scaled, d.final_compl
+                    "ripopt: Late-optimal (pr={:.2e}, du={:.2e}, co={:.2e}), returning Optimal",
+                    d.final_primal_inf, d.final_dual_inf, d.final_compl
                 );
             }
             result.status = SolveStatus::Optimal;
         } else if !matches!(result.status, SolveStatus::Acceptable) {
-            // Relaxed Acceptable via z_opt (Ipopt's acceptable_tol=1e-6)
-            let du_acc_ok = d.final_dual_inf_scaled <= 1e-6
+            // Relaxed Acceptable (Ipopt's acceptable_tol=1e-6)
+            let du_acc_ok = d.final_dual_inf <= 1e-6
                 && d.final_primal_inf <= 1e-2
-                && d.final_compl.min(d.final_compl_opt) <= 1e-2;
+                && d.final_compl <= 1e-2;
             if du_acc_ok {
                 if options.print_level >= 5 {
                     rip_log!(
-                        "ripopt: Late-acceptable via z_opt (pr={:.2e}, du_opt={:.2e}, co={:.2e}), returning Acceptable",
-                        d.final_primal_inf, d.final_dual_inf_scaled, d.final_compl
+                        "ripopt: Late-acceptable (pr={:.2e}, du={:.2e}, co={:.2e}), returning Acceptable",
+                        d.final_primal_inf, d.final_dual_inf, d.final_compl
                     );
                 }
                 result.status = SolveStatus::Acceptable;
@@ -2640,53 +2626,21 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         let primal_inf = state.constraint_violation();
         let primal_inf_max = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
 
-        // Compute z_opt from stationarity for the scaled convergence check.
-        // At optimality, grad_f + J^T y - z_l + z_u = 0.
-        // z_opt captures the true bound multiplier for active bounds.
-        //
-        // Complementarity gate: only use z_opt when z_opt * slack is consistent
-        // with the barrier problem (z*s ~ mu). If z_opt * slack >> mu, the point
-        // is not a barrier-optimal point and z_opt would hide a true infeasibility.
-        let (z_l_opt, z_u_opt) = {
-            let mut grad_jty = state.grad_f.clone();
-            for (idx, (&row, &col)) in
-                state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
-            {
-                grad_jty[col] += state.jac_vals[idx] * state.y[row];
-            }
-            let mut zl = vec![0.0; n];
-            let mut zu = vec![0.0; n];
-            let kappa_compl = 1e12;
-            for i in 0..n {
-                if grad_jty[i] > 0.0 && state.x_l[i].is_finite() {
-                    let s_l = (state.x[i] - state.x_l[i]).max(1e-20);
-                    if grad_jty[i] * s_l <= kappa_compl * state.mu.max(1e-20) {
-                        zl[i] = grad_jty[i];
-                    }
-                } else if grad_jty[i] < 0.0 && state.x_u[i].is_finite() {
-                    let s_u = (state.x_u[i] - state.x[i]).max(1e-20);
-                    if (-grad_jty[i]) * s_u <= kappa_compl * state.mu.max(1e-20) {
-                        zu[i] = -grad_jty[i];
-                    }
-                }
-            }
-            (zl, zu)
-        };
-
-        // Scaled dual infeasibility uses z_opt (for fast convergence detection)
+        // Dual infeasibility uses iterative z (matches Ipopt's curr_dual_infeasibility).
+        // This is the honest KKT residual ||grad_f + J^T y - z_L + z_U||_inf; if iterative z
+        // doesn't match grad_f + J^T y, the residual is large and iteration continues.
         let dual_inf = convergence::dual_infeasibility(
             &state.grad_f,
             &state.jac_rows,
             &state.jac_cols,
             &state.jac_vals,
             &state.y,
-            &z_l_opt,
-            &z_u_opt,
+            &state.z_l,
+            &state.z_u,
             n,
         );
 
-        // Unscaled dual infeasibility uses iterative z with component-wise scaling
-        // (catches false convergence while being insensitive to gradient magnitude)
+        // Component-wise scaled version for the unscaled gate (divide by 1+|grad_i|).
         let dual_inf_unscaled = convergence::dual_infeasibility_scaled(
             &state.grad_f,
             &state.jac_rows,
@@ -2700,13 +2654,6 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         let compl_inf = convergence::complementarity_error(
             &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
         );
-        // Also compute complementarity using z_opt (NLP multipliers from stationarity).
-        // When mu is stuck high, kappa_sigma safeguard inflates iterative z, making
-        // compl_inf huge even at the NLP optimum. z_opt correctly reflects the NLP solution.
-        let compl_inf_opt = convergence::complementarity_error(
-            &state.x, &state.x_l, &state.x_u, &z_l_opt, &z_u_opt, 0.0,
-        );
-        let compl_inf_best = compl_inf.min(compl_inf_opt);
 
         if options.print_level >= 3 {
             // Reprint header every 25 data rows for readability
@@ -2772,7 +2719,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 obj: state.obj / state.obj_scaling,
                 inf_pr: primal_inf,
                 inf_du: dual_inf,
-                compl: compl_inf_best,
+                compl: compl_inf,
                 mu: state.mu,
                 alpha_pr: state.alpha_primal,
                 alpha_du: state.alpha_dual,
@@ -2798,18 +2745,6 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             last_tau_used = None;
             last_soc_accepted = false;
         }
-
-        // z_opt component-wise scaled dual infeasibility (fallback for unscaled gate)
-        let dual_inf_unscaled_opt = convergence::dual_infeasibility_scaled(
-            &state.grad_f,
-            &state.jac_rows,
-            &state.jac_cols,
-            &state.jac_vals,
-            &state.y,
-            &z_l_opt,
-            &z_u_opt,
-            n,
-        );
 
         // Populate iterate snapshot for GetCurrentIterate/Violations access
         {
@@ -2900,15 +2835,13 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
         let multiplier_count = m + 2 * n;
 
-        // Check convergence (use best complementarity: min of iterative z and z_opt).
-        // Use max-norm primal_inf for convergence testing (per-constraint satisfaction).
+        // Check convergence. Use max-norm primal_inf (per-constraint satisfaction)
+        // and iterative-z dual_inf (honest Lagrangian residual, Ipopt-style).
         let conv_info = ConvergenceInfo {
             primal_inf: primal_inf_max,
             dual_inf,
             dual_inf_unscaled,
-            dual_inf_unscaled_opt,
-            compl_inf: compl_inf_best,
-            compl_inf_opt,
+            compl_inf,
             mu: state.mu,
             objective: state.obj,
             multiplier_sum,
@@ -2986,9 +2919,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         let avg_conv = ConvergenceInfo {
                             primal_inf: avg_pr, dual_inf: avg_du,
                             dual_inf_unscaled: avg_du,
-                            dual_inf_unscaled_opt: avg_du,
                             compl_inf: avg_compl,
-                            compl_inf_opt: avg_compl,
                             mu: state.mu, objective: state.obj,
                             multiplier_sum: avg_y.iter().map(|v| v.abs()).sum::<f64>()
                                 + avg_zl.iter().map(|v| v.abs()).sum::<f64>()
@@ -3072,9 +3003,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             primal_inf: conv_info.primal_inf,
                             dual_inf: snap_du,
                             dual_inf_unscaled: snap_du,
-                            dual_inf_unscaled_opt: snap_du,
                             compl_inf: snap_compl,
-                            compl_inf_opt: snap_compl,
                             mu: state.mu,
                             objective: state.obj,
                             multiplier_sum: snap_mult_sum,
@@ -3128,10 +3057,10 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         // acceptable_iter=15 for Acceptable status to fire.
         let meets_acc_scaled = primal_inf <= 1e-6
             && dual_inf <= 1e-6 * s_d_for_acc
-            && compl_inf_best <= 1e-6 * s_d_for_acc;
+            && compl_inf <= 1e-6 * s_d_for_acc;
         let meets_acc_unscaled = primal_inf <= 1e-2
             && dual_inf_unscaled <= 1e10
-            && compl_inf_best <= 1e-2;
+            && compl_inf <= 1e-2;
         if meets_acc_scaled && meets_acc_unscaled {
             state.consecutive_acceptable += 1;
         } else {
@@ -3251,7 +3180,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     let stall_near_tol = options.tol * 1000.0;
                     let stall_pr_ok = primal_inf_max <= stall_near_tol.max(10.0 * options.constr_viol_tol);
                     let stall_du_ok = dual_inf <= (stall_near_tol * s_d_for_acc).max(1e-2);
-                    let stall_co_ok = compl_inf_best <= (stall_near_tol * s_d_for_acc).max(1e-2);
+                    let stall_co_ok = compl_inf <= (stall_near_tol * s_d_for_acc).max(1e-2);
                     if stall_pr_ok && stall_du_ok && stall_co_ok {
                         // Near tolerance stall: try boosting mu if it's very small
                         // relative to primal_inf. This restores KKT regularization
@@ -3285,7 +3214,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             if options.print_level >= 3 {
                                 rip_log!(
                                     "ripopt: Fixed mode stall near tolerance (pr={:.2e}, du={:.2e}, co={:.2e}), forcing mu {:.2e} -> {:.2e}",
-                                    primal_inf, dual_inf, compl_inf_best, state.mu, new_mu
+                                    primal_inf, dual_inf, compl_inf, state.mu, new_mu
                                 );
                             }
                             state.mu = new_mu;
@@ -3306,15 +3235,15 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             // iterate.
                             let acc_pr_ok = primal_inf_max <= 1e-2;
                             let acc_du_ok = dual_inf <= 1e10;
-                            let acc_co_ok = compl_inf_best <= 1e-2;
+                            let acc_co_ok = compl_inf <= 1e-2;
                             let acc_scaled_ok = primal_inf_max <= 1e-6
                                 && dual_inf <= 1e-6 * s_d_for_acc
-                                && compl_inf_best <= 1e-6 * s_d_for_acc;
+                                && compl_inf <= 1e-6 * s_d_for_acc;
                             if acc_pr_ok && acc_du_ok && acc_co_ok && acc_scaled_ok {
                                 if options.print_level >= 3 {
                                     rip_log!(
                                         "ripopt: Stalled at acceptable tolerance (pr={:.2e}, du={:.2e}, co={:.2e}), returning Acceptable",
-                                        primal_inf, dual_inf, compl_inf_best
+                                        primal_inf, dual_inf, compl_inf
                                     );
                                 }
                                 return make_result(&state, SolveStatus::Acceptable);
@@ -3322,7 +3251,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             if options.print_level >= 3 {
                                 rip_log!(
                                     "ripopt: Stalled but near-tolerance (pr={:.2e}, du={:.2e}, co={:.2e}), returning NumericalError",
-                                    primal_inf, dual_inf, compl_inf_best
+                                    primal_inf, dual_inf, compl_inf
                                 );
                             }
                             return make_result(&state, SolveStatus::NumericalError);
@@ -3363,7 +3292,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         let opt_co = convergence::complementarity_error(
                             &state.x, &state.x_l, &state.x_u, &opt_zl, &opt_zu, 0.0,
                         );
-                        let opt_co_best = compl_inf_best.min(opt_co);
+                        let opt_co_best = compl_inf.min(opt_co);
                         let fmult: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
                             + opt_zl.iter().map(|v| v.abs()).sum::<f64>()
                             + opt_zu.iter().map(|v| v.abs()).sum::<f64>();
@@ -4275,7 +4204,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             if let Some(ref kkt) = kkt_system_opt {
                 // Compute a preliminary max step for the current direction
                 let tau_mcc = if mu_state.mode == MuMode::Free {
-                    let nlp_error = primal_inf + dual_inf + compl_inf_best;
+                    let nlp_error = primal_inf + dual_inf + compl_inf;
                     (1.0 - nlp_error).max(options.tau_min)
                 } else {
                     (1.0 - state.mu).max(options.tau_min)
@@ -4425,7 +4354,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         // Compute maximum step sizes using fraction-to-boundary rule.
         // Free mode: tau based on NLP error. Fixed mode: tau based on mu.
         let tau = if mu_state.mode == MuMode::Free {
-            let nlp_error = primal_inf + dual_inf + compl_inf_best;
+            let nlp_error = primal_inf + dual_inf + compl_inf;
             (1.0 - nlp_error).max(options.tau_min)
         } else {
             (1.0 - state.mu).max(options.tau_min)
@@ -5483,49 +5412,20 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
     }
 
-    // At max_iter: log convergence diagnostics using same z_opt as convergence check (with gate)
+    // At max_iter: log convergence diagnostics using iterative z (Ipopt semantics).
     if options.print_level >= 5 {
         let final_primal_inf = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
-        let (z_l_opt_final, z_u_opt_final) = {
-            let mut grad_jty = state.grad_f.clone();
-            for (idx, (&row, &col)) in
-                state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
-            {
-                grad_jty[col] += state.jac_vals[idx] * state.y[row];
-            }
-            let mut zl = vec![0.0; n];
-            let mut zu = vec![0.0; n];
-            let kc = 1e10;
-            for i in 0..n {
-                if grad_jty[i] > 0.0 && state.x_l[i].is_finite() {
-                    let sl = (state.x[i] - state.x_l[i]).max(1e-20);
-                    if grad_jty[i] * sl <= kc * state.mu.max(1e-20) {
-                        zl[i] = grad_jty[i];
-                    }
-                } else if grad_jty[i] < 0.0 && state.x_u[i].is_finite() {
-                    let su = (state.x_u[i] - state.x[i]).max(1e-20);
-                    if (-grad_jty[i]) * su <= kc * state.mu.max(1e-20) {
-                        zu[i] = -grad_jty[i];
-                    }
-                }
-            }
-            (zl, zu)
-        };
         let final_dual_inf = convergence::dual_infeasibility(
             &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-            &state.y, &z_l_opt_final, &z_u_opt_final, n,
+            &state.y, &state.z_l, &state.z_u, n,
         );
-        let final_dual_inf_unscaled = convergence::dual_infeasibility(
+        let final_dual_inf_unscaled = convergence::dual_infeasibility_scaled(
             &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
             &state.y, &state.z_l, &state.z_u, n,
         );
         let final_compl = convergence::complementarity_error(
             &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
         );
-        let final_compl_opt = convergence::complementarity_error(
-            &state.x, &state.x_l, &state.x_u, &z_l_opt_final, &z_u_opt_final, 0.0,
-        );
-        let final_compl_best = final_compl.min(final_compl_opt);
         let mult_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
             + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
             + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
@@ -5536,12 +5436,11 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             1.0
         };
         rip_log!(
-            "ripopt: MaxIter diag: pr={:.2e} du={:.2e}(t={:.2e}) du_u={:.2e}(t={:.0e}) co={:.2e} co_opt={:.2e} co_best={:.2e}(t={:.2e}/{:.2e}) mu={:.2e} sd={:.1} ac={}",
+            "ripopt: MaxIter diag: pr={:.2e} du={:.2e}(t={:.2e}) du_u={:.2e}(t={:.0e}) co={:.2e}(t={:.2e}) mu={:.2e} sd={:.1} ac={}",
             final_primal_inf,
             final_dual_inf, options.tol * s_d,
             final_dual_inf_unscaled, options.dual_inf_tol,
-            final_compl, final_compl_opt, final_compl_best,
-            100.0 * options.tol * s_d, 10.0 * options.compl_inf_tol,
+            final_compl, 10.0 * options.compl_inf_tol,
             state.mu, s_d, state.consecutive_acceptable,
         );
     }
@@ -6848,9 +6747,7 @@ fn try_active_set_solve<P: NlpProblem>(
         primal_inf,
         dual_inf,
         dual_inf_unscaled: dual_inf, // same z used for both
-        dual_inf_unscaled_opt: dual_inf,
         compl_inf,
-        compl_inf_opt: compl_inf,
         mu: 0.0, // at the solution, mu should be zero
         objective: state.obj,
         multiplier_sum,
@@ -6993,91 +6890,14 @@ fn make_result(state: &SolverState, status: SolveStatus) -> SolveResult {
         };
     }
 
-    // Compute optimal z from stationarity in scaled space: ∇f_s + J_s^T y_s - z_l_s + z_u_s = 0
-    //
-    // Use the better of state.y and LS-y (least-squares solution to
-    // J^T*y = -grad_f). When the IPM terminates abnormally, state.y can be
-    // polluted (inertia-escalated dy, incomplete updates). LS-y recovers the
-    // true multiplier if grad_f lies in range(J^T), turning reported du from
-    // O(1) to O(ε). Observed on HS83, ELATTAR, OET6/7.
-    let y_for_zopt = {
-        let mut best_y = state.y.clone();
-        // Current residual with state.y
-        let mut cur_res = state.grad_f.clone();
-        for (idx, (&row, &col)) in state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate() {
-            cur_res[col] += state.jac_vals[idx] * state.y[row];
-        }
-        let cur_res_norm = cur_res.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
-
-        // Use a fixed 1e-8 threshold (matches default tol) — only bother polishing
-        // when state.y's residual is above typical Optimal gate.
-        // Size-based threshold: dense Cholesky is O(min(m,n)^3). Use min(m,n)
-        // since we switch formulation. 800 gives ~0.5s worst case (once per solve).
-        let k_size = m.min(n);
-        if m > 0 && k_size <= 800 && cur_res_norm > 1e-8 {
-            if let Some(y_ls) = solve_ls_multipliers(
-                &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, m, n,
-            ) {
-                // Check residual with LS-y
-                let mut ls_res = state.grad_f.clone();
-                for (idx, (&row, &col)) in state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate() {
-                    ls_res[col] += state.jac_vals[idx] * y_ls[row];
-                }
-                let ls_res_norm = ls_res.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
-                // Only trust LS-y when:
-                //   1. residual is much better than state.y (>10× reduction AND below Optimal gate), AND
-                //   2. |y_ls| isn't pathologically large vs |state.y| (guards rank-deficient
-                //      normal-equations solutions that numerically reduce residual but
-                //      blow up compl_opt via absorbed components).
-                let y_ls_norm = y_ls.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
-                let y_state_norm = state.y.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
-                let y_magnitude_ok = y_state_norm < 1e-12  // state.y is ~0, trust LS
-                    || y_ls_norm <= y_state_norm * 100.0;
-                if ls_res_norm < cur_res_norm * 0.1
-                    && ls_res_norm < 1e-8
-                    && y_magnitude_ok
-                {
-                    best_y = y_ls;
-                }
-            }
-        }
-        best_y
-    };
-    let mut grad_jty = state.grad_f.clone();
-    for (idx, (&row, &col)) in state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate() {
-        grad_jty[col] += state.jac_vals[idx] * y_for_zopt[row];
-    }
-
-    // z from stationarity (scaled), then unscale: z_unscaled = z_scaled / obj_scaling
-    let mut z_l_opt_scaled = vec![0.0; n];
-    let mut z_u_opt_scaled = vec![0.0; n];
+    // Use iterative z for reported bound multipliers (Ipopt semantics).
+    // Unscale: z_unscaled = z_scaled / obj_scaling.
     let mut z_l_out = vec![0.0; n];
     let mut z_u_out = vec![0.0; n];
     for i in 0..n {
-        if grad_jty[i] > 0.0 && state.x_l[i].is_finite() {
-            z_l_opt_scaled[i] = grad_jty[i];
-            z_l_out[i] = grad_jty[i] / state.obj_scaling;
-        } else if grad_jty[i] < 0.0 && state.x_u[i].is_finite() {
-            z_u_opt_scaled[i] = -grad_jty[i];
-            z_u_out[i] = -grad_jty[i] / state.obj_scaling;
-        }
+        z_l_out[i] = state.z_l[i] / state.obj_scaling;
+        z_u_out[i] = state.z_u[i] / state.obj_scaling;
     }
-
-    // z_opt-based dual infeasibility (used in scaled convergence gate).
-    // Uses the (possibly polished) y_for_zopt so the residual reflects what's
-    // achievable at this x rather than the post-stall state.y.
-    diag.final_dual_inf_scaled = convergence::dual_infeasibility(
-        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-        &y_for_zopt, &z_l_opt_scaled, &z_u_opt_scaled, n,
-    );
-
-    // z_opt-based complementarity: at a true KKT point with inactive bounds,
-    // z_opt=0 for those indices so compl_opt=0 even if iterative-z compl=mu.
-    // Enables late-early-out promotion of iterates stuck at mu≫tol due to
-    // singular-Hessian inertia correction (e.g. CONCON, OPTCNTRL).
-    diag.final_compl_opt = convergence::complementarity_error(
-        &state.x, &state.x_l, &state.x_u, &z_l_opt_scaled, &z_u_opt_scaled, 0.0,
-    );
 
     // Unscale constraint multipliers: y_unscaled[i] = y_scaled[i] * g_scaling[i] / obj_scaling
     let mut y_out = state.y.clone();
