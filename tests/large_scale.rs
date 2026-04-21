@@ -245,6 +245,18 @@ fn large_scale_optimal_control_2500() {
 
 #[test]
 #[ignore]
+fn large_scale_poisson_k50() {
+    let problem = PoissonControl::new(50); // n=5000, m=2500, KKT=7500 — matches benchmark
+    let options = SolverOptions { max_wall_time: 60.0, tol: 1e-6, print_level: 3, max_iter: 500, ..SolverOptions::default() };
+    eprintln!("=== Poisson k=50 (n=5000, m=2500) ===");
+    let start = Instant::now();
+    let result = ripopt::solve(&problem, &options);
+    eprintln!("RESULT: status={:?}, iters={}, time={:.2}s", result.status, result.iterations, start.elapsed().as_secs_f64());
+    assert!(result.status == SolveStatus::Optimal, "got {:?}", result.status);
+}
+
+#[test]
+#[ignore]
 fn large_scale_poisson_control_2500() {
     let problem = PoissonControl::new(35); // n=2*35²=2450, m=35²=1225, KKT=3675
     let options = default_options();

@@ -5558,41 +5558,64 @@ fn attempt_soc<P: NlpProblem>(
         return None;
     }
 
-    // Compute constraint residual at trial point, respecting constraint type
+    let kappa_soc = 0.99;
+    let tau = (1.0 - state.mu).max(options.tau_min);
+
+    // c_soc starts at curr_c (constraint residual at current iterate) and
+    // accumulates alpha_primal_soc * trial_c each iter. Matches Ipopt
+    // IpFilterLSAcceptor.cpp:555-569.
     let mut c_soc = vec![0.0; m];
+    let mut latest_trial_c = vec![0.0; m];
     for i in 0..m {
         let is_equality = state.g_l[i].is_finite() && state.g_u[i].is_finite()
             && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
         if is_equality || state.g_l[i].is_finite() {
-            c_soc[i] = g_trial[i] - state.g_l[i];
+            c_soc[i] = state.g[i] - state.g_l[i];
+            latest_trial_c[i] = g_trial[i] - state.g_l[i];
         } else if state.g_u[i].is_finite() {
-            c_soc[i] = g_trial[i] - state.g_u[i];
+            c_soc[i] = state.g[i] - state.g_u[i];
+            latest_trial_c[i] = g_trial[i] - state.g_u[i];
         }
     }
 
-    let kappa_soc = 0.99;
+    let mut alpha_primal_soc = alpha;
     let mut theta_prev_soc = convergence::primal_infeasibility(g_trial, &state.g_l, &state.g_u);
 
     for _soc_iter in 0..options.max_soc {
-        // Modify RHS for SOC: replace primal residual with trial constraint residual
+        // Accumulate: c_soc += alpha_primal_soc * latest_trial_c
+        for i in 0..m {
+            c_soc[i] += alpha_primal_soc * latest_trial_c[i];
+        }
+
         let mut rhs_soc = kkt.rhs.clone();
         for i in 0..m {
             rhs_soc[n + i] = -c_soc[i];
         }
 
-        // Solve with same factored matrix
         let mut sol_soc = vec![0.0; n + m];
         if solver.solve(&rhs_soc, &mut sol_soc).is_err() {
             return None;
         }
-
         let dx_soc = &sol_soc[..n];
 
-        // Compute SOC trial point
+        // Fresh fraction-to-boundary alpha on dx_soc (Ipopt IpFilterLSAcceptor.cpp:617-620).
+        let mut alpha_new: f64 = 1.0;
+        for i in 0..n {
+            if state.x_l[i].is_finite() && dx_soc[i] < 0.0 {
+                let slack = state.x[i] - state.x_l[i];
+                alpha_new = alpha_new.min(-tau * slack / dx_soc[i]);
+            }
+            if state.x_u[i].is_finite() && dx_soc[i] > 0.0 {
+                let slack = state.x_u[i] - state.x[i];
+                alpha_new = alpha_new.min(tau * slack / dx_soc[i]);
+            }
+        }
+        alpha_primal_soc = alpha_new.clamp(0.0, 1.0);
+
         #[allow(clippy::needless_range_loop)]
         let mut x_soc = vec![0.0; n];
         for i in 0..n {
-            x_soc[i] = state.x[i] + alpha * dx_soc[i];
+            x_soc[i] = state.x[i] + alpha_primal_soc * dx_soc[i];
             if state.x_l[i].is_finite() {
                 x_soc[i] = x_soc[i].max(state.x_l[i] + 1e-14);
             }
@@ -5609,13 +5632,11 @@ fn attempt_soc<P: NlpProblem>(
 
         let theta_soc = convergence::primal_infeasibility(&g_soc, &state.g_l, &state.g_u);
 
-        // Stop SOC iterations if theta isn't decreasing sufficiently
         if theta_soc >= kappa_soc * theta_prev_soc {
             return None;
         }
         theta_prev_soc = theta_soc;
 
-        // Compute barrier objective
         let mut phi_soc = obj_soc;
         #[allow(clippy::needless_range_loop)]
         for i in 0..n {
@@ -5650,6 +5671,8 @@ fn attempt_soc<P: NlpProblem>(
             }
         }
 
+        // Pass ORIGINAL alpha (alpha_primal_test), not alpha_primal_soc.
+        // Matches Ipopt IpFilterLSAcceptor.cpp:629.
         let (acceptable, _) = filter.check_acceptability(
             theta_current,
             phi_current,
@@ -5660,17 +5683,17 @@ fn attempt_soc<P: NlpProblem>(
         );
 
         if acceptable {
-            return Some((x_soc, obj_soc, g_soc, alpha));
+            return Some((x_soc, obj_soc, g_soc, alpha_primal_soc));
         }
 
-        // Update c_soc for next SOC iteration (respecting constraint type)
+        // Update latest trial_c for next iter's accumulation.
         for i in 0..m {
             let is_equality = state.g_l[i].is_finite() && state.g_u[i].is_finite()
                 && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
             if is_equality || state.g_l[i].is_finite() {
-                c_soc[i] = g_soc[i] - state.g_l[i];
+                latest_trial_c[i] = g_soc[i] - state.g_l[i];
             } else if state.g_u[i].is_finite() {
-                c_soc[i] = g_soc[i] - state.g_u[i];
+                latest_trial_c[i] = g_soc[i] - state.g_u[i];
             }
         }
     }
@@ -5704,33 +5727,53 @@ fn attempt_soc_condensed<P: NlpProblem>(
         return None;
     }
 
-    // Compute constraint residual at trial point, respecting constraint type
+    let kappa_soc = 0.99;
+    let tau = (1.0 - state.mu).max(options.tau_min);
+
     let mut c_soc = vec![0.0; m];
+    let mut latest_trial_c = vec![0.0; m];
     for i in 0..m {
         let is_equality = state.g_l[i].is_finite() && state.g_u[i].is_finite()
             && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
         if is_equality || state.g_l[i].is_finite() {
-            c_soc[i] = g_trial[i] - state.g_l[i];
+            c_soc[i] = state.g[i] - state.g_l[i];
+            latest_trial_c[i] = g_trial[i] - state.g_l[i];
         } else if state.g_u[i].is_finite() {
-            c_soc[i] = g_trial[i] - state.g_u[i];
+            c_soc[i] = state.g[i] - state.g_u[i];
+            latest_trial_c[i] = g_trial[i] - state.g_u[i];
         }
     }
 
-    let kappa_soc = 0.99;
+    let mut alpha_primal_soc = alpha;
     let mut theta_prev_soc = convergence::primal_infeasibility(g_trial, &state.g_l, &state.g_u);
 
     for _soc_iter in 0..options.max_soc {
-        // Solve condensed system with modified constraint residual
+        for i in 0..m {
+            c_soc[i] += alpha_primal_soc * latest_trial_c[i];
+        }
+
         let dx_soc = match kkt::solve_condensed_soc(condensed, solver, &c_soc) {
             Ok(d) => d,
             Err(_) => return None,
         };
 
-        // Compute SOC trial point
+        let mut alpha_new: f64 = 1.0;
+        for i in 0..n {
+            if state.x_l[i].is_finite() && dx_soc[i] < 0.0 {
+                let slack = state.x[i] - state.x_l[i];
+                alpha_new = alpha_new.min(-tau * slack / dx_soc[i]);
+            }
+            if state.x_u[i].is_finite() && dx_soc[i] > 0.0 {
+                let slack = state.x_u[i] - state.x[i];
+                alpha_new = alpha_new.min(tau * slack / dx_soc[i]);
+            }
+        }
+        alpha_primal_soc = alpha_new.clamp(0.0, 1.0);
+
         #[allow(clippy::needless_range_loop)]
         let mut x_soc = vec![0.0; n];
         for i in 0..n {
-            x_soc[i] = state.x[i] + alpha * dx_soc[i];
+            x_soc[i] = state.x[i] + alpha_primal_soc * dx_soc[i];
             if state.x_l[i].is_finite() {
                 x_soc[i] = x_soc[i].max(state.x_l[i] + 1e-14);
             }
@@ -5747,13 +5790,11 @@ fn attempt_soc_condensed<P: NlpProblem>(
 
         let theta_soc = convergence::primal_infeasibility(&g_soc, &state.g_l, &state.g_u);
 
-        // Stop SOC iterations if theta isn't decreasing sufficiently
         if theta_soc >= kappa_soc * theta_prev_soc {
             return None;
         }
         theta_prev_soc = theta_soc;
 
-        // Compute barrier objective
         let mut phi_soc = obj_soc;
         #[allow(clippy::needless_range_loop)]
         for i in 0..n {
@@ -5798,17 +5839,16 @@ fn attempt_soc_condensed<P: NlpProblem>(
         );
 
         if acceptable {
-            return Some((x_soc, obj_soc, g_soc, alpha));
+            return Some((x_soc, obj_soc, g_soc, alpha_primal_soc));
         }
 
-        // Update c_soc for next SOC iteration (respecting constraint type)
         for i in 0..m {
             let is_equality = state.g_l[i].is_finite() && state.g_u[i].is_finite()
                 && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
             if is_equality || state.g_l[i].is_finite() {
-                c_soc[i] = g_soc[i] - state.g_l[i];
+                latest_trial_c[i] = g_soc[i] - state.g_l[i];
             } else if state.g_u[i].is_finite() {
-                c_soc[i] = g_soc[i] - state.g_u[i];
+                latest_trial_c[i] = g_soc[i] - state.g_u[i];
             }
         }
     }
@@ -5834,29 +5874,52 @@ fn attempt_soc_sparse_condensed<P: NlpProblem>(
     let m = state.m;
     if m == 0 { return None; }
 
+    let kappa_soc = 0.99;
+    let tau = (1.0 - state.mu).max(options.tau_min);
+
     let mut c_soc = vec![0.0; m];
+    let mut latest_trial_c = vec![0.0; m];
     for i in 0..m {
         let is_equality = state.g_l[i].is_finite() && state.g_u[i].is_finite()
             && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
         if is_equality || state.g_l[i].is_finite() {
-            c_soc[i] = g_trial[i] - state.g_l[i];
+            c_soc[i] = state.g[i] - state.g_l[i];
+            latest_trial_c[i] = g_trial[i] - state.g_l[i];
         } else if state.g_u[i].is_finite() {
-            c_soc[i] = g_trial[i] - state.g_u[i];
+            c_soc[i] = state.g[i] - state.g_u[i];
+            latest_trial_c[i] = g_trial[i] - state.g_u[i];
         }
     }
 
-    let kappa_soc = 0.99;
+    let mut alpha_primal_soc = alpha;
     let mut theta_prev_soc = convergence::primal_infeasibility(g_trial, &state.g_l, &state.g_u);
 
     for _soc_iter in 0..options.max_soc {
+        for i in 0..m {
+            c_soc[i] += alpha_primal_soc * latest_trial_c[i];
+        }
+
         let dx_soc = match kkt::solve_sparse_condensed_soc(condensed, solver, &c_soc) {
             Ok(d) => d,
             Err(_) => return None,
         };
 
+        let mut alpha_new: f64 = 1.0;
+        for i in 0..n {
+            if state.x_l[i].is_finite() && dx_soc[i] < 0.0 {
+                let slack = state.x[i] - state.x_l[i];
+                alpha_new = alpha_new.min(-tau * slack / dx_soc[i]);
+            }
+            if state.x_u[i].is_finite() && dx_soc[i] > 0.0 {
+                let slack = state.x_u[i] - state.x[i];
+                alpha_new = alpha_new.min(tau * slack / dx_soc[i]);
+            }
+        }
+        alpha_primal_soc = alpha_new.clamp(0.0, 1.0);
+
         let mut x_soc = vec![0.0; n];
         for i in 0..n {
-            x_soc[i] = state.x[i] + alpha * dx_soc[i];
+            x_soc[i] = state.x[i] + alpha_primal_soc * dx_soc[i];
             if state.x_l[i].is_finite() { x_soc[i] = x_soc[i].max(state.x_l[i] + 1e-14); }
             if state.x_u[i].is_finite() { x_soc[i] = x_soc[i].min(state.x_u[i] - 1e-14); }
         }
@@ -5899,15 +5962,15 @@ fn attempt_soc_sparse_condensed<P: NlpProblem>(
         let (acceptable, _) = filter.check_acceptability(
             theta_current, phi_current, theta_soc, phi_soc, grad_phi_step, alpha,
         );
-        if acceptable { return Some((x_soc, obj_soc, g_soc, alpha)); }
+        if acceptable { return Some((x_soc, obj_soc, g_soc, alpha_primal_soc)); }
 
         for i in 0..m {
             let is_equality = state.g_l[i].is_finite() && state.g_u[i].is_finite()
                 && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
             if is_equality || state.g_l[i].is_finite() {
-                c_soc[i] = g_soc[i] - state.g_l[i];
+                latest_trial_c[i] = g_soc[i] - state.g_l[i];
             } else if state.g_u[i].is_finite() {
-                c_soc[i] = g_soc[i] - state.g_u[i];
+                latest_trial_c[i] = g_soc[i] - state.g_u[i];
             }
         }
     }
@@ -5931,6 +5994,7 @@ fn apply_restoration_success<P: NlpProblem>(
 ) {
     state.x.copy_from_slice(x_new);
     state.alpha_primal = 0.0;
+
     let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
     if let Some(ref mut lbfgs) = lbfgs_state {
         let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(

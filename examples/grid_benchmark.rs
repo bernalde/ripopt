@@ -91,7 +91,8 @@ struct BenchEntry {
 }
 
 fn solve_ripopt<P: NlpProblem>(problem: &P, tol: f64, max_iter: usize) -> SolveResult {
-    let options = SolverOptions { tol, max_iter, max_wall_time: 60.0, print_level: 0, ..SolverOptions::default() };
+    let plvl = std::env::var("RIPOPT_PRINT_LEVEL").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let options = SolverOptions { tol, max_iter, max_wall_time: 60.0, print_level: plvl, ..SolverOptions::default() };
     let t0 = Instant::now();
     let result = ripopt::solve(problem, &options);
     let elapsed = t0.elapsed().as_secs_f64();
