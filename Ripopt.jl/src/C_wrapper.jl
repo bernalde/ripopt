@@ -135,6 +135,7 @@ function CreateRipoptProblem(
         g_U::Ptr{Float64},
         nele_jac::Cint,
         nele_hess::Cint,
+        Cint(0)::Cint,            # index_style: 0 = C (0-based) indexing
         eval_f::Ptr{Cvoid},
         eval_grad_f::Ptr{Cvoid},
         eval_g::Ptr{Cvoid},
