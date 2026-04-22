@@ -53,9 +53,9 @@ When a constraint is infeasible ($s_{L,i} < 0$), no barrier term exists and the 
 ** Source Code References
 
 - KKT assembly function: [[../src/kkt.rs::52][src/kkt.rs:52]] (=assemble_kkt=)
-- $\Sigma_s$ computation and (2,2) block: [[../src/kkt.rs::153][src/kkt.rs:153]] (=let mut sigma_s = 0.0=)
-- (2,2) block entry written: [[../src/kkt.rs::200][src/kkt.rs:200]] (=matrix.add(n + i, n + i, -sigma_s_inv)=)
-- Mathematical derivation comment: [[../src/kkt.rs::134][src/kkt.rs:134]]
+- $\Sigma_s$ computation and (2,2) block: [[../src/kkt.rs::162][src/kkt.rs:162]] (=let mut sigma_s = 0.0=)
+- (2,2) block entry written: [[../src/kkt.rs::209][src/kkt.rs:209]] (=matrix.add(n + i, n + i, -sigma_s_inv)=)
+- Mathematical derivation comment: [[../src/kkt.rs::106][src/kkt.rs:106]]
 
 ** Condensed KKT via Schur Complement
 
@@ -63,50 +63,42 @@ When $m \ge 2n$, the KKT system is reduced via Schur complement elimination of $
 
 For equality constraints with zero $(2,2)$ entry, a stiff-spring penalty of $-10^{-16}$ prevents dropping them from the Schur complement.
 
-- =CondensedKktSystem= struct: [[../src/kkt.rs::944][src/kkt.rs:944]]
-- =assemble_condensed_kkt= function: [[../src/kkt.rs::970][src/kkt.rs:970]]
-- Schur complement assembly ($S = H + \Sigma + J^T D_c^{-1} J$): [[../src/kkt.rs::1079][src/kkt.rs:1079]]
-- Threshold ($m \ge 2n$) in solver: [[../src/ipm.rs::3169][src/ipm.rs:3169]]
+- =CondensedKktSystem= struct: [[../src/kkt.rs::1107][src/kkt.rs:1107]]
+- =assemble_condensed_kkt= function: [[../src/kkt.rs::1133][src/kkt.rs:1133]]
+- Schur complement assembly ($S = H + \Sigma + J^T D_c^{-1} J$): [[../src/kkt.rs::1242][src/kkt.rs:1242]]
+- Threshold ($m \ge 2n$) in solver: [[../src/ipm.rs::3432][src/ipm.rs:3432]]
 
-* Convergence with Stationarity-Based Bound Multipliers
+* Convergence Test
 
 ** Algorithm Description
 
-Without explicit slack variables, the iterative bound multipliers $z_L, z_U$ can exhibit inflation (from $\kappa_\sigma$ safeguarding) or oscillation (at degenerate points). The algorithm computes "optimal" bound multipliers $z_{\text{opt}}$ directly from the KKT stationarity condition:
+ripopt uses the same convergence test as Ipopt 3.14.x: two independent checks on the iterative multipliers, both of which must pass at the current iterate for =Optimal= status. Earlier ripopt releases computed auxiliary stationarity-based bound multipliers $z_{\text{opt}}$ and used them in a separate scaled gate; v0.7.0 dropped that machinery after confirming that the iterative $z_L, z_U$ (with fraction-to-boundary updates and Ipopt's $\kappa_\sigma$ safeguarding) are sufficient once the barrier subproblem has been driven to a small $\mu$.
 
-1. Compute the stationarity residual $r_i = \nabla_i f + (J^T y)_i$ for each variable.
-2. If $r_i > 0$ and a lower bound exists, set $z_{L,\text{opt},i} = r_i$ (subject to complementarity gate).
-3. If $r_i < 0$ and an upper bound exists, set $z_{U,\text{opt},i} = -r_i$ (subject to complementarity gate).
-4. Otherwise, $z_{\text{opt},i} = 0$ and the residual contributes to dual infeasibility.
+*** Dual Scaling $s_d$
 
-*** Complementarity Gate
+Following Ipopt, the scaled tolerances for the dual-infeasibility and complementarity gates are divided by
 
-The complementarity gate prevents false convergence by rejecting $z_{\text{opt}}$ values that are inconsistent with the barrier problem:
+$$s_d = \max\!\left(s_{\max},\; \frac{\|y\|_1 + \|z_L\|_1 + \|z_U\|_1}{n + m}\right) / s_{\max},$$
 
-$$z_{\text{opt},i} \cdot s_i \le \kappa_{\text{compl}} \cdot \mu$$
+with $s_{\max} = 100$ and $s_d$ capped at $10^4$ to prevent exploding multipliers from masking a non-converged iterate.
 
-with $\kappa_{\text{compl}} = 10^{12}$. As $\mu \to 0$, the gate tightens, eventually requiring $z_{\text{opt}} \cdot s \approx 0$.
+*** Two-Gate Test
 
-*** Two-Layer Convergence Test
+Convergence at the user tolerance $\epsilon$ requires *both*:
 
-Convergence requires both:
-1. A *scaled check* using $z_{\text{opt}}$ for dual infeasibility.
-2. An *unscaled check* using iterative $z$ against a relaxed tolerance ($\epsilon_{\text{dual}} = 100$).
+1. *Scaled gate*: $E_\mu / s_d \le \epsilon$ for dual infeasibility and complementarity; primal infeasibility against $\epsilon$ directly.
+2. *Unscaled gate*: primal infeasibility $\le$ =constr_viol_tol=, dual infeasibility $\le$ =dual_inf_tol=, complementarity $\le$ =compl_inf_tol=.
 
-For complementarity, the algorithm takes $\min(C_z, C_{z_{\text{opt}}})$ to handle both inflated iterative $z$ and problematic $z_{\text{opt}}$.
+All three residuals use the iterative $z$ values (matching Ipopt's =curr_dual_infeasibility=). An *acceptable* level mirroring Ipopt's defaults (=acceptable_tol= $=10^{-6}$, 15 consecutive iterations, relaxed unscaled tolerances of $10^{-2}$) is also tracked, but ripopt returns =Optimal= only when the strict two-gate test passes at the user tolerance.
 
 ** Source Code References
 
-- Stationarity-based $z_{\text{opt}}$ computation: [[../src/ipm.rs::2515][src/ipm.rs:2515]] (comment: =// Compute z_opt from stationarity=)
-- $z_{\text{opt}}$ block: [[../src/ipm.rs::2522][src/ipm.rs:2522]] (=let (z_l_opt, z_u_opt) = {=)
-- $J^T y$ accumulation: [[../src/ipm.rs::2524][src/ipm.rs:2524]]
-- Complementarity gate ($\kappa_{\text{compl}} = 10^{12}$): [[../src/ipm.rs::2531][src/ipm.rs:2531]]
-- Gate condition: [[../src/ipm.rs::2535][src/ipm.rs:2535]] (=if grad_jty[i] * s_l <= kappa_compl * state.mu=)
-- =check_convergence= function: [[../src/convergence.rs::51][src/convergence.rs:51]]
+- =check_convergence= function: [[../src/convergence.rs::46][src/convergence.rs:46]]
 - =ConvergenceInfo= struct: [[../src/convergence.rs::23][src/convergence.rs:23]]
-- Scaled check: [[../src/convergence.rs::75][src/convergence.rs:75]]
-- Unscaled check: [[../src/convergence.rs::78][src/convergence.rs:78]]
-- Acceptable tolerance checks (internal, for best-du tracking): [[../src/convergence.rs::106][src/convergence.rs:106]]
+- Dual scaling $s_d$: [[../src/convergence.rs::56][src/convergence.rs:56]]
+- Scaled gate: [[../src/convergence.rs::68][src/convergence.rs:68]]
+- Unscaled gate: [[../src/convergence.rs::71][src/convergence.rs:71]]
+- Acceptable-level defaults (internal, for best-du tracking): [[../src/convergence.rs::92][src/convergence.rs:92]]
 
 * Two-Phase Restoration with Multi-Attempt Recovery
 
@@ -146,23 +138,23 @@ After successful restoration: $z_i = \mu/s_i$ (capped at $10^3$), $y_i = 0$, bar
 
 - =RestorationPhase= struct: [[../src/restoration.rs::13][src/restoration.rs:13]]
 - Main GN loop (=restore= function): [[../src/restoration.rs::42][src/restoration.rs:42]]
-- Gauss-Newton step computation: [[../src/restoration.rs::408][src/restoration.rs:408]] (=gauss_newton_step=)
-- Normal equations $J_a J_a^T$: [[../src/restoration.rs::429][src/restoration.rs:429]]
-- Gradient descent fallback: [[../src/restoration.rs::223][src/restoration.rs:223]]
+- Gauss-Newton step computation: [[../src/restoration.rs::431][src/restoration.rs:431]] (=gauss_newton_step=)
+- Normal equations $J_a J_a^T$: [[../src/restoration.rs::452][src/restoration.rs:452]]
+- Gradient descent fallback: [[../src/restoration.rs::229][src/restoration.rs:229]]
 - =RestorationNlp= struct: [[../src/restoration_nlp.rs::18][src/restoration_nlp.rs:18]]
 - =RestorationNlp::new=: [[../src/restoration_nlp.rs::47][src/restoration_nlp.rs:47]]
-- Objective implementation ($\rho \Sigma + \eta/2 \|D_R\|^2$): [[../src/restoration_nlp.rs::185][src/restoration_nlp.rs:185]]
-- NLP restoration invocation: [[../src/ipm.rs::4425][src/ipm.rs:4425]] (=attempt_nlp_restoration=)
-- NLP restoration triggered at fail_count==2: [[../src/ipm.rs::4423][src/ipm.rs:4423]]
-- Multi-attempt recovery loop: [[../src/ipm.rs::4498][src/ipm.rs:4498]]
-- $\mu$ factors cycle: [[../src/ipm.rs::4496][src/ipm.rs:4496]] (=[10.0, 0.1, 100.0, 0.01, 1000.0, 0.001]=)
-- Mode switch (attempt 1): [[../src/ipm.rs::4499][src/ipm.rs:4499]]
-- $x$ perturbation (attempts 3+): [[../src/ipm.rs::4533][src/ipm.rs:4533]]
-- Post-restoration state reset: [[../src/ipm.rs::5524][src/ipm.rs:5524]] (=apply_restoration_success=)
-- Multiplier reset: [[../src/ipm.rs::5548][src/ipm.rs:5548]]
-- Filter reset: [[../src/ipm.rs::5631][src/ipm.rs:5631]]
-- $\mu$ recomputed: [[../src/ipm.rs::5637][src/ipm.rs:5637]]
-- Mode reset to Free: [[../src/ipm.rs::5644][src/ipm.rs:5644]]
+- Objective implementation ($\rho \Sigma + \eta/2 \|D_R\|^2$): [[../src/restoration_nlp.rs::196][src/restoration_nlp.rs:196]]
+- NLP restoration invocation: [[../src/ipm.rs::4747][src/ipm.rs:4747]] (=attempt_nlp_restoration=)
+- NLP restoration triggered at fail_count==2: [[../src/ipm.rs::4745][src/ipm.rs:4745]]
+- Multi-attempt recovery loop: [[../src/ipm.rs::4820][src/ipm.rs:4820]]
+- $\mu$ factors cycle: [[../src/ipm.rs::4818][src/ipm.rs:4818]] (=[10.0, 0.1, 100.0, 0.01, 1000.0, 0.001]=)
+- Mode switch (attempt 1): [[../src/ipm.rs::4822][src/ipm.rs:4822]]
+- $x$ perturbation (attempts 3+): [[../src/ipm.rs::4855][src/ipm.rs:4855]]
+- Post-restoration state reset: [[../src/ipm.rs::5996][src/ipm.rs:5996]] (=apply_restoration_success=)
+- Multiplier reset: [[../src/ipm.rs::6030][src/ipm.rs:6030]]
+- Filter reset: [[../src/ipm.rs::6123][src/ipm.rs:6123]]
+- $\mu$ recomputed: [[../src/ipm.rs::6129][src/ipm.rs:6129]]
+- Mode reset to Free: [[../src/ipm.rs::6137][src/ipm.rs:6137]]
 
 * Automatic NE-to-LS Reformulation
 
@@ -197,12 +189,12 @@ For square systems ($m = n$), if the LS reformulation returns =LocalInfeasibilit
 
 ** Source Code References
 
-- NE detection function: [[../src/ipm.rs::1038][src/ipm.rs:1038]] (=detect_ne_problem=)
-- Detection trigger in =solve=: [[../src/ipm.rs::1231][src/ipm.rs:1231]]
-- =LeastSquaresProblem= struct: [[../src/ipm.rs::815][src/ipm.rs:815]]
-- Full Hessian (=hessian_values=): [[../src/ipm.rs::936][src/ipm.rs:936]]
-- $J^T J$ (Gauss-Newton term): [[../src/ipm.rs::948][src/ipm.rs:948]]
-- $\sum r_i \nabla^2 g_i$ (second-order correction): [[../src/ipm.rs::970][src/ipm.rs:970]]
+- NE detection function: [[../src/ipm.rs::1077][src/ipm.rs:1077]] (=detect_ne_problem=)
+- Detection trigger in =solve=: [[../src/ipm.rs::1277][src/ipm.rs:1277]]
+- =LeastSquaresProblem= struct: [[../src/ipm.rs::861][src/ipm.rs:861]]
+- Full Hessian (=hessian_values=): [[../src/ipm.rs::978][src/ipm.rs:978]]
+- $J^T J$ (Gauss-Newton term): [[../src/ipm.rs::1003][src/ipm.rs:1003]]
+- $\sum r_i \nabla^2 g_i$ (second-order correction): [[../src/ipm.rs::1010][src/ipm.rs:1010]]
 
 * Multi-Solver Fallback Architecture
 
@@ -228,17 +220,17 @@ If no dual infeasibility improvement occurs for 500+ iterations, the best-du poi
 
 - L-BFGS solver entry: [[../src/lbfgs.rs::24][src/lbfgs.rs:24]] (=pub fn solve=)
 - L-BFGS memory size: [[../src/lbfgs.rs::13][src/lbfgs.rs:13]] (=LBFGS_M = 10=)
-- AL solver entry: [[../src/augmented_lagrangian.rs::186][src/augmented_lagrangian.rs:186]] (=pub fn solve=)
+- AL solver entry: [[../src/augmented_lagrangian.rs::198][src/augmented_lagrangian.rs:198]] (=pub fn solve=)
 - =SlackFormulation= struct: [[../src/slack_formulation.rs::17][src/slack_formulation.rs:17]]
 - =SlackFormulation::new=: [[../src/slack_formulation.rs::34][src/slack_formulation.rs:34]]
 - Slack =NlpProblem= impl: [[../src/slack_formulation.rs::74][src/slack_formulation.rs:74]]
-- Slack fallback trigger: [[../src/ipm.rs::1646][src/ipm.rs:1646]]
-- Best-du initialization: [[../src/ipm.rs::2260][src/ipm.rs:2260]]
-- Best-du update: [[../src/ipm.rs::2852][src/ipm.rs:2852]]
-- Best-du restore at max_iter: [[../src/ipm.rs::2443][src/ipm.rs:2443]]
-- Dual stagnation detection: [[../src/ipm.rs::2419][src/ipm.rs:2419]]
-- Stagnation threshold (500 iters): [[../src/ipm.rs::2435][src/ipm.rs:2435]]
-- Stagnation restore: [[../src/ipm.rs::2443][src/ipm.rs:2443]]
+- Slack fallback trigger: [[../src/ipm.rs::1717][src/ipm.rs:1717]]
+- Best-du initialization: [[../src/ipm.rs::2374][src/ipm.rs:2374]]
+- Best-du update: [[../src/ipm.rs::3071][src/ipm.rs:3071]]
+- Best-du restore at max_iter: [[../src/ipm.rs::3358][src/ipm.rs:3358]]
+- Dual stagnation detection: [[../src/ipm.rs::2533][src/ipm.rs:2533]]
+- Stagnation threshold (500 iters): [[../src/ipm.rs::2549][src/ipm.rs:2549]]
+- Stagnation restore: [[../src/ipm.rs::2557][src/ipm.rs:2557]]
 
 * Adaptive Barrier Parameter
 
@@ -268,11 +260,11 @@ When no variable has finite bounds, $\mu = \mu_{\min} = 10^{-11}$ immediately.
 
 ** Source Code References
 
-- =MuMode= enum: [[../src/ipm.rs::236][src/ipm.rs:236]]
-- =MuState= struct: [[../src/ipm.rs::244][src/ipm.rs:244]]
-- Main barrier update block: [[../src/ipm.rs::4784][src/ipm.rs:4784]]
-- Free mode oracle ($\bar{c}/\kappa$): [[../src/ipm.rs::4883][src/ipm.rs:4883]]
-- Fixed mode decrease: [[../src/ipm.rs::4958][src/ipm.rs:4958]]
+- =MuMode= enum: [[../src/ipm.rs::245][src/ipm.rs:245]]
+- =MuState= struct: [[../src/ipm.rs::253][src/ipm.rs:253]]
+- Main barrier update block: [[../src/ipm.rs::5148][src/ipm.rs:5148]]
+- Free mode oracle ($\bar{c}/\kappa$): [[../src/ipm.rs::5274][src/ipm.rs:5274]]
+- Fixed mode decrease: [[../src/ipm.rs::5356][src/ipm.rs:5356]]
 
 * Filter Line Search
 
@@ -299,12 +291,12 @@ Reject trial points where $\phi_{\text{trial}} > \phi_{\text{current}} + 5(1 + |
 - =switching_condition=: [[../src/filter.rs::86][src/filter.rs:86]]
 - =armijo_condition=: [[../src/filter.rs::102][src/filter.rs:102]]
 - =check_acceptability=: [[../src/filter.rs::133][src/filter.rs:133]]
-- =fraction_to_boundary=: [[../src/filter.rs::263][src/filter.rs:263]]
-- Full KKT SOC: [[../src/ipm.rs::5151][src/ipm.rs:5151]] (=attempt_soc=)
-- Condensed SOC: [[../src/ipm.rs::5296][src/ipm.rs:5296]] (=attempt_soc_condensed=)
-- SOC trigger on backtracking: [[../src/ipm.rs::4280][src/ipm.rs:4280]]
-- $\kappa_{\text{soc}}$ check (full): [[../src/ipm.rs::5222][src/ipm.rs:5222]]
-- $\kappa_{\text{soc}}$ check (condensed): [[../src/ipm.rs::5358][src/ipm.rs:5358]]
+- =fraction_to_boundary=: [[../src/filter.rs::270][src/filter.rs:270]]
+- Full KKT SOC: [[../src/ipm.rs::5554][src/ipm.rs:5554]] (=attempt_soc=)
+- Condensed SOC: [[../src/ipm.rs::5724][src/ipm.rs:5724]] (=attempt_soc_condensed=)
+- SOC trigger on backtracking: [[../src/ipm.rs::4593][src/ipm.rs:4593]]
+- $\kappa_{\text{soc}}$ check (full): [[../src/ipm.rs::5649][src/ipm.rs:5649]]
+- $\kappa_{\text{soc}}$ check (condensed): [[../src/ipm.rs::5807][src/ipm.rs:5807]]
 
 * Linear Algebra
 
@@ -360,12 +352,12 @@ Up to 3 rounds of iterative refinement with tolerance $10^{-12}$.
 - =solve_internal=: [[../src/linear_solver/dense.rs::351][src/linear_solver/dense.rs:351]]
 
 *** Inertia Correction and Search Direction
-- =InertiaCorrectionParams= struct: [[../src/kkt.rs::324][src/kkt.rs:324]]
-- =factor_with_inertia_correction=: [[../src/kkt.rs::405][src/kkt.rs:405]]
-- Perturbation loop: [[../src/kkt.rs::571][src/kkt.rs:571]]
-- Proceed-on-failure logic: [[../src/kkt.rs::629][src/kkt.rs:629]]
-- =solve_for_direction= (iterative refinement): [[../src/kkt.rs::686][src/kkt.rs:686]]
-- Refinement loop: [[../src/kkt.rs::730][src/kkt.rs:730]]
+- =InertiaCorrectionParams= struct: [[../src/kkt.rs::333][src/kkt.rs:333]]
+- =factor_with_inertia_correction=: [[../src/kkt.rs::414][src/kkt.rs:414]]
+- Perturbation loop: [[../src/kkt.rs::575][src/kkt.rs:575]]
+- Proceed-on-failure logic: [[../src/kkt.rs::633][src/kkt.rs:633]]
+- =solve_for_direction= (iterative refinement): [[../src/kkt.rs::690][src/kkt.rs:690]]
+- Refinement loop: [[../src/kkt.rs::732][src/kkt.rs:732]]
 
 * Implementation
 
@@ -373,7 +365,7 @@ Up to 3 rounds of iterative refinement with tolerance $10^{-12}$.
 
 The =NlpProblem= trait defines a buffer-filling interface for optimization problems. All evaluation methods take pre-allocated slices to avoid heap allocation in the hot loop.
 
-- =NlpProblem= trait: [[../src/problem.rs::5][src/problem.rs:5]]
+- =NlpProblem= trait: [[../src/problem.rs::17][src/problem.rs:17]]
 
 ** Public API
 
@@ -381,10 +373,10 @@ The public API consists of two functions:
 - =solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult= for standard optimization.
 - =solve_with_sensitivity<P: ParametricNlpProblem>(problem: &P, options: &SolverOptions) -> (SolveResult, SensitivityContext)= for optimization with parametric sensitivity analysis.
 
-- =solve= function: [[../src/lib.rs::102][src/lib.rs:102]]
-- =solve_with_sensitivity= function: [[../src/lib.rs::107][src/lib.rs:107]]
-- Internal solver entry: [[../src/ipm.rs::1182][src/ipm.rs:1182]] (dispatches NE-to-LS, fallbacks, then =solve_ipm=)
-- =solve_ipm= (core IPM loop): [[../src/ipm.rs::2009][src/ipm.rs:2009]]
+- =solve= function: [[../src/lib.rs::107][src/lib.rs:107]]
+- =solve_with_sensitivity= function: [[../src/lib.rs::112][src/lib.rs:112]]
+- Internal solver entry: [[../src/ipm.rs::1228][src/ipm.rs:1228]] (dispatches NE-to-LS, fallbacks, then =solve_ipm=)
+- =solve_ipm= (core IPM loop): [[../src/ipm.rs::2093][src/ipm.rs:2093]]
 
 ** AMPL NL Interface and Pyomo Integration
 
@@ -431,10 +423,10 @@ The reduced Hessian is extracted column-by-column from $M^{-1}$ by solving $M e_
 - =ParametricNlpProblem= trait: [[../src/sensitivity.rs::19][src/sensitivity.rs:19]]
 - =SensitivityContext= struct: [[../src/sensitivity.rs::39][src/sensitivity.rs:39]]
 - =solve_with_sensitivity()= function: [[../src/sensitivity.rs::72][src/sensitivity.rs:72]]
-- KKT reassembly (unregularized): [[../src/sensitivity.rs::119][src/sensitivity.rs:119]]
-- =compute_sensitivity()= backsolve: [[../src/sensitivity.rs::159][src/sensitivity.rs:159]]
-- =reduced_hessian()= extraction: [[../src/sensitivity.rs::284][src/sensitivity.rs:284]]
-- Unit tests (parametric QP, constrained QP, reduced Hessian): [[../src/sensitivity.rs::323][src/sensitivity.rs:323]]
+- KKT reassembly (unregularized): [[../src/sensitivity.rs::121][src/sensitivity.rs:121]]
+- =compute_sensitivity()= backsolve: [[../src/sensitivity.rs::161][src/sensitivity.rs:161]]
+- =reduced_hessian()= extraction: [[../src/sensitivity.rs::286][src/sensitivity.rs:286]]
+- Unit tests (parametric QP, constrained QP, reduced Hessian): [[../src/sensitivity.rs::325][src/sensitivity.rs:325]]
 - Integration tests (HS071 parametric, finite difference verification): [[../tests/sensitivity.rs::1][tests/sensitivity.rs:1]]
 - Example (HS071 with parametric constraint bound): [[../examples/sensitivity.rs::1][examples/sensitivity.rs:1]]
 

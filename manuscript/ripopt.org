@@ -16,7 +16,7 @@ See [[file:supporting-information.org][supporting-information.org]] for links to
 
 * Abstract
 
-We present ripopt, a nonlinear interior point optimizer implemented in Rust. ripopt originated as a translation of the Ipopt algorithm but has diverged in several architectural and algorithmic respects. The core design decision---eliminating explicit slack variables for inequality constraints in favor of an implicit slack formulation---produces smaller Karush-Kuhn-Tucker (KKT) systems and a simplified problem interface. This formulation necessitates novel strategies for convergence detection, including stationarity-based bound multipliers with a complementarity gate, and a two-layer convergence test. We introduce a two-phase restoration architecture that uses a fast Gauss-Newton feasibility solver before falling back to a full NLP restoration subproblem, combined with a multi-attempt recovery strategy that explores different barrier landscapes through systematic perturbation. For nonlinear equation systems posed as constrained optimization, ripopt automatically detects the problem structure and reformulates it as an unconstrained least-squares problem with a full Hessian including second-order corrections. A multi-solver fallback architecture---including L-BFGS for unconstrained problems, augmented Lagrangian for constrained problems, and explicit slack reformulation---provides additional robustness when the primary IPM fails. ripopt also provides sIPOPT-style parametric sensitivity analysis, computing how the optimal solution changes under parameter perturbations via a single KKT backsolve at near-zero cost. On the Hock-Schittkowski test suite, ripopt solves 118 of 120 problems (98.3%), two more than Ipopt's 116 (96.7%), with a 15.0$\times$ geometric mean speedup on commonly-solved problems. On the CUTEst benchmark suite of 727 problems, ripopt solves 562 (77.3%) compared to Ipopt's 561 (77.2%), with a geometric mean wall-clock speedup of 9.9$\times$ on commonly-solved problems. ripopt solves 37 CUTEst problems that Ipopt cannot, and Ipopt solves 36 problems that ripopt cannot. On domain-specific benchmarks, ripopt solves all 13 electrolyte speciation problems (vs. 12/13 for Ipopt) and solves 3 of 4 AC optimal power flow cases (Ipopt: 4/4). We provide a detailed analysis of where each solver excels, the failure modes that remain, and opportunities for improvement.
+We present ripopt, a nonlinear interior point optimizer implemented in Rust. ripopt originated as a translation of the Ipopt algorithm but has diverged in several architectural and algorithmic respects. The core design decision---eliminating explicit slack variables for inequality constraints in favor of an implicit slack formulation---produces smaller Karush-Kuhn-Tucker (KKT) systems and a simplified problem interface. This formulation relies on the same Ipopt-aligned two-gate convergence test (scaled and unscaled) on the iterative bound multipliers, which v0.7.0 showed to be sufficient once the barrier subproblem has been driven to a small $\mu$. We introduce a two-phase restoration architecture that uses a fast Gauss-Newton feasibility solver before falling back to a full NLP restoration subproblem, combined with a multi-attempt recovery strategy that explores different barrier landscapes through systematic perturbation. For nonlinear equation systems posed as constrained optimization, ripopt automatically detects the problem structure and reformulates it as an unconstrained least-squares problem with a full Hessian including second-order corrections. A multi-solver fallback architecture---including L-BFGS for unconstrained problems, augmented Lagrangian for constrained problems, and explicit slack reformulation---provides additional robustness when the primary IPM fails. ripopt also provides sIPOPT-style parametric sensitivity analysis, computing how the optimal solution changes under parameter perturbations via a single KKT backsolve at near-zero cost. On the Hock-Schittkowski test suite, ripopt solves 118 of 120 problems (98.3%), two more than Ipopt's 116 (96.7%), with a 15.0$\times$ geometric mean speedup on commonly-solved problems. On the CUTEst benchmark suite of 727 problems, ripopt solves 562 (77.3%) compared to Ipopt's 561 (77.2%), with a geometric mean wall-clock speedup of 9.9$\times$ on commonly-solved problems. ripopt solves 37 CUTEst problems that Ipopt cannot, and Ipopt solves 36 problems that ripopt cannot. On domain-specific benchmarks, ripopt solves all 13 electrolyte speciation problems (vs. 12/13 for Ipopt) and solves 3 of 4 AC optimal power flow cases (Ipopt: 4/4). We provide a detailed analysis of where each solver excels, the failure modes that remain, and opportunities for improvement.
 
 * Introduction
 
@@ -62,7 +62,7 @@ The contributions of this paper are:
 
 1. An implicit slack formulation for inequality constraints that reduces the KKT system dimension from $(n + m + n_{\text{ineq}})$ to $(n + m)$ and simplifies the algorithmic interface (Section [[*Implicit Slack Formulation]]).
 
-2. A stationarity-based bound multiplier computation with a complementarity gate for robust convergence detection without explicit slack variables (Section [[*Convergence with Stationarity-Based Bound Multipliers]]).
+2. An Ipopt-aligned two-gate convergence test on the iterative bound multipliers, validated at v0.7.0 across HS, CUTEst, and domain benchmarks (Section [[*Convergence Test Aligned with Ipopt]]).
 
 3. A two-phase restoration architecture combining a fast Gauss-Newton feasibility solver with a full NLP restoration subproblem, and a multi-attempt recovery strategy that systematically perturbs the barrier landscape (Section [[*Two-Phase Restoration with Multi-Attempt Recovery]]).
 
@@ -156,66 +156,32 @@ S \, \Delta x = r_d + J^T (-D_c)^{-1} r_p \label{eq:condensed}
 
 where $S = H + \Sigma_x + \delta_w I + J^T (-D_c)^{-1} J$ is the Schur complement and $D_c$ is the $(2,2)$ block diagonal. The multiplier update is recovered as $\Delta y = (-D_c)^{-1}(J \Delta x - r_p)$. For equality constraints where the $(2,2)$ entry would be zero, we use a stiff-spring penalty of $-10^{-16}$ to avoid dropping equalities from the Schur complement. This condensation is particularly effective for problems with many more constraints than variables, such as data fitting and optimal control discretizations.
 
-* Convergence with Stationarity-Based Bound Multipliers
+* Convergence Test Aligned with Ipopt
   :PROPERTIES:
   :CUSTOM_ID: convergence
   :END:
 
-** Challenges Without Explicit Slacks
+** Iterative Bound Multipliers
 
-In Ipopt, explicit slack variables $s$ have well-behaved iterative multipliers $z_s$ that naturally satisfy complementarity as the algorithm progresses. Without explicit slacks, the iterative bound multipliers $z_L, z_U$ (updated via Newton steps with $\kappa_\sigma$ safeguarding cite:wachter2006implementation) can exhibit two pathological behaviors:
+Because ripopt does not carry explicit slack variables for inequality constraints, earlier releases (through v0.6.x) feared that the iterative bound multipliers $z_L, z_U$ would be too unreliable for a strict convergence check: Newton updates safeguarded by $\kappa_\sigma$ cite:wachter2006implementation clamp $z_i \cdot s_i \in [\mu/\kappa_\sigma, \kappa_\sigma \mu]$ with $\kappa_\sigma = 10^{10}$, and at degenerate points the multiplier split between $y$ and $z$ is not unique. To guard against those pathologies, v0.6.x computed auxiliary stationarity-based multipliers $z_{\text{opt}}$ directly from $\nabla f + J^T y - z_L + z_U = 0$, gated them against $\mu$, and used them in the dual-infeasibility term of a scaled convergence check.
 
-1. *Inflation*: The $\kappa_\sigma$ safeguard clamps $z_i \cdot s_i \in [\mu/\kappa_\sigma, \kappa_\sigma \mu]$ (with $\kappa_\sigma = 10^{10}$). When $\mu$ is still relatively high but the primal iterate is near-optimal, the safeguard can inflate $z$ to maintain the complementarity bound, producing misleadingly large complementarity error.
+Experience with the v0.7.0 test suite (HS 118/120, CUTEst 562/727, the electrolyte and grid domains) showed that once the barrier subproblem has been driven to a small $\mu$ and the post-restoration multipliers are reset cleanly (see Section [[*Two-Phase Restoration with Multi-Attempt Recovery]]), the iterative $z$ matches Ipopt's =curr_dual_infeasibility= closely enough to decide convergence on its own. The auxiliary $z_{\text{opt}}$ machinery was removed in v0.7.0. The current convergence test is the same two-gate check Ipopt 3.14.x uses.
 
-2. *Oscillation*: At degenerate points---where an active variable bound coincides with an active inequality constraint---the multipliers $(y, z)$ are not uniquely determined. The iterative $z$ can oscillate between iterations as the Newton step alternately attributes the stationarity residual to $y$ or $z$.
+** Two-Gate Test on Iterative Multipliers
 
-Using inflated or oscillating $z$ for convergence checks leads to either stalled convergence (the complementarity error never decreases) or false convergence declarations (the dual infeasibility appears zero because $z$ absorbs the gradient residual).
+At each iteration, convergence is declared when *both* gates pass:
 
-** Stationarity-Based Optimal Multipliers
-
-We compute "optimal" bound multipliers $z_{\text{opt}}$ directly from the KKT stationarity condition. At a KKT point:
+*Scaled gate.* Using Ipopt's dual-scaling factor
 
 \begin{equation}
-\nabla f(x) + J(x)^T y - z_L + z_U = 0 \label{eq:stationarity}
+s_d = \max\!\left(s_{\max},\; \frac{\|y\|_1 + \|z_L\|_1 + \|z_U\|_1}{n + m}\right) / s_{\max},
 \end{equation}
 
-For each variable $i$, we compute the stationarity residual $r_i = \nabla_i f + (J^T y)_i$---the component of the gradient that bound multipliers must absorb at optimality. We then set:
+with $s_{\max} = 100$ and $s_d$ capped at $10^4$, the primal infeasibility is compared against the user tolerance $\epsilon$ directly while dual infeasibility and complementarity are compared against $\epsilon \cdot s_d$.
 
-\begin{equation}
-z_{L,\text{opt},i} = \begin{cases} r_i & \text{if } r_i > 0, \; x_{L,i} \text{ is finite, and complementarity gate passes} \\ 0 & \text{otherwise} \end{cases}
-\end{equation}
+*Unscaled gate.* The raw residuals are compared against =constr_viol_tol=, =dual_inf_tol=, and =compl_inf_tol=. The unscaled gate is the safety net that catches cases where a large $s_d$ would otherwise mask a non-converged iterate.
 
-\begin{equation}
-z_{U,\text{opt},i} = \begin{cases} -r_i & \text{if } r_i < 0, \; x_{U,i} \text{ is finite, and complementarity gate passes} \\ 0 & \text{otherwise} \end{cases}
-\end{equation}
-
-The logic is: if the stationarity residual is positive and a lower bound exists, then $z_{L,i}$ should absorb it; if negative and an upper bound exists, then $z_{U,i}$ should absorb it. When the residual sign does not match any available bound, the variable contributes directly to the dual infeasibility.
-
-** The Complementarity Gate
-
-Without a safeguard, $z_{\text{opt}}$ can be problematic far from optimality. If the iterate is at a non-optimal point with a large gradient residual, $z_{\text{opt}}$ would set a correspondingly large bound multiplier, making the dual infeasibility appear to be zero even though the point is not optimal. The multiplier simply absorbs the gradient residual without the point actually satisfying optimality conditions.
-
-We introduce a complementarity gate that accepts $z_{\text{opt},i}$ only when it is consistent with the barrier problem's complementarity relationship:
-
-\begin{equation}
-z_{\text{opt},i} \cdot s_i \le \kappa_{\text{compl}} \cdot \mu \label{eq:gate}
-\end{equation}
-
-with $\kappa_{\text{compl}} = 10^{10}$. When this check fails, $z_{\text{opt},i}$ is set to zero, and the full stationarity residual at variable $i$ contributes to the dual infeasibility measure.
-
-The gate is deliberately permissive ($\kappa_{\text{compl}} = 10^{10}$)---it only rejects $z_{\text{opt}}$ values that are astronomically inconsistent with the current barrier parameter. As $\mu \to 0$ near convergence, the gate tightens, eventually requiring $z_{\text{opt}} \cdot s \approx 0$, which is the true complementarity condition. Without this gate, problem TP023 from the Hock-Schittkowski suite cite:hock1981test falsely reports convergence at $f = 4697$ instead of the correct $f^* = 2.0$.
-
-** Two-Layer Convergence Test
-
-We require both a scaled and an unscaled convergence check to pass:
-
-*Scaled check* (adapted from Ipopt): Uses $z_{\text{opt}}$ for dual infeasibility, with scaling factor $s_d = \max(s_{\max}, \|y\|_1 + \|z_{\text{opt}}\|_1) / s_{\max}$ where $s_{\max}$ controls the growth rate of the tolerance with multiplier magnitude.
-
-*Unscaled check*: Uses iterative $z$ for dual infeasibility against a relaxed tolerance $\epsilon_{\text{dual}} = 100$. This serves as a safety net---it catches false convergence where $z_{\text{opt}}$ absorbs gradient residuals at non-optimal points that happen to slip through the complementarity gate.
-
-For complementarity, we take $\min(C_z, C_{z_{\text{opt}}})$ where $C_z$ uses iterative multipliers and $C_{z_{\text{opt}}}$ uses stationarity-based multipliers. This handles cases where iterative $z$ is inflated by the $\kappa_\sigma$ safeguard (making $C_z$ misleadingly large) while $z_{\text{opt}}$ correctly reflects the NLP complementarity.
-
-Convergence is declared when both checks pass simultaneously.
+Both gates use the iterative $z$ values directly. An acceptable-level state (mirroring Ipopt's =acceptable_tol= $= 10^{-6}$, 15 consecutive iterations, relaxed unscaled tolerances of $10^{-2}$) is tracked internally for best-duality bookkeeping, but ripopt returns =Optimal= only when the strict two-gate test passes at the user tolerance.
 
 * Two-Phase Restoration with Multi-Attempt Recovery
   :PROPERTIES:
@@ -1063,7 +1029,7 @@ The use of iterative methods for KKT systems in interior point solvers has been 
 
 * Conclusions
 
-We have presented ripopt, an interior point optimizer in approximately 21,700 lines of Rust that achieves competitive performance with Ipopt through a combination of architectural simplification, algorithmic innovation, and a multi-solver fallback architecture. The implicit slack formulation produces smaller KKT systems and a cleaner interface. The stationarity-based convergence strategy, two-phase restoration, NE-to-LS reformulation, preprocessing, near-linear constraint detection, and fallback solvers (L-BFGS, augmented Lagrangian, SQP, explicit slack) compensate for the challenges introduced by eliminating explicit slack variables and provide novel algorithmic capabilities. A configurable linear solver infrastructure---offering direct multifrontal, iterative (preconditioned MINRES), and hybrid direct-iterative modes---enables ripopt to scale to larger problems while maintaining robustness through automatic mode switching.
+We have presented ripopt, an interior point optimizer in approximately 21,700 lines of Rust that achieves competitive performance with Ipopt through a combination of architectural simplification, algorithmic innovation, and a multi-solver fallback architecture. The implicit slack formulation produces smaller KKT systems and a cleaner interface. The Ipopt-aligned two-gate convergence test, two-phase restoration, NE-to-LS reformulation, preprocessing, near-linear constraint detection, and fallback solvers (L-BFGS, augmented Lagrangian, SQP, explicit slack) compensate for the challenges introduced by eliminating explicit slack variables and provide novel algorithmic capabilities. A configurable linear solver infrastructure---offering direct multifrontal, iterative (preconditioned MINRES), and hybrid direct-iterative modes---enables ripopt to scale to larger problems while maintaining robustness through automatic mode switching.
 
 On the Hock-Schittkowski test suite, ripopt solves 118 of 120 problems (98.3%), surpassing Ipopt's 116 (96.7%). On the CUTEst benchmark suite, ripopt solves 562 of 727 problems (77.3%) compared to Ipopt's 561 (77.2%). The geometric mean $9.9\times$ speedup on commonly-solved CUTEst problems---rising to $15.0\times$ on the HS suite---makes ripopt particularly attractive for applications requiring rapid solves of small-to-medium NLPs, such as model predictive control, real-time optimization, and embedded systems. On large-scale synthetic benchmarks (up to 100K variables), ripopt solves 9 of 10 problems compared to Ipopt's 9, though Ipopt's Fortran MUMPS factorization is ${\sim}10$--$15\times$ faster per iteration on the largest systems.
 
