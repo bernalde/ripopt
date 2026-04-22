@@ -499,7 +499,7 @@ Include `ripopt.h` (repo root) in your C project. It defines version macros, cal
 #include "ripopt.h"
 
 // Check version at compile time
-printf("ripopt %s\n", RIPOPT_VERSION);  // "0.6.2"
+printf("ripopt %s\n", RIPOPT_VERSION);  // "0.7.0"
 ```
 
 ### Callback signatures

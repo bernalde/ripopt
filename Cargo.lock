@@ -1238,7 +1238,7 @@ checksum = "a96887878f22d7bad8a3b6dc5b7440e0ada9a245242924394987b21cf2210a4c"
 
 [[package]]
 name = "ripopt"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "approx",
  "env_logger",
@@ -1253,7 +1253,7 @@ dependencies = [
 
 [[package]]
 name = "ripopt-py"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "numpy",
  "pyo3",
