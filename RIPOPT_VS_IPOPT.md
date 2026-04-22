@@ -11,23 +11,23 @@ Ipopt remains stronger, and where there is room to improve.
 
 |                          | ripopt                 | Ipopt                |
 |--------------------------|------------------------|----------------------|
-| CUTEst solved            | **569/727 (78.3%)**    | 561/727 (77.2%)      |
-| HS solved                | **116/120 (96.7%)**    | 116/120 (96.7%)      |
-| Both solve (CUTEst)      | 526                    | 526                  |
-| Matching objectives      | 430/526 (81.7%)        |                      |
-| ripopt-only (CUTEst)     | **43**                 | --                   |
-| Ipopt-only (CUTEst)      | --                     | **35**               |
-| Both fail (CUTEst)       | 123                    | 123                  |
+| CUTEst solved            | **562/727 (77.3%)**    | 561/727 (77.2%)      |
+| HS solved                | **118/120 (98.3%)**    | 116/120 (96.7%)      |
+| Both solve (CUTEst)      | 525                    | 525                  |
+| Matching objectives      | 436/525 (83.0%)        |                      |
+| ripopt-only (CUTEst)     | **37**                 | --                   |
+| Ipopt-only (CUTEst)      | --                     | **36**               |
+| Both fail (CUTEst)       | 129                    | 129                  |
 
-**Solution quality** (526 CUTEst problems where both converge):
-- Matching objectives (rel diff < 1e-4): 430/526 (81.7%)
-- 96 mismatches: both reach valid KKT points but at different local optima
+**Solution quality** (525 CUTEst problems where both converge):
+- Matching objectives (rel diff < 1e-4): 436/525 (83.0%)
+- 89 mismatches: both reach valid KKT points but at different local optima
 
-**Speed** (526 CUTEst common successes):
-- Geometric mean speedup: **11.1x** (ripopt faster)
-- Median speedup: **23.1x**
-- 87% of problems: ripopt faster
-- 65% of problems: ripopt 10x+ faster
+**Speed** (525 CUTEst common successes):
+- Geometric mean speedup: **9.9x** (ripopt faster)
+- Median speedup: **18.9x**
+- 84% of problems: ripopt faster
+- 63% of problems: ripopt 10x+ faster
 - Small problems (n <= 10): massive speedup (100x+ median on microsecond solves)
 - Medium problems (10 < n <= 50): typically 2-5x faster
 - Large problems (n > 50): roughly even, with Ipopt's MUMPS winning on largest systems
@@ -273,8 +273,8 @@ perturbation strategy.
 
 ## Summary
 
-On the CUTEst suite, ripopt now surpasses Ipopt (569 vs 561), with ripopt
-recovering 43 problems Ipopt cannot and Ipopt recovering 35 problems ripopt cannot.
+On the CUTEst suite, ripopt now surpasses Ipopt (562 vs 561), with ripopt
+recovering 37 problems Ipopt cannot and Ipopt recovering 36 problems ripopt cannot.
 ripopt's unique capabilities:
 - NE-to-LS reformulation (~18 NE problems Ipopt cannot handle)
 - Two-phase restoration (GN fast path + NLP robust fallback)
@@ -282,7 +282,7 @@ ripopt's unique capabilities:
 - Pragmatic inertia correction (continues past factorization failures)
 - Complementarity gate (prevents false convergence)
 - Hybrid dense/sparse linear algebra (auto-selected by problem size)
-- Raw speed advantage from Rust (median 23.1x faster on CUTEst, 17.8x on HS)
+- Raw speed advantage from Rust (median 18.9x faster on CUTEst, 14.2x on HS)
 
 Ipopt's remaining advantages are:
 - More mature mu strategy on difficult nonconvex problems

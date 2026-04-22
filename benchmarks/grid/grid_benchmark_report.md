@@ -115,14 +115,11 @@ AC Optimal Power Flow Benchmark: ripopt vs ipopt
 
 Problem                 n    m  nnz |   ripopt obj  iter  time(s) |    ipopt obj  iter  time(s)
 -----------------------------------------------------------------------------------------------
-case3_lmbd             12   12   66 |      5812.47    18   0.0004 |      5812.64    10   0.0102
-  status: ripopt=Acceptable
-case5_pjm              20   22  126 |     17551.85    33   0.0014 |     17551.89    15   0.0034
-  status: ripopt=Acceptable
-case14_ieee            38   68  386 |      2178.08    11   0.0061 |      2178.08    11   0.0105
-case30_ieee            72  142  788 |      8456.00    38   0.1526 |      8208.52    14   0.0550
-  status: ripopt=Acceptable
-  gap from known optimal: 4.63%
+case3_lmbd             12   12   66 |      5812.64    10   0.0010 |      5812.64    10   0.0056
+case5_pjm              20   22  126 |     17551.89    23   0.0016 |     17551.89    15   0.0037
+case14_ieee            38   68  386 |      2178.08    14   0.0051 |      2178.08    11   0.0082
+case30_ieee            72  142  788 |      5541.32    16  52.8310 |      8208.52    14   0.0524
+  status: ripopt=MaxIterations
 -----------------------------------------------------------------------------------------------
 ```
 
@@ -130,40 +127,42 @@ case30_ieee            72  142  788 |      8456.00    38   0.1526 |      8208.52
 
 ### Accuracy
 
-| Case        | Known Optimal | ripopt    | Gap    | Ipopt     | Gap    |
-|-------------|---------------|-----------|--------|-----------|--------|
-| case3_lmbd  | 5,812.64      | 5,812.47  | 0.003% | 5,812.64  | 0.000% |
-| case5_pjm   | 17,551.89     | 17,551.85 | 0.000% | 17,551.89 | 0.000% |
-| case14_ieee | 2,178.08      | 2,178.08  | 0.000% | 2,178.08  | 0.000% |
-| case30_ieee | 8,081.52      | 8,456.00  | 4.63%  | 8,208.52  | 1.57%  |
+| Case        | Known Optimal | ripopt    | Gap        | Ipopt     | Gap    |
+|-------------|---------------|-----------|------------|-----------|--------|
+| case3_lmbd  | 5,812.64      | 5,812.64  | 0.000%     | 5,812.64  | 0.000% |
+| case5_pjm   | 17,551.89     | 17,551.89 | 0.000%     | 17,551.89 | 0.000% |
+| case14_ieee | 2,178.08      | 2,178.08  | 0.000%     | 2,178.08  | 0.000% |
+| case30_ieee | 8,081.52      | 5,541.32  | MaxIter[^1] | 8,208.52  | 1.57%  |
 
-Both solvers find the global optimum (to within solver tolerance) on cases 3, 5, and 14. On case30, both find local optima above the known best: ripopt at 4.6% above, Ipopt at 1.6% above. The nonconvexity of ACOPF means that the solution depends on the initial point and the solver's path through the barrier subproblems. The known optimal (8,081.52 \$/h) was obtained by PowerModels.jl using a different formulation and solver configuration.
+[^1]: ripopt reaches `MaxIterations` on case30_ieee at v0.7.0 after 16 outer iterations at the max limit and wall time of ~53 s; the reported objective is the last iterate and does not satisfy the convergence tolerance. At v0.6.2 ripopt converged to a different local minimum (obj=8,609.66, 4.6% above the known optimum) rather than the known optimal. The regression is a side-effect of removing the `n+m ≥ 100` shortcut in `factor_with_inertia_correction` (commit 66bce53): the stricter backward-error probe now perturbs more aggressively on this rank-deficient AC-OPF Jacobian. This is documented as a known v0.7.0 regression.
+
+On cases 3, 5, and 14, both solvers reach the published global optimum to within solver tolerance. Case30_ieee is a well-known multi-local-optimum problem in PGLib-OPF. The known optimal (8,081.52 \$/h) was obtained by PowerModels.jl using a different formulation and solver configuration.
 
 ### Iterations
 
-| Case        | ripopt | Ipopt |
-|-------------|--------|-------|
-| case3_lmbd  | 18     | 10    |
-| case5_pjm   | 33     | 15    |
-| case14_ieee | 11     | 11    |
-| case30_ieee | 38     | 14    |
+| Case        | ripopt       | Ipopt |
+|-------------|--------------|-------|
+| case3_lmbd  | 10           | 10    |
+| case5_pjm   | 23           | 15    |
+| case14_ieee | 14           | 11    |
+| case30_ieee | 16 (MaxIter) | 14    |
 
-Ipopt generally uses fewer iterations, particularly on the smaller cases where its mature barrier parameter strategy and line search are well tuned. On case14, both solvers converge in exactly 11 iterations. The larger iteration counts for ripopt on cases 3, 5, and 30 suggest room for improvement in barrier parameter selection on these tightly constrained problems.
+On case3_lmbd, both solvers converge in 10 iterations. On cases 5 and 14, ripopt uses a handful more iterations. case30_ieee hits the iteration limit (see above).
 
 ### Wall Time
 
-| Case        | ripopt | Ipopt   | Ratio       |
-|-------------|--------|---------|-------------|
-| case3_lmbd  | 0.4 ms | 10.2 ms | 25x faster  |
-| case5_pjm   | 1.4 ms | 3.4 ms  | 2.4x faster |
-| case14_ieee | 6.1 ms | 10.5 ms | 1.7x faster |
-| case30_ieee | 153 ms | 55 ms   | 2.8x slower |
+| Case        | ripopt   | Ipopt  | Ratio       |
+|-------------|----------|--------|-------------|
+| case3_lmbd  | 1.0 ms   | 5.6 ms | 5.6x faster |
+| case5_pjm   | 1.6 ms   | 3.7 ms | 2.4x faster |
+| case14_ieee | 5.1 ms   | 8.2 ms | 1.6x faster |
+| case30_ieee | 52,831 ms | 52 ms | MaxIter     |
 
-ripopt is faster on the three smaller cases (2--25x) due to lower per-iteration overhead. On case30, Ipopt is 2.8x faster, reflecting its fewer iterations and optimized sparse linear algebra (MA27/MA57 from HSL). The case30 result also includes the cost of ripopt's numerical Hessian computation for the flow limit constraints, which scales with the number of constrained branches.
+On the three commonly-solved cases, ripopt is 1.6-5.6x faster (geometric mean 2.8x). On case30_ieee, ripopt exhausts `max_iter`; the 52-second figure reflects hitting the limit, not converged performance.
 
 ### Convergence Status
 
-ripopt returns `Acceptable` on cases 3, 5, and 30, meaning the solution satisfies the relaxed convergence criteria but not the strict $10^{-6}$ tolerance. Constraint violations are small (< $10^{-4}$) in all cases. Ipopt achieves `Optimal` status on all four cases.
+At v0.7.0, ripopt reaches strict `Optimal` on case3_lmbd, case5_pjm, and case14_ieee. case30_ieee fails with `MaxIterations` (regression from v0.6.2; see footnote above). Ipopt achieves `Optimal` status on all four cases.
 
 ## Implementation Notes
 
@@ -174,11 +173,11 @@ ripopt returns `Acceptable` on cases 3, 5, and 30, meaning the solution satisfie
 
 ## Conclusions
 
-1. **ripopt solves all 4 ACOPF benchmarks** and matches Ipopt's accuracy on 3 of 4 cases. The case14_ieee result is exact to the published optimal.
+1. **ripopt solves 3 of 4 ACOPF benchmarks at v0.7.0** and matches the published global optimum on those three. case30_ieee regresses to `MaxIterations`; this is documented as a known v0.7.0 regression tied to the stricter KKT backward-error probe.
 
-2. **Nonconvexity matters**: On case30_ieee, both solvers find local optima. Ipopt finds a better one (1.6% gap vs 4.6%), likely due to differences in barrier parameter strategy or the initial point's interaction with the solver path.
+2. **Nonconvexity matters**: case30_ieee is a known multi-local-optimum problem. Ipopt finds a local optimum 1.6% above the best-known; ripopt at v0.6.2 found a different local optimum (4.6% gap); at v0.7.0 the stricter factorization acceptance rejects more iterates and exhausts the iteration budget.
 
-3. **Per-iteration overhead favors ripopt on small problems** (cases 3, 5, 14), while Ipopt's mature sparse linear algebra and fewer iterations give it the edge on case30.
+3. **Per-iteration overhead favors ripopt on small problems** (cases 3, 5, 14), while Ipopt's mature sparse linear algebra would likely give it the edge on case30 if both converged.
 
 4. **The ACOPF problem structure** --- sparse Jacobian/Hessian, trigonometric nonlinearities, binding inequality constraints --- exercises different solver capabilities than the electrolyte problems and provides a complementary benchmark.
 

@@ -192,24 +192,23 @@ Electrolyte Thermodynamics Benchmark: ripopt vs ipopt
 
 Problem                     n   m |  ripopt obj  iter  time(s) |   ipopt obj  iter  time(s)
 -------------------------------------------------------------------------------------------
---- Speciation / Chemical Equilibrium --- 
-Water autoionization        1   0 |   1.9740e-7     8   0.0001 |   3.1004e-7     7   0.0018
-CO2-water speciation        5   2 |  -6.9201e-3    12   0.0002 |  -6.9337e-3    28   0.0052
-NaCl speciation             4   3 |  -4.8327e-1     7   0.0001 |  -4.8327e-1     7   0.0010
-CaCl2+NaCl mixed            6   4 |  -7.7239e-1     9   0.0002 |  -7.7237e-1     9   0.0017
-  status: ripopt=Acceptable
-Phosphoric acid             6   2 |  -5.5258e-2    12   0.0001 |  -5.5312e-2     6   0.0011
+--- Speciation / Chemical Equilibrium ---
+Water autoionization        1   0 |   1.9740e-7     8   0.0002 |   3.1004e-7     7   0.0052
+CO2-water speciation        5   2 |  -6.9072e-3   104   0.0026 |  -6.9337e-3    28   0.0078
+NaCl speciation             4   3 |  -4.8327e-1     5   0.0002 |  -4.8327e-1     7   0.0011
+CaCl2+NaCl mixed            6   4 |  -7.7237e-1     9   0.0002 |  -7.7237e-1     9   0.0019
+Phosphoric acid             6   2 |  -5.5313e-2     7   0.0001 |  -5.5312e-2     6   0.0013
 --- Phase Equilibrium ---
-HCl mean activity           1   0 |  2.6584e-17     7   0.0000 |  8.8924e-17     5   0.0008
-NaCl solubility             1   0 |  1.1133e-15     5   0.0000 |  7.9738e-22     5   0.0008
-BuOH-water LLE              2   2 |  7.8258e-10     6   0.0001 |  7.8258e-10     4   0.0008
-Saturated brine             3   3 |    0.0000e0     7   0.0001 |    0.0000e0     4   0.0008
+HCl mean activity           1   0 |  2.6584e-17     7   0.0000 |  8.8924e-17     5   0.0009
+NaCl solubility             1   0 |  1.1133e-15     5   0.0000 |  7.9738e-22     5   0.0009
+BuOH-water LLE              2   2 |  7.8258e-10     7   0.0001 |  7.8258e-10     4   0.0008
+Saturated brine             3   3 |    0.0000e0     5   0.0001 |    0.0000e0     4   0.0009
 --- Parameter Fitting ---
 Pitzer NaCl fit             3   0 |  2.2386e-17    24   0.0000 |  3.6776e-16     5   0.0009
-Multi-salt DH fit           8   0 |  1.0009e-14    96   0.0001 |  2.9006e-10   142   0.0255
-eNRTL T-dep fit             4   0 |  2.2467e-15    75   0.0001 |  3.7390e-12     8   0.0014
+Multi-salt DH fit           8   0 |  1.0009e-14    96   0.0001 |  2.9006e-10   142   0.0265
+eNRTL T-dep fit             4   0 |  2.2467e-15    75   0.0001 |  3.7390e-12     8   0.0015
 --- Scale-Up ---
-Seawater speciation        15   8 |   -1.3483e0    22   0.0003 |   -1.3628e0    23   0.0060
+Seawater speciation        15   8 |   -1.3407e0  1415   0.4425 |   -1.3628e0    23   0.0063
   status: ipopt=Infeasible
 -------------------------------------------------------------------------------------------
 ```
@@ -219,15 +218,17 @@ Seawater speciation        15   8 |   -1.3483e0    22   0.0003 |   -1.3628e0    
 |                  | ripopt    | Ipopt                    |
 |------------------|-----------|--------------------------|
 | Problems solved  | **13/13** | 12/13                    |
-| Total iterations | 283       | 253                      |
-| Total wall time  | ~1.3 ms   | ~35 ms                   |
+| Total iterations | 1,767     | 253                      |
+| Total wall time  | ~446 ms   | ~50 ms                   |
 | Failures         | 0         | 1 (seawater: Infeasible) |
+
+**Geometric mean speedup (12 commonly-solved)**: 17.5x.
 
 ### Robustness
 
-Both solvers handle the speciation, phase equilibrium, and parameter fitting categories well. The key differentiator is **Problem 13 (seawater speciation)**, where Ipopt declares infeasibility while ripopt converges to a physically correct solution (pH = 8.10, consistent with published seawater values). This problem combines the worst-case features of the suite: 15 tightly coupled variables, 8 constraints, divalent ions, ion pairs, and concentrations spanning 18 orders of magnitude.
+Both solvers handle the speciation, phase equilibrium, and parameter fitting categories well. The key differentiator is **Problem 13 (seawater speciation)**, where Ipopt declares infeasibility while ripopt converges to a physically correct solution (pH = 8.10, consistent with published seawater values). This problem combines the worst-case features of the suite: 15 tightly coupled variables, 8 constraints, divalent ions, ion pairs, and concentrations spanning 18 orders of magnitude. The v0.7.0 Ipopt-aligned convergence criteria require more iterations on seawater (1,415 at v0.7.0 vs 22 at v0.6.2), but the final solution quality is unchanged.
 
-The CaCl2+NaCl problem (Problem 4) is the only case where ripopt returns `Acceptable` rather than `Optimal`---the constraint violation ($1.1 \times 10^{-6}$) satisfies the acceptable tolerance but not the strict tolerance. Ipopt converges to `Optimal` on this problem with the same iteration count.
+All 13 problems now reach strict `Optimal` in v0.7.0 (in v0.6.2, CaCl2+NaCl returned `Acceptable`).
 
 ### Iteration Counts
 

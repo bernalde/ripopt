@@ -11,34 +11,32 @@ Apple Mac Mini (aarch64-apple-darwin).
 
 | Metric           | ripopt              | Ipopt               |
 |------------------|---------------------|---------------------|
-| Optimal          | 116                 | 116                 |
-| **Total solved** | **116/120** (96.7%) | **116/120** (96.7%) |
-| Failed           | 4                   | 4                   |
-| Both solved      | 114                 | 114                 |
+| Optimal          | 118                 | 116                 |
+| **Total solved** | **118/120** (98.3%) | **116/120** (96.7%) |
+| Failed           | 2                   | 4                   |
+| Both solved      | 116                 | 116                 |
 
 **ripopt-only solves (2):** HS214, HS223 — ripopt succeeds where Ipopt reports
 `InvalidNumberDetected` or `Infeasible`.
 
-**Ipopt-only solves (2):** HS013 and HS225 (ripopt: `NumericalError` on both).
-
-**ripopt failure modes:** 3 `NumericalError`, 1 `RestorationFailed`.
+**Ipopt-only solves:** 0.
 
 ## Solution Accuracy (where both solve)
 
-On the 114 problems where both solvers reach `Optimal`:
+On the 116 problems where both solvers reach `Optimal`:
 
-| Metric                     | Value           |
-|----------------------------|-----------------|
-| Matching (rel diff < 1e-4) | 106/114 (93.0%) |
+| Metric                     | Value            |
+|----------------------------|------------------|
+| Matching (rel diff < 1e-4) | 110/116 (94.8%)  |
 
 Relative objective difference is `|f_ripopt - f_ipopt| / max(|f_ripopt|, |f_ipopt|, 1)`.
-The 8 non-matching cases reach valid KKT points but at different local optima.
+The 6 non-matching cases reach valid KKT points but at different local optima.
 
 ## Iteration Counts (where both solve)
 
 | Statistic | ripopt | Ipopt |
 |-----------|--------|-------|
-| Mean      | 15.1   | 13.0  |
+| Mean      | 70.8   | 13.3  |
 | Median    | 13     | 10    |
 
 Ipopt uses fewer iterations on average, reflecting its more mature barrier parameter
@@ -49,14 +47,14 @@ compensates in wall-clock time.
 
 | Statistic | ripopt | Ipopt   | Speedup |
 |-----------|--------|---------|---------|
-| Median    | 94us   | 1.8ms   | 17.8x   |
-| Total     | 23.1ms | 269.4ms | 11.7x   |
+| Median    | 118us  | 1.9ms   | 16.2x   |
+| Total     | 53.6ms | 281.9ms | 5.3x    |
 
-- **Geometric mean speedup**: **17.7x**
-- **Median speedup**: **17.8x**
-- ripopt faster: **113/114** (99%)
-- ripopt 10x+ faster: **95/114** (83%)
-- Ipopt faster: 1/114
+- **Geometric mean speedup**: **15.0x**
+- **Median speedup**: **14.2x**
+- ripopt faster: **113/116** (97%)
+- ripopt 10x+ faster: **84/116** (72%)
+- Ipopt faster: 3/116
 
 The speed advantage on HS comes from:
 
