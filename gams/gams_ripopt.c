@@ -562,6 +562,7 @@ DllExport int STDCALL ripCallSolver(void *Cptr)
             n, x_l, x_u,
             m, g_l, g_u,
             data->nnz_jac, nnz_hess_arg,
+            0,  /* index_style: 0 = C (0-based) indexing */
             gams_eval_f,
             gams_eval_grad_f,
             gams_eval_g,
