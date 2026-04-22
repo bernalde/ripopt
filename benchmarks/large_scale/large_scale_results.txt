@@ -1,13 +1,150 @@
-   Compiling ripopt v0.6.2 (/Users/jkitchin/Dropbox/projects/ripopt)
-warning: unused variable: `known_optimal`
-   --> examples/adversary_2026_04_05_powell_singular.rs:111:9
-    |
-111 |     let known_optimal: f64 = 0.0;
-    |         ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_known_optimal`
-    |
-    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+warning: unused import: `CString`
+ --> src/c_api.rs:6:22
+  |
+6 | use std::ffi::{CStr, CString};
+  |                      ^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
 
-warning: `ripopt` (example "adversary_2026_04_05_powell_singular") generated 1 warning (run `cargo fix --example "adversary_2026_04_05_powell_singular" -p ripopt` to apply 1 suggestion)
+warning: unused variable: `z_l`
+  --> src/kkt.rs:67:5
+   |
+67 |     z_l: &[f64],
+   |     ^^^ help: if this is intentional, prefix it with an underscore: `_z_l`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `z_u`
+  --> src/kkt.rs:68:5
+   |
+68 |     z_u: &[f64],
+   |     ^^^ help: if this is intentional, prefix it with an underscore: `_z_u`
+
+warning: unused variable: `z_l`
+    --> src/kkt.rs:1148:5
+     |
+1148 |     z_l: &[f64],
+     |     ^^^ help: if this is intentional, prefix it with an underscore: `_z_l`
+
+warning: unused variable: `z_u`
+    --> src/kkt.rs:1149:5
+     |
+1149 |     z_u: &[f64],
+     |     ^^^ help: if this is intentional, prefix it with an underscore: `_z_u`
+
+warning: unused variable: `z_l`
+    --> src/kkt.rs:1483:5
+     |
+1483 |     z_l: &[f64],
+     |     ^^^ help: if this is intentional, prefix it with an underscore: `_z_l`
+
+warning: unused variable: `z_u`
+    --> src/kkt.rs:1484:5
+     |
+1484 |     z_u: &[f64],
+     |     ^^^ help: if this is intentional, prefix it with an underscore: `_z_u`
+
+warning: unused variable: `jac0_ok`
+   --> src/preprocessing.rs:232:17
+    |
+232 |             let jac0_ok = inner.jacobian_values(&x0, true, &mut jac_vals0);
+    |                 ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_jac0_ok`
+
+warning: unused variable: `jac1_ok`
+   --> src/preprocessing.rs:252:17
+    |
+252 |             let jac1_ok = inner.jacobian_values(&x1, true, &mut jac_vals1);
+    |                 ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_jac1_ok`
+
+warning: unused variable: `g0_ok`
+   --> src/preprocessing.rs:257:17
+    |
+257 |             let g0_ok = inner.constraints(&x0, true, &mut g0);
+    |                 ^^^^^ help: if this is intentional, prefix it with an underscore: `_g0_ok`
+
+warning: unused variable: `g1_ok`
+   --> src/preprocessing.rs:258:17
+    |
+258 |             let g1_ok = inner.constraints(&x1, true, &mut g1);
+    |                 ^^^^^ help: if this is intentional, prefix it with an underscore: `_g1_ok`
+
+warning: function `solve_ls_multipliers` is never used
+    --> src/ipm.rs:7179:4
+     |
+7179 | fn solve_ls_multipliers(
+     |    ^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `solve_regularized_spd` is never used
+    --> src/ipm.rs:7256:4
+     |
+7256 | fn solve_regularized_spd(a: &[f64], b: &[f64], n: usize) -> Option<Vec<f64>> {
+     |    ^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `dense_cholesky_in_place` is never used
+    --> src/ipm.rs:7278:4
+     |
+7278 | fn dense_cholesky_in_place(a: &mut [f64], m: usize) -> bool {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `dense_chol_solve` is never used
+    --> src/ipm.rs:7302:4
+     |
+7302 | fn dense_chol_solve(l: &[f64], b: &mut [f64], m: usize) {
+     |    ^^^^^^^^^^^^^^^^
+
+   Compiling ripopt v0.6.2 (/Users/jkitchin/Dropbox/projects/ripopt)
+warning: `ripopt` (lib) generated 15 warnings (run `cargo fix --lib -p ripopt` to apply 11 suggestions)
+warning: unreachable expression
+  --> tests/lbfgs_ipm.rs:41:9
+   |
+40 |         panic!("hessian_values should not be called in limited-memory mode");
+   |         -------------------------------------------------------------------- any code following this expression is unreachable
+41 |         true
+   |         ^^^^ unreachable expression
+   |
+   = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: unreachable expression
+   --> tests/lbfgs_ipm.rs:120:9
+    |
+119 |         panic!("hessian_values should not be called in limited-memory mode");
+    |         -------------------------------------------------------------------- any code following this expression is unreachable
+120 |         true
+    |         ^^^^ unreachable expression
+
+warning: unreachable expression
+   --> tests/lbfgs_ipm.rs:195:9
+    |
+194 |         panic!("hessian_values must not be called in limited-memory mode");
+    |         ------------------------------------------------------------------ any code following this expression is unreachable
+195 |         true
+    |         ^^^^ unreachable expression
+
+warning: variable does not need to be mutable
+    --> tests/correctness.rs:1761:9
+     |
+1761 |     let mut opts2 = SolverOptions {
+     |         ----^^^^^
+     |         |
+     |         help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unreachable expression
+  --> examples/lbfgs_hessian.rs:59:9
+   |
+58 |         unreachable!("Hessian should not be called in limited-memory mode");
+   |         ------------------------------------------------------------------- any code following this expression is unreachable
+59 |         true
+   |         ^^^^ unreachable expression
+   |
+   = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ripopt` (test "lbfgs_ipm") generated 3 warnings
+warning: `ripopt` (lib test) generated 15 warnings (15 duplicates)
+warning: `ripopt` (example "lbfgs_hessian") generated 1 warning
 warning: unused import: `HS_PROBLEMS`
  --> benchmarks/hs/run_ipopt_native.rs:7:19
   |
@@ -16,784 +153,15 @@ warning: unused import: `HS_PROBLEMS`
   |
   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
 
-warning: function `solve_all` is never used
-    --> benchmarks/hs/generated/hs_problems.rs:9522:8
-     |
-9522 | pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
-     |        ^^^^^^^^^
-     |
-     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
-
-warning: `ripopt` (bin "ipopt_native") generated 2 warnings (run `cargo fix --bin "ipopt_native" -p ripopt` to apply 1 suggestion)
-warning: function `all_problems` is never used
-    --> examples/../benchmarks/electrolyte/problems.rs:1839:8
-     |
-1839 | pub fn all_problems() -> Vec<(&'static str, Box<dyn NlpProblem>)> {
-     |        ^^^^^^^^^^^^
-     |
-     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
-
-warning: struct `HsTp001` is never constructed
-  --> examples/../benchmarks/hs/generated/hs_problems.rs:11:12
-   |
-11 | pub struct HsTp001;
-   |            ^^^^^^^
-   |
-   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
-
-warning: struct `HsTp002` is never constructed
-  --> examples/../benchmarks/hs/generated/hs_problems.rs:71:12
-   |
-71 | pub struct HsTp002;
-   |            ^^^^^^^
-
-warning: struct `HsTp003` is never constructed
-   --> examples/../benchmarks/hs/generated/hs_problems.rs:131:12
-    |
-131 | pub struct HsTp003;
-    |            ^^^^^^^
-
-warning: struct `HsTp004` is never constructed
-   --> examples/../benchmarks/hs/generated/hs_problems.rs:191:12
-    |
-191 | pub struct HsTp004;
-    |            ^^^^^^^
-
-warning: struct `HsTp005` is never constructed
-   --> examples/../benchmarks/hs/generated/hs_problems.rs:249:12
-    |
-249 | pub struct HsTp005;
-    |            ^^^^^^^
-
-warning: struct `HsTp006` is never constructed
-   --> examples/../benchmarks/hs/generated/hs_problems.rs:309:12
-    |
-309 | pub struct HsTp006;
-    |            ^^^^^^^
-
-warning: struct `HsTp007` is never constructed
-   --> examples/../benchmarks/hs/generated/hs_problems.rs:369:12
-    |
-369 | pub struct HsTp007;
-    |            ^^^^^^^
-
-warning: struct `HsTp009` is never constructed
-   --> examples/../benchmarks/hs/generated/hs_problems.rs:430:12
-    |
-430 | pub struct HsTp009;
-    |            ^^^^^^^
-
-warning: struct `HsTp010` is never constructed
-   --> examples/../benchmarks/hs/generated/hs_problems.rs:492:12
-    |
-492 | pub struct HsTp010;
-    |            ^^^^^^^
-
-warning: struct `HsTp011` is never constructed
-   --> examples/../benchmarks/hs/generated/hs_problems.rs:554:12
-    |
-554 | pub struct HsTp011;
-    |            ^^^^^^^
-
-warning: struct `HsTp012` is never constructed
-   --> examples/../benchmarks/hs/generated/hs_problems.rs:615:12
-    |
-615 | pub struct HsTp012;
-    |            ^^^^^^^
-
-warning: struct `HsTp013` is never constructed
-   --> examples/../benchmarks/hs/generated/hs_problems.rs:677:12
-    |
-677 | pub struct HsTp013;
-    |            ^^^^^^^
-
-warning: struct `HsTp014` is never constructed
-   --> examples/../benchmarks/hs/generated/hs_problems.rs:738:12
-    |
-738 | pub struct HsTp014;
-    |            ^^^^^^^
-
-warning: struct `HsTp015` is never constructed
-   --> examples/../benchmarks/hs/generated/hs_problems.rs:804:12
-    |
-804 | pub struct HsTp015;
-    |            ^^^^^^^
-
-warning: struct `HsTp016` is never constructed
-   --> examples/../benchmarks/hs/generated/hs_problems.rs:871:12
-    |
-871 | pub struct HsTp016;
-    |            ^^^^^^^
-
-warning: struct `HsTp017` is never constructed
-   --> examples/../benchmarks/hs/generated/hs_problems.rs:938:12
-    |
-938 | pub struct HsTp017;
-    |            ^^^^^^^
-
-warning: struct `HsTp018` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:1005:12
-     |
-1005 | pub struct HsTp018;
-     |            ^^^^^^^
-
-warning: struct `HsTp019` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:1072:12
-     |
-1072 | pub struct HsTp019;
-     |            ^^^^^^^
-
-warning: struct `HsTp020` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:1138:12
-     |
-1138 | pub struct HsTp020;
-     |            ^^^^^^^
-
-warning: struct `HsTp021` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:1210:12
-     |
-1210 | pub struct HsTp021;
-     |            ^^^^^^^
-
-warning: struct `HsTp022` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:1271:12
-     |
-1271 | pub struct HsTp022;
-     |            ^^^^^^^
-
-warning: struct `HsTp023` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:1337:12
-     |
-1337 | pub struct HsTp023;
-     |            ^^^^^^^
-
-warning: struct `HsTp024` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:1418:12
-     |
-1418 | pub struct HsTp024;
-     |            ^^^^^^^
-
-warning: struct `HsTp026` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:1490:12
-     |
-1490 | pub struct HsTp026;
-     |            ^^^^^^^
-
-warning: struct `HsTp027` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:1559:12
-     |
-1559 | pub struct HsTp027;
-     |            ^^^^^^^
-
-warning: struct `HsTp028` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:1626:12
-     |
-1626 | pub struct HsTp028;
-     |            ^^^^^^^
-
-warning: struct `HsTp029` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:1695:12
-     |
-1695 | pub struct HsTp029;
-     |            ^^^^^^^
-
-warning: struct `HsTp030` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:1765:12
-     |
-1765 | pub struct HsTp030;
-     |            ^^^^^^^
-
-warning: struct `HsTp031` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:1831:12
-     |
-1831 | pub struct HsTp031;
-     |            ^^^^^^^
-
-warning: struct `HsTp032` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:1898:12
-     |
-1898 | pub struct HsTp032;
-     |            ^^^^^^^
-
-warning: struct `HsTp033` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:1974:12
-     |
-1974 | pub struct HsTp033;
-     |            ^^^^^^^
-
-warning: struct `HsTp034` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:2047:12
-     |
-2047 | pub struct HsTp034;
-     |            ^^^^^^^
-
-warning: struct `HsTp035` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:2117:12
-     |
-2117 | pub struct HsTp035;
-     |            ^^^^^^^
-
-warning: struct `HsTp036` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:2186:12
-     |
-2186 | pub struct HsTp036;
-     |            ^^^^^^^
-
-warning: struct `HsTp037` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:2253:12
-     |
-2253 | pub struct HsTp037;
-     |            ^^^^^^^
-
-warning: struct `HsTp038` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:2326:12
-     |
-2326 | pub struct HsTp038;
-     |            ^^^^^^^
-
-warning: struct `HsTp039` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:2398:12
-     |
-2398 | pub struct HsTp039;
-     |            ^^^^^^^
-
-warning: struct `HsTp040` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:2475:12
-     |
-2475 | pub struct HsTp040;
-     |            ^^^^^^^
-
-warning: struct `HsTp041` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:2562:12
-     |
-2562 | pub struct HsTp041;
-     |            ^^^^^^^
-
-warning: struct `HsTp042` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:2634:12
-     |
-2634 | pub struct HsTp042;
-     |            ^^^^^^^
-
-warning: struct `HsTp043` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:2709:12
-     |
-2709 | pub struct HsTp043;
-     |            ^^^^^^^
-
-warning: struct `HsTp044` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:2796:12
-     |
-2796 | pub struct HsTp044;
-     |            ^^^^^^^
-
-warning: struct `HsTp045` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:2892:12
-     |
-2892 | pub struct HsTp045;
-     |            ^^^^^^^
-
-warning: struct `HsTp046` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:2971:12
-     |
-2971 | pub struct HsTp046;
-     |            ^^^^^^^
-
-warning: struct `HsTp047` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:3058:12
-     |
-3058 | pub struct HsTp047;
-     |            ^^^^^^^
-
-warning: struct `HsTp048` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:3151:12
-     |
-3151 | pub struct HsTp048;
-     |            ^^^^^^^
-
-warning: struct `HsTp049` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:3238:12
-     |
-3238 | pub struct HsTp049;
-     |            ^^^^^^^
-
-warning: struct `HsTp050` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:3322:12
-     |
-3322 | pub struct HsTp050;
-     |            ^^^^^^^
-
-warning: struct `HsTp051` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:3415:12
-     |
-3415 | pub struct HsTp051;
-     |            ^^^^^^^
-
-warning: struct `HsTp052` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:3504:12
-     |
-3504 | pub struct HsTp052;
-     |            ^^^^^^^
-
-warning: struct `HsTp053` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:3593:12
-     |
-3593 | pub struct HsTp053;
-     |            ^^^^^^^
-
-warning: struct `HsTp056` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:3682:12
-     |
-3682 | pub struct HsTp056;
-     |            ^^^^^^^
-
-warning: struct `HsTp058` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:3785:12
-     |
-3785 | pub struct HsTp058;
-     |            ^^^^^^^
-
-warning: struct `HsTp060` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:3857:12
-     |
-3857 | pub struct HsTp060;
-     |            ^^^^^^^
-
-warning: struct `HsTp061` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:3926:12
-     |
-3926 | pub struct HsTp061;
-     |            ^^^^^^^
-
-warning: struct `HsTp063` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:3997:12
-     |
-3997 | pub struct HsTp063;
-     |            ^^^^^^^
-
-warning: struct `HsTp064` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:4072:12
-     |
-4072 | pub struct HsTp064;
-     |            ^^^^^^^
-
-warning: struct `HsTp065` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:4139:12
-     |
-4139 | pub struct HsTp065;
-     |            ^^^^^^^
-
-warning: struct `HsTp066` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:4207:12
-     |
-4207 | pub struct HsTp066;
-     |            ^^^^^^^
-
-warning: struct `HsTp071` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:4277:12
-     |
-4277 | pub struct HsTp071;
-     |            ^^^^^^^
-
-warning: struct `HsTp072` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:4363:12
-     |
-4363 | pub struct HsTp072;
-     |            ^^^^^^^
-
-warning: struct `HsTp076` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:4443:12
-     |
-4443 | pub struct HsTp076;
-     |            ^^^^^^^
-
-warning: struct `HsTp077` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:4530:12
-     |
-4530 | pub struct HsTp077;
-     |            ^^^^^^^
-
-warning: struct `HsTp078` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:4617:12
-     |
-4617 | pub struct HsTp078;
-     |            ^^^^^^^
-
-warning: struct `HsTp079` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:4718:12
-     |
-4718 | pub struct HsTp079;
-     |            ^^^^^^^
-
-warning: struct `HsTp080` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:4811:12
-     |
-4811 | pub struct HsTp080;
-     |            ^^^^^^^
-
-warning: struct `HsTp081` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:4912:12
-     |
-4912 | pub struct HsTp081;
-     |            ^^^^^^^
-
-warning: struct `HsTp106` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:5013:12
-     |
-5013 | pub struct HsTp106;
-     |            ^^^^^^^
-
-warning: struct `HsTp108` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:5131:12
-     |
-5131 | pub struct HsTp108;
-     |            ^^^^^^^
-
-warning: struct `HsTp113` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:5316:12
-     |
-5316 | pub struct HsTp113;
-     |            ^^^^^^^
-
-warning: struct `HsTp114` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:5469:12
-     |
-5469 | pub struct HsTp114;
-     |            ^^^^^^^
-
-warning: struct `HsTp201` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:5835:12
-     |
-5835 | pub struct HsTp201;
-     |            ^^^^^^^
-
-warning: struct `HsTp206` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:5894:12
-     |
-5894 | pub struct HsTp206;
-     |            ^^^^^^^
-
-warning: struct `HsTp211` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:5954:12
-     |
-5954 | pub struct HsTp211;
-     |            ^^^^^^^
-
-warning: struct `HsTp212` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:6014:12
-     |
-6014 | pub struct HsTp212;
-     |            ^^^^^^^
-
-warning: struct `HsTp213` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:6074:12
-     |
-6074 | pub struct HsTp213;
-     |            ^^^^^^^
-
-warning: struct `HsTp214` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:6134:12
-     |
-6134 | pub struct HsTp214;
-     |            ^^^^^^^
-
-warning: struct `HsTp215` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:6194:12
-     |
-6194 | pub struct HsTp215;
-     |            ^^^^^^^
-
-warning: struct `HsTp216` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:6254:12
-     |
-6254 | pub struct HsTp216;
-     |            ^^^^^^^
-
-warning: struct `HsTp217` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:6316:12
-     |
-6316 | pub struct HsTp217;
-     |            ^^^^^^^
-
-warning: struct `HsTp218` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:6382:12
-     |
-6382 | pub struct HsTp218;
-     |            ^^^^^^^
-
-warning: struct `HsTp219` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:6442:12
-     |
-6442 | pub struct HsTp219;
-     |            ^^^^^^^
-
-warning: struct `HsTp220` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:6519:12
-     |
-6519 | pub struct HsTp220;
-     |            ^^^^^^^
-
-warning: struct `HsTp221` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:6579:12
-     |
-6579 | pub struct HsTp221;
-     |            ^^^^^^^
-
-warning: struct `HsTp223` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:6639:12
-     |
-6639 | pub struct HsTp223;
-     |            ^^^^^^^
-
-warning: struct `HsTp224` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:6703:12
-     |
-6703 | pub struct HsTp224;
-     |            ^^^^^^^
-
-warning: struct `HsTp225` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:6779:12
-     |
-6779 | pub struct HsTp225;
-     |            ^^^^^^^
-
-warning: struct `HsTp226` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:6860:12
-     |
-6860 | pub struct HsTp226;
-     |            ^^^^^^^
-
-warning: struct `HsTp227` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:6927:12
-     |
-6927 | pub struct HsTp227;
-     |            ^^^^^^^
-
-warning: struct `HsTp228` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:6993:12
-     |
-6993 | pub struct HsTp228;
-     |            ^^^^^^^
-
-warning: struct `HsTp229` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:7059:12
-     |
-7059 | pub struct HsTp229;
-     |            ^^^^^^^
-
-warning: struct `HsTp230` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:7119:12
-     |
-7119 | pub struct HsTp230;
-     |            ^^^^^^^
-
-warning: struct `HsTp232` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:7184:12
-     |
-7184 | pub struct HsTp232;
-     |            ^^^^^^^
-
-warning: struct `HsTp234` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:7256:12
-     |
-7256 | pub struct HsTp234;
-     |            ^^^^^^^
-
-warning: struct `HsTp235` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:7318:12
-     |
-7318 | pub struct HsTp235;
-     |            ^^^^^^^
-
-warning: struct `HsTp240` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:7385:12
-     |
-7385 | pub struct HsTp240;
-     |            ^^^^^^^
-
-warning: struct `HsTp248` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:7452:12
-     |
-7452 | pub struct HsTp248;
-     |            ^^^^^^^
-
-warning: struct `HsTp249` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:7524:12
-     |
-7524 | pub struct HsTp249;
-     |            ^^^^^^^
-
-warning: struct `HsTp250` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:7590:12
-     |
-7590 | pub struct HsTp250;
-     |            ^^^^^^^
-
-warning: struct `HsTp251` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:7663:12
-     |
-7663 | pub struct HsTp251;
-     |            ^^^^^^^
-
-warning: struct `HsTp252` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:7730:12
-     |
-7730 | pub struct HsTp252;
-     |            ^^^^^^^
-
-warning: struct `HsTp254` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:7797:12
-     |
-7797 | pub struct HsTp254;
-     |            ^^^^^^^
-
-warning: struct `HsTp255` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:7868:12
-     |
-7868 | pub struct HsTp255;
-     |            ^^^^^^^
-
-warning: struct `HsTp256` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:7938:12
-     |
-7938 | pub struct HsTp256;
-     |            ^^^^^^^
-
-warning: struct `HsTp257` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:8011:12
-     |
-8011 | pub struct HsTp257;
-     |            ^^^^^^^
-
-warning: struct `HsTp258` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:8083:12
-     |
-8083 | pub struct HsTp258;
-     |            ^^^^^^^
-
-warning: struct `HsTp259` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:8155:12
-     |
-8155 | pub struct HsTp259;
-     |            ^^^^^^^
-
-warning: struct `HsTp262` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:8227:12
-     |
-8227 | pub struct HsTp262;
-     |            ^^^^^^^
-
-warning: struct `HsTp263` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:8321:12
-     |
-8321 | pub struct HsTp263;
-     |            ^^^^^^^
-
-warning: struct `HsTp264` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:8408:12
-     |
-8408 | pub struct HsTp264;
-     |            ^^^^^^^
-
-warning: struct `HsTp270` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:8495:12
-     |
-8495 | pub struct HsTp270;
-     |            ^^^^^^^
-
-warning: struct `HsTp325` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:8580:12
-     |
-8580 | pub struct HsTp325;
-     |            ^^^^^^^
-
-warning: struct `HsTp335` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:8651:12
-     |
-8651 | pub struct HsTp335;
-     |            ^^^^^^^
-
-warning: struct `HsTp338` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:8723:12
-     |
-8723 | pub struct HsTp338;
-     |            ^^^^^^^
-
-warning: struct `HsTp339` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:8796:12
-     |
-8796 | pub struct HsTp339;
-     |            ^^^^^^^
-
-warning: struct `HsTp344` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:8866:12
-     |
-8866 | pub struct HsTp344;
-     |            ^^^^^^^
-
-warning: struct `HsTp354` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:8935:12
-     |
-8935 | pub struct HsTp354;
-     |            ^^^^^^^
-
-warning: struct `HsTp374` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:9012:12
-     |
-9012 | pub struct HsTp374;
-     |            ^^^^^^^
-
-warning: struct `HsTp376` is never constructed
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:9180:12
-     |
-9180 | pub struct HsTp376;
-     |            ^^^^^^^
-
-warning: static `HS_PROBLEMS` is never used
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:9397:12
-     |
-9397 | pub static HS_PROBLEMS: &[HsProblemEntry] = &[
-     |            ^^^^^^^^^^^
-
-warning: function `solve_all` is never used
-    --> examples/../benchmarks/hs/generated/hs_problems.rs:9522:8
-     |
-9522 | pub fn solve_all(options: &ripopt::SolverOptions) -> Vec<HsSolveResult> {
-     |        ^^^^^^^^^
-
-warning: struct `HsSolveResult` is never constructed
-     --> examples/../benchmarks/hs/generated/hs_problems.rs:13008:12
-      |
-13008 | pub struct HsSolveResult {
-      |            ^^^^^^^^^^^^^
-
-warning: `ripopt` (bin "ipopt_native" test) generated 2 warnings (2 duplicates)
-warning: function `all_problems` is never used
-    --> tests/../benchmarks/electrolyte/problems.rs:1839:8
-     |
-1839 | pub fn all_problems() -> Vec<(&'static str, Box<dyn NlpProblem>)> {
-     |        ^^^^^^^^^^^^
-     |
-     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
-
-warning: `ripopt` (example "regression_test") generated 122 warnings
-warning: unused variable: `y_pred`
-   --> examples/sipopt_analytical.rs:331:9
-    |
-331 |     let y_pred = ctx2.result.x[1] + sens_pred.dx_dp[0][1];
-    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_y_pred`
-    |
-    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
-
-warning: `ripopt` (example "electrolyte_benchmark") generated 1 warning
-warning: `ripopt` (example "sipopt_analytical") generated 1 warning (run `cargo fix --example "sipopt_analytical" -p ripopt` to apply 1 suggestion)
-warning: `ripopt` (test "electrolyte_thermo") generated 1 warning
-    Finished `release` profile [optimized + debuginfo] target(s) in 4m 19s
+warning: `ripopt` (bin "ipopt_native") generated 1 warning (run `cargo fix --bin "ipopt_native" -p ripopt` to apply 1 suggestion)
+warning: `ripopt` (bin "ipopt_native" test) generated 1 warning (1 duplicate)
+warning: `ripopt` (test "correctness") generated 1 warning (run `cargo fix --test "correctness" -p ripopt` to apply 1 suggestion)
+    Finished `release` profile [optimized + debuginfo] target(s) in 4m 09s
      Running unittests src/lib.rs (/Users/jkitchin/Dropbox/projects/ripopt/target/release/deps/ripopt-b703439454d2284b)
 
 running 0 tests
 
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 150 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 148 filtered out; finished in 0.00s
 
      Running unittests benchmarks/hs/run_ipopt_native.rs (/Users/jkitchin/Dropbox/projects/ripopt/target/release/deps/ipopt_native-b97cfccbd0c1ecb0)
 
@@ -823,13 +191,19 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; fin
 
 running 0 tests
 
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 22 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 27 filtered out; finished in 0.00s
 
      Running tests/electrolyte_thermo.rs (/Users/jkitchin/Dropbox/projects/ripopt/target/release/deps/electrolyte_thermo-4cc36ba5800a1f23)
 
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.00s
+
+     Running tests/grid.rs (/Users/jkitchin/Dropbox/projects/ripopt/target/release/deps/grid-28545c8b3f7bbdd5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
 
      Running tests/hs_problems_subset.rs (/Users/jkitchin/Dropbox/projects/ripopt/target/release/deps/hs_problems_subset-5f93d1ed3a30b0d2)
 
@@ -859,7 +233,7 @@ test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; fin
 
 running 0 tests
 
-test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.00s
 
      Running tests/large_scale_benchmark.rs (/Users/jkitchin/Dropbox/projects/ripopt/target/release/deps/large_scale_benchmark-5090849c2741f7a7)
 
@@ -874,8 +248,12 @@ This program contains Ipopt, a library for large-scale nonlinear optimization.
          For more information visit https://github.com/coin-or/Ipopt
 ******************************************************************************
 
-BENCH: name=Rosenbrock 500, n=500, m=0, ripopt_status=Optimal, ripopt_obj=2.174612e-18, ripopt_iters=81, ripopt_time=0.0034, ipopt_status=Optimal, ipopt_obj=3.520843e-18, ipopt_iters=749, ipopt_time=0.2064, speedup=61.37x
-BENCH: name=Bratu 1K, n=1000, m=998, ripopt_status=Optimal, ripopt_obj=0.000000e0, ripopt_iters=3, ripopt_time=0.0022, ipopt_status=Optimal, ipopt_obj=0.000000e0, ipopt_iters=2, ipopt_time=0.0030, speedup=1.38x
-BENCH: name=SparseQP 1K, n=500, m=500, ripopt_status=Optimal, ripopt_obj=-1.248170e2, ripopt_iters=7, ripopt_time=0.0460, ipopt_status=Optimal, ipopt_obj=-1.248170e2, ipopt_iters=6, ipopt_time=0.0039, speedup=0.08x
-BENCH: name=OptControl 2.5K, n=2499, m=1250, ripopt_status=Optimal, ripopt_obj=1.176958e-1, ripopt_iters=1, ripopt_time=0.0059, ipopt_status=Optimal, ipopt_obj=1.176959e-1, ipopt_iters=1, ipopt_time=0.0026, speedup=0.43x
+BENCH: name=Rosenbrock 500, n=500, m=0, ripopt_status=Optimal, ripopt_obj=2.174612e-18, ripopt_iters=81, ripopt_time=0.0026, ipopt_status=Optimal, ipopt_obj=3.520843e-18, ipopt_iters=749, ipopt_time=0.1985, speedup=76.20x
+BENCH: name=Bratu 1K, n=1000, m=998, ripopt_status=Optimal, ripopt_obj=0.000000e0, ripopt_iters=3, ripopt_time=0.0019, ipopt_status=Optimal, ipopt_obj=0.000000e0, ipopt_iters=2, ipopt_time=0.0020, speedup=1.05x
+BENCH: name=SparseQP 1K, n=500, m=500, ripopt_status=Optimal, ripopt_obj=-1.248170e2, ripopt_iters=13, ripopt_time=0.1760, ipopt_status=Optimal, ipopt_obj=-1.248170e2, ipopt_iters=6, ipopt_time=0.0037, speedup=0.02x
+BENCH: name=OptControl 2.5K, n=2499, m=1250, ripopt_status=Optimal, ripopt_obj=1.176958e-1, ripopt_iters=1, ripopt_time=0.0059, ipopt_status=Optimal, ipopt_obj=1.176959e-1, ipopt_iters=1, ipopt_time=0.0024, speedup=0.40x
 test large_scale_vs_ipopt has been running for over 60 seconds
+error: test failed, to rerun pass `--test large_scale_benchmark`
+
+Caused by:
+  process didn't exit successfully: `/Users/jkitchin/Dropbox/projects/ripopt/target/release/deps/large_scale_benchmark-5090849c2741f7a7 --ignored large_scale_vs_ipopt --nocapture` (signal: 15, SIGTERM: termination signal)

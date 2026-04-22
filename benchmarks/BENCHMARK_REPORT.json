@@ -1222,9 +1222,9 @@
   {
     "name": "ACOPP30",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "NumericalError",
     "ipopt_status": "Optimal",
-    "ripopt_obj": null,
+    "ripopt_obj": 231.9158228261431,
     "ipopt_obj": 576.892421898335,
     "ripopt_solved": false,
     "ipopt_solved": true
@@ -1452,9 +1452,9 @@
   {
     "name": "BATCH",
     "suite": "CUTEst",
-    "ripopt_status": "NumericalError",
+    "ripopt_status": "Timeout",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 55155.44377188684,
+    "ripopt_obj": null,
     "ipopt_obj": 259180.3371654187,
     "ripopt_solved": false,
     "ipopt_solved": true
@@ -2132,9 +2132,9 @@
   {
     "name": "CORE1",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "NumericalError",
     "ipopt_status": "Optimal",
-    "ripopt_obj": null,
+    "ripopt_obj": 76.48095295170705,
     "ipopt_obj": 91.05623953090804,
     "ripopt_solved": false,
     "ipopt_solved": true
@@ -2142,9 +2142,9 @@
   {
     "name": "CRESC100",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "MaxIterations",
     "ipopt_status": "Infeasible",
-    "ripopt_obj": null,
+    "ripopt_obj": 0.01153063258649482,
     "ipopt_obj": -3.4120043127474586e-14,
     "ripopt_solved": false,
     "ipopt_solved": false
@@ -2552,9 +2552,9 @@
   {
     "name": "DIAMON2DLS",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "NumericalError",
     "ipopt_status": "Timeout",
-    "ripopt_obj": null,
+    "ripopt_obj": 8667.845602759637,
     "ipopt_obj": null,
     "ripopt_solved": false,
     "ipopt_solved": false
@@ -2572,9 +2572,9 @@
   {
     "name": "DIAMON3DLS",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "NumericalError",
     "ipopt_status": "Timeout",
-    "ripopt_obj": null,
+    "ripopt_obj": 293.1911575096848,
     "ipopt_obj": null,
     "ripopt_solved": false,
     "ipopt_solved": false
@@ -2662,9 +2662,9 @@
   {
     "name": "DMN15103LS",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "NumericalError",
     "ipopt_status": "Timeout",
-    "ripopt_obj": null,
+    "ripopt_obj": 299.5152381052861,
     "ipopt_obj": null,
     "ripopt_solved": false,
     "ipopt_solved": false
@@ -2682,9 +2682,9 @@
   {
     "name": "DMN15332LS",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "NumericalError",
     "ipopt_status": "Timeout",
-    "ripopt_obj": null,
+    "ripopt_obj": 154.91926067574488,
     "ipopt_obj": null,
     "ripopt_solved": false,
     "ipopt_solved": false
@@ -2702,9 +2702,9 @@
   {
     "name": "DMN15333LS",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "NumericalError",
     "ipopt_status": "Timeout",
-    "ripopt_obj": null,
+    "ripopt_obj": 116.72621916484282,
     "ipopt_obj": null,
     "ripopt_solved": false,
     "ipopt_solved": false
@@ -2722,19 +2722,19 @@
   {
     "name": "DMN37142LS",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "Optimal",
     "ipopt_status": "Timeout",
-    "ripopt_obj": null,
+    "ripopt_obj": 293.74514537472936,
     "ipopt_obj": null,
-    "ripopt_solved": false,
+    "ripopt_solved": true,
     "ipopt_solved": false
   },
   {
     "name": "DMN37143",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "MaxIterations",
     "ipopt_status": "IpoptStatus(-10)",
-    "ripopt_obj": null,
+    "ripopt_obj": 0.0,
     "ipopt_obj": 0.0,
     "ripopt_solved": false,
     "ipopt_solved": false
@@ -2742,9 +2742,9 @@
   {
     "name": "DMN37143LS",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "NumericalError",
     "ipopt_status": "Timeout",
-    "ripopt_obj": null,
+    "ripopt_obj": 273.2804338994223,
     "ipopt_obj": null,
     "ripopt_solved": false,
     "ipopt_solved": false
@@ -3172,9 +3172,9 @@
   {
     "name": "FEEDLOC",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "NumericalError",
     "ipopt_status": "Optimal",
-    "ripopt_obj": null,
+    "ripopt_obj": 0.7912596332165432,
     "ipopt_obj": -9.539853769965943e-10,
     "ripopt_solved": false,
     "ipopt_solved": true
@@ -3362,9 +3362,9 @@
   {
     "name": "GROUPING",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "NumericalError",
     "ipopt_status": "IpoptStatus(-10)",
-    "ripopt_obj": null,
+    "ripopt_obj": 13.306439961093568,
     "ipopt_obj": 0.0,
     "ripopt_solved": false,
     "ipopt_solved": false
@@ -5642,9 +5642,9 @@
   {
     "name": "LINSPANH",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "NumericalError",
     "ipopt_status": "Optimal",
-    "ripopt_obj": null,
+    "ripopt_obj": -77.00000001,
     "ipopt_obj": -77.00004548557075,
     "ripopt_solved": false,
     "ipopt_solved": true
@@ -5702,11 +5702,11 @@
   {
     "name": "LRCOVTYPE",
     "suite": "CUTEst",
-    "ripopt_status": "Optimal",
+    "ripopt_status": "Timeout",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 0.5931876100689302,
+    "ripopt_obj": null,
     "ipopt_obj": 0.5723072035232195,
-    "ripopt_solved": true,
+    "ripopt_solved": false,
     "ipopt_solved": true
   },
   {
@@ -6232,9 +6232,9 @@
   {
     "name": "MUONSINE",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "MaxIterations",
     "ipopt_status": "IpoptStatus(-10)",
-    "ripopt_obj": null,
+    "ripopt_obj": 0.0,
     "ipopt_obj": 0.0,
     "ripopt_solved": false,
     "ipopt_solved": false
@@ -6362,9 +6362,9 @@
   {
     "name": "OET5",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "NumericalError",
     "ipopt_status": "Optimal",
-    "ripopt_obj": null,
+    "ripopt_obj": 4.231975512067143,
     "ipopt_obj": 0.0026500766742341727,
     "ripopt_solved": false,
     "ipopt_solved": true
@@ -6382,9 +6382,9 @@
   {
     "name": "OET7",
     "suite": "CUTEst",
-    "ripopt_status": "NumericalError",
+    "ripopt_status": "Timeout",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 0.034018919419929516,
+    "ripopt_obj": null,
     "ipopt_obj": 4.465915088363962e-05,
     "ripopt_solved": false,
     "ipopt_solved": true
@@ -7834,7 +7834,7 @@
     "suite": "CUTEst",
     "ripopt_status": "MaxIterations",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 22416400053.91119,
+    "ripopt_obj": 22371626735.775604,
     "ipopt_obj": 239.73800065831855,
     "ripopt_solved": false,
     "ipopt_solved": true
@@ -8132,9 +8132,9 @@
   {
     "name": "TRO4X4",
     "suite": "CUTEst",
-    "ripopt_status": "NumericalError",
+    "ripopt_status": "Timeout",
     "ipopt_status": "IpoptStatus(4)",
-    "ripopt_obj": 9.000704344911119,
+    "ripopt_obj": null,
     "ipopt_obj": -1.957476279591892e+20,
     "ripopt_solved": false,
     "ipopt_solved": false
@@ -8192,9 +8192,9 @@
   {
     "name": "VESUVIA",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "NumericalError",
     "ipopt_status": "IpoptStatus(-10)",
-    "ripopt_obj": null,
+    "ripopt_obj": 0.0,
     "ipopt_obj": 0.0,
     "ripopt_solved": false,
     "ipopt_solved": false
@@ -8232,9 +8232,9 @@
   {
     "name": "VESUVIOU",
     "suite": "CUTEst",
-    "ripopt_status": "Timeout",
+    "ripopt_status": "MaxIterations",
     "ipopt_status": "IpoptStatus(-10)",
-    "ripopt_obj": null,
+    "ripopt_obj": 0.0,
     "ipopt_obj": 0.0,
     "ripopt_solved": false,
     "ipopt_solved": false
@@ -8474,7 +8474,7 @@
     "suite": "Electrolyte",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 7.825841155039627e-10,
+    "ripopt_obj": 7.825840587093983e-10,
     "ipopt_obj": 7.825840587101624e-10,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -8484,7 +8484,7 @@
     "suite": "Electrolyte",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -0.006940014800943072,
+    "ripopt_obj": -0.0069071942993561754,
     "ipopt_obj": -0.006933670187752001,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -8494,7 +8494,7 @@
     "suite": "Electrolyte",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -0.7723677050008244,
+    "ripopt_obj": -0.7723710924127855,
     "ipopt_obj": -0.7723713625975525,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -8534,7 +8534,7 @@
     "suite": "Electrolyte",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -0.4832728753440556,
+    "ripopt_obj": -0.4832692575134414,
     "ipopt_obj": -0.4832680501409171,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -8544,7 +8544,7 @@
     "suite": "Electrolyte",
     "ripopt_status": "Optimal",
     "ipopt_status": "Optimal",
-    "ripopt_obj": -0.05530841998132958,
+    "ripopt_obj": -0.05531315163320791,
     "ipopt_obj": -0.05531205597235094,
     "ripopt_solved": true,
     "ipopt_solved": true
@@ -8574,7 +8574,7 @@
     "suite": "Electrolyte",
     "ripopt_status": "Optimal",
     "ipopt_status": "Infeasible",
-    "ripopt_obj": -1.3441964271251066,
+    "ripopt_obj": -1.3407311564637316,
     "ipopt_obj": -1.36283675686854,
     "ripopt_solved": true,
     "ipopt_solved": false
@@ -8612,9 +8612,9 @@
   {
     "name": "case30_ieee",
     "suite": "Grid",
-    "ripopt_status": "RestorationFailed",
+    "ripopt_status": "MaxIterations",
     "ipopt_status": "Optimal",
-    "ripopt_obj": 5349.56276674617,
+    "ripopt_obj": 5541.316190692105,
     "ipopt_obj": 8208.515425007794,
     "ripopt_solved": false,
     "ipopt_solved": true
@@ -8644,7 +8644,7 @@
     "suite": "CHO",
     "ripopt_status": "MaxIterations",
     "ipopt_status": "MaxIter",
-    "ripopt_obj": 259937.4333847187,
+    "ripopt_obj": 63444.7965789968,
     "ipopt_obj": 65314.141495899035,
     "ripopt_solved": false,
     "ipopt_solved": false
