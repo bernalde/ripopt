@@ -1,5 +1,146 @@
 # Changelog
 
+## [0.7.0] - 2026-04-21
+
+First release where ripopt solves strictly more HS **and** more CUTEst
+problems than native Ipopt (+2 HS, +1 CUTEst). The headline theme of
+this cycle is closing the remaining behavioral gaps between ripopt and
+Ipopt 3.14.x — most importantly the convergence semantics around the
+bound multipliers `z_L`/`z_U`, the post-restoration multiplier reset,
+the Mehrotra predictor-corrector, the KKT backward-error probe, and
+the barrier-subproblem stop-test gate in Free-mode μ updates.
+
+### Breaking changes
+- **`refactor(ipm)!: drop `z_opt`, align convergence with Ipopt's
+  iterative-`z` semantics** (e35407c). Previously ripopt kept a
+  separate `z_opt` reconstruction used only by the convergence test;
+  now the iterative `z_L`/`z_U` themselves are the convergence vector,
+  matching Ipopt's `PDFullSpaceSolver` semantics. The
+  `SolveDiagnostics::final_dual_inf_scaled` field has been removed —
+  callers that consumed it should switch to `final_dual_inf`. Bumped
+  to a minor release for this reason.
+- `SolveStatus::Acceptable` was removed. Non-`Optimal` statuses now
+  always surface honestly (`MaxIterations`, `NumericalError`,
+  `RestorationFailed`, `Infeasible`). Consumers that treated
+  `Acceptable` as success should audit their integration.
+
+### Added
+- **`ripopt-py`: direct Python interface with JAX autodiff** (b89f169,
+  a9ba046). Exposes a persistent `Problem` class with dual warm start
+  (`Problem.solve(lam0=, z_l0=, z_u0=)`, b95e5b8), accepts Ipopt-style
+  option aliases (`mu_strategy`, `sb`, `bound_push`, cyipopt-style
+  names, 4779b37), and is now published on PyPI (e32b57b) alongside
+  `pyomo-ripopt` (8cce31a).
+- **NaN/Inf evaluation hardening and C API parity** (66d77a1,
+  42f4015). ripopt now matches Ipopt's behavior when user callbacks
+  return NaN/Inf or signal failure: α-halving retry on post-step
+  evaluation failure (2b5cb99), soft `EvalError → NumericalError`
+  transition instead of hard abort (07cf37f), and structural parity
+  with Ipopt's `TNLP::eval_*` error-handling contract.
+- **`NlpProblem::new_x` flag for evaluation caching** (d138a25). User
+  code can now short-circuit repeated evaluations at the same
+  iterate, matching Ipopt's `new_x` contract. Existing trait
+  implementations compile unchanged (the parameter defaults to `true`
+  on old code paths).
+- **`num-dual` automatic-differentiation example** (4aad98a) with a
+  dedicated README section showing forward-mode AD through
+  `NlpProblem`.
+- **TSV direction-diff harness** for step-by-step comparison against
+  a reference solver trace (e11832f), with an extended trace schema
+  (α_max, τ, Σ condition number, SOC-accepted, c6178d6).
+
+### Changed
+- **Post-restoration multiplier reset matches Ipopt exactly** (07dcdcc,
+  20b51ce, af0bf09). The `z_L`/`z_U` reset after restoration now
+  absorbs the correct contribution into the least-squares `y`
+  re-solve, computed via Ipopt's exact augmented system. This was the
+  source of several silent failures at the boundary between
+  restoration and the main IPM.
+- **Mehrotra predictor-corrector**: removed the skip gate that
+  previously disabled corrections on highly infeasible iterates
+  (72bae01); fixed the cross-term in the primal RHS and the `dz`
+  recovery step (9deaff4); split Mehrotra vs filter-LS RHS
+  assembly so the corrector and the line-search share no hidden
+  state (eeae3d5).
+- **Ipopt barrier-subproblem stop-test gate in Free-mode μ updates**
+  (7f333de). μ no longer decreases until the current barrier
+  subproblem passes Ipopt's stop test, preventing premature
+  centering collapse on marginally feasible iterates.
+- **Always verify KKT backward error; no IC-undoing iterative
+  refinement** (66bce53). The `n+m ≥ 100` shortcut in
+  `factor_with_inertia_correction` is gone — every accepted
+  factorization now runs the backward-error probe. Iterative
+  refinement no longer tries to undo the inertia-correction
+  perturbation; Ipopt treats IC as part of the linear system, and so
+  does ripopt now.
+- **Reject rank-deficient solutions with huge magnitude** (3211838).
+  When the solve produces a correction whose norm is inconsistent
+  with the residual, the factorization is rejected and perturbation
+  escalates, matching Ipopt's `PDPerturbationHandler` behavior.
+- **Iterative refinement in custom-RHS and condensed solves**
+  (96329a2). Custom-RHS solves (used by sensitivity, SOC, and the
+  condensed-KKT path) now run the same iterative-refinement loop as
+  the primary solve.
+- **Dropped element-wise NaN checks on `grad_f` and `g`** (0ed77e1).
+  Replaced with vector-norm finiteness checks, matching Ipopt.
+- **Loqo μ-oracle monotone floor** (02471aa). Re-applies the floor
+  that prevents μ from increasing inside a barrier subproblem.
+
+### Fixed
+- Documentation: rustdoc intra-doc link warnings from `[i]` index
+  brackets — escape as `\[i\]` to prevent rustdoc from parsing them
+  as link references.
+- Benchmark runners: drop stale `final_dual_inf_scaled` references in
+  the CUTEst runner (bc1fa21) and the HS native-ipopt runner
+  (2780600).
+- CI: gate `cat_a_probe` example behind the `cutest` feature (2b293e2).
+- Two cyipopt-style spelling aliases were accepted on both the
+  Python and Rust option paths (4779b37).
+
+### Performance
+Fresh benchmark results (2026-04-21 on Apple Mac Mini, aarch64-apple-darwin):
+- **HS suite**: ripopt **118/120 (98.3%)**, Ipopt 116/120 (96.7%).
+  15.0× geometric-mean speedup on 116 commonly-solved, median 14.2×,
+  ripopt faster on 113/116 (97%). ripopt-only solves: HS214, HS223.
+  Ipopt-only solves: 0.
+- **CUTEst suite**: ripopt **562/727 (77.3%)**, Ipopt 561/727 (77.2%).
+  9.9× geometric-mean speedup on 525 commonly-solved, median 18.9×,
+  ripopt faster on 440/525 (84%). ripopt-only solves: 37;
+  Ipopt-only solves: 36.
+- **Electrolyte thermodynamics**: ripopt 13/13, Ipopt 12/13. 17.5×
+  geometric-mean speedup on 12 commonly-solved. Seawater speciation
+  now takes 1,415 iterations (was 22 at v0.6.2) under the stricter
+  v0.7.0 convergence semantics, but still solves where Ipopt declares
+  Infeasible.
+- **Grid (AC OPF)**: ripopt 3/4, Ipopt 4/4. Geometric-mean 2.8× on
+  the 3 commonly-solved. See Notes below for the case30_ieee
+  regression.
+
+### Notes
+- **case30_ieee regression**. At v0.7.0 ripopt reaches `MaxIterations`
+  on PGLib-OPF `case30_ieee`, regressing from v0.6.2 which converged
+  to a different local minimum (obj=8,609.66, 4.6% above the known
+  optimum of 8,081.52, compared to Ipopt's 8,208.52 at 1.6% above).
+  The regression is a side-effect of dropping the `n+m ≥ 100`
+  shortcut in `factor_with_inertia_correction` (66bce53): the
+  stricter backward-error probe now perturbs more aggressively on
+  this rank-deficient AC-OPF Jacobian. The v0.6.2 "solve" was in
+  fact converging to a different local optimum than Ipopt, so this
+  is less of a correctness regression than a robustness regression;
+  still, ripopt now solves one fewer grid problem than it did at
+  v0.6.2. Tracked for a future patch.
+- **Poisson 2.5K large-scale benchmark**. The Poisson 2.5K problem
+  exhausts `max_iter` under the v0.7.0 convergence semantics and
+  causes `make benchmark` to hang if run to completion; the large-
+  scale sweep is therefore reported for the 4 problems that finish
+  quickly (Rosenbrock 500, Bratu 1K, SparseQP 1K, OptControl 2.5K).
+  Historical v0.6.2 timings for the other large-scale problems
+  remain in `benchmarks/large_scale/large_scale_results.txt`. Full
+  sweep is gated on a separate investigation.
+- **ripopt-py** on PyPI as `ripopt-py` (direct JAX-backed interface)
+  and `pyomo-ripopt` (Pyomo plugin). Workspace crates stay on
+  semver: `ripopt` → 0.7.0, `rmumps` unchanged at 0.1.1.
+
 ## [0.6.2] - 2026-04-12
 
 ### Added
