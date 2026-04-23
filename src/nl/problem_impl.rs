@@ -1,7 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
-use super::autodiff::Tape;
+use super::autodiff::{ExternalResolver, Tape};
 use super::expr::ExprNode;
+use super::external::ExternalLibrary;
 use super::parser::{ImportedFunc, NlFileData};
 use crate::NlpProblem;
 
@@ -42,17 +44,15 @@ pub struct NlProblem {
 impl NlProblem {
     /// Build an NlProblem from parsed NL file data.
     ///
-    /// Returns an error if the problem uses AMPL imported (external) functions —
-    /// these reference compiled C routines via AMPL's `funcadd` ABI and are not
-    /// yet supported by ripopt.
+    /// If the problem uses AMPL imported (external) functions, the libraries
+    /// listed in the `AMPLFUNC` environment variable are loaded via
+    /// [`ExternalLibrary`] and each declared `F` segment is resolved against
+    /// the union of their registered functions. An error is returned if any
+    /// function cannot be resolved.
     pub fn from_nl_data(data: NlFileData) -> Result<Self, String> {
-        if let Some(name) = find_external_func(&data) {
-            return Err(format!(
-                "problem uses external function '{}'; external functions \
-                 (AMPL imported functions) are not supported by ripopt",
-                name
-            ));
-        }
+        // Phase-2: build a resolver mapping each Funcall id -> (library, name).
+        let resolver = resolve_externals(&data)?;
+
         let n = data.header.n_vars;
         let m = data.header.n_constrs;
 
@@ -65,9 +65,11 @@ impl NlProblem {
 
         // Pre-build common expression tapes to avoid exponential inlining blowup
         use super::autodiff::CommonExprCache;
-        let ce_cache = CommonExprCache::build(&data.common_exprs, n);
+        let ce_cache = CommonExprCache::build_with_externals(&data.common_exprs, n, &resolver);
 
-        let obj_tape = obj_expr.map(|expr| Tape::build_cached(&expr, &data.common_exprs, n, &ce_cache));
+        let obj_tape = obj_expr.map(|expr| {
+            Tape::build_cached_with_externals(&expr, &data.common_exprs, n, &ce_cache, &resolver)
+        });
 
         let obj_linear = if obj_idx < data.obj_linear.len() {
             data.obj_linear[obj_idx].clone()
@@ -79,7 +81,17 @@ impl NlProblem {
         let con_tapes: Vec<Option<Tape>> = data
             .con_exprs
             .iter()
-            .map(|expr| expr.as_ref().map(|e| Tape::build_cached(e, &data.common_exprs, n, &ce_cache)))
+            .map(|expr| {
+                expr.as_ref().map(|e| {
+                    Tape::build_cached_with_externals(
+                        e,
+                        &data.common_exprs,
+                        n,
+                        &ce_cache,
+                        &resolver,
+                    )
+                })
+            })
             .collect();
 
         // Build Jacobian sparsity from con_linear entries + nonlinear variables
@@ -341,62 +353,129 @@ impl NlpProblem for NlProblem {
     }
 }
 
-/// Scan parsed NL data for any `ExprNode::Funcall`. If found, return a
-/// human-readable function name (resolved from the F-segment declarations
-/// when possible) so callers can raise a clear error.
-fn find_external_func(data: &NlFileData) -> Option<String> {
-    let mut found: Option<usize> = None;
+/// Collect the set of `Funcall` ids referenced anywhere in the NL data
+/// (objective, constraints, common subexpressions).
+fn collect_funcall_ids(data: &NlFileData) -> HashSet<usize> {
+    let mut ids: HashSet<usize> = HashSet::new();
     if let Some((_, _, Some(expr))) = data.obj_exprs.first() {
-        walk_for_funcall(expr, &mut found);
+        walk_collect_ids(expr, &mut ids);
     }
-    if found.is_none() {
-        for expr in data.con_exprs.iter().flatten() {
-            walk_for_funcall(expr, &mut found);
-            if found.is_some() {
-                break;
-            }
-        }
+    for expr in data.con_exprs.iter().flatten() {
+        walk_collect_ids(expr, &mut ids);
     }
-    if found.is_none() {
-        for expr in &data.common_exprs {
-            walk_for_funcall(expr, &mut found);
-            if found.is_some() {
-                break;
-            }
-        }
+    for expr in &data.common_exprs {
+        walk_collect_ids(expr, &mut ids);
     }
-    let id = found?;
-    let name = data
-        .imported_funcs
-        .iter()
-        .find(|f: &&ImportedFunc| f.id == id)
-        .map(|f| f.name.clone())
-        .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| format!("f{}", id));
-    Some(name)
+    ids
 }
 
-fn walk_for_funcall(expr: &ExprNode, found: &mut Option<usize>) {
-    if found.is_some() {
-        return;
-    }
+fn walk_collect_ids(expr: &ExprNode, ids: &mut HashSet<usize>) {
     match expr {
-        ExprNode::Funcall { id, .. } => *found = Some(*id),
+        ExprNode::Funcall { id, args } => {
+            ids.insert(*id);
+            for a in args {
+                walk_collect_ids(a, ids);
+            }
+        }
         ExprNode::Const(_) | ExprNode::Var(_) | ExprNode::StringLiteral(_) => {}
         ExprNode::Binary(_, l, r) => {
-            walk_for_funcall(l, found);
-            walk_for_funcall(r, found);
+            walk_collect_ids(l, ids);
+            walk_collect_ids(r, ids);
         }
-        ExprNode::Unary(_, a) => walk_for_funcall(a, found),
+        ExprNode::Unary(_, a) => walk_collect_ids(a, ids),
         ExprNode::Nary(_, args) => {
             for a in args {
-                walk_for_funcall(a, found);
+                walk_collect_ids(a, ids);
             }
         }
         ExprNode::If(c, t, e) => {
-            walk_for_funcall(c, found);
-            walk_for_funcall(t, found);
-            walk_for_funcall(e, found);
+            walk_collect_ids(c, ids);
+            walk_collect_ids(t, ids);
+            walk_collect_ids(e, ids);
         }
     }
+}
+
+/// Split the `AMPLFUNC` environment variable into candidate library paths.
+/// AMPL accepts either newline- or (on UNIX) colon-separated lists.
+fn amplfunc_paths() -> Vec<std::path::PathBuf> {
+    match std::env::var("AMPLFUNC") {
+        Err(_) => Vec::new(),
+        Ok(s) => s
+            .split(|c: char| c == '\n' || c == ':')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(std::path::PathBuf::from)
+            .collect(),
+    }
+}
+
+/// Build the tape builder's [`ExternalResolver`] by:
+///   1. collecting every `Funcall` id referenced in the NL data,
+///   2. loading every shared library listed in `AMPLFUNC`,
+///   3. for each imported F-segment, looking up a library that registered
+///      a function by the declared name.
+/// Returns the resolver, or a `String` error describing what's missing.
+fn resolve_externals(data: &NlFileData) -> Result<ExternalResolver, String> {
+    let used_ids = collect_funcall_ids(data);
+    if used_ids.is_empty() {
+        return Ok(ExternalResolver::default());
+    }
+
+    // Load every library listed in AMPLFUNC. Keep the Arc handles so later
+    // lookups succeed and so the libraries stay alive with each tape.
+    let lib_paths = amplfunc_paths();
+    if lib_paths.is_empty() {
+        let first_name = data
+            .imported_funcs
+            .iter()
+            .find(|f: &&ImportedFunc| used_ids.contains(&f.id))
+            .map(|f| f.name.clone())
+            .unwrap_or_else(|| "<unknown>".to_string());
+        return Err(format!(
+            "problem uses external function '{first_name}' but AMPLFUNC is not set. \
+             Set AMPLFUNC to a newline- or colon-separated list of shared-library paths \
+             (e.g. the IDAES Helmholtz extension)."
+        ));
+    }
+
+    let mut libs: Vec<Arc<ExternalLibrary>> = Vec::with_capacity(lib_paths.len());
+    for path in &lib_paths {
+        let lib = ExternalLibrary::load(path).map_err(|e| {
+            format!("failed to load AMPLFUNC library '{}': {}", path.display(), e)
+        })?;
+        libs.push(Arc::new(lib));
+    }
+
+    // Resolve each referenced F-segment against the loaded libraries.
+    let mut funcs_by_id: HashMap<usize, (Arc<ExternalLibrary>, String)> = HashMap::new();
+    for id in &used_ids {
+        let func = data
+            .imported_funcs
+            .iter()
+            .find(|f: &&ImportedFunc| f.id == *id)
+            .ok_or_else(|| {
+                format!("problem references Funcall id={id} but no F-segment declares it")
+            })?;
+        let name = func.name.clone();
+        let matching = libs.iter().find(|lib| lib.get(&name).is_some());
+        match matching {
+            Some(lib) => {
+                funcs_by_id.insert(*id, (lib.clone(), name));
+            }
+            None => {
+                let loaded: Vec<String> = lib_paths
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect();
+                return Err(format!(
+                    "external function '{name}' (F{id}) was not registered by any \
+                     AMPLFUNC library; loaded: [{}]",
+                    loaded.join(", ")
+                ));
+            }
+        }
+    }
+
+    Ok(ExternalResolver { funcs_by_id })
 }

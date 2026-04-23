@@ -1,6 +1,13 @@
 use ripopt::nl::{parse_nl_file, NlProblem, write_sol};
 use ripopt::{NlpProblem, SolveResult, SolveStatus, SolverOptions};
 
+/// Shared lock for tests that mutate process-global env vars (AMPLFUNC).
+/// Tests that would otherwise race for that state take this lock first.
+fn env_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
 /// Helper: solve an NlProblem with default options (quiet).
 fn solve_nl(problem: &NlProblem) -> SolveResult {
     let mut opts = SolverOptions::default();
@@ -518,19 +525,64 @@ fn nl_parse_idaes_helmholtz_fixture() {
     assert!(names.iter().any(|n| n == "h_liq_hp"), "expected h_liq_hp in {names:?}");
     assert!(names.iter().any(|n| n == "h_vap_hp"), "expected h_vap_hp in {names:?}");
 
-    let err = NlProblem::from_nl_data(data)
+    // Exercise the "no AMPLFUNC" path. Take the env lock so this doesn't
+    // race with nl_build_idaes_helmholtz_with_amplfunc, and clear AMPLFUNC
+    // for the duration of the call.
+    let _g = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let prev = std::env::var_os("AMPLFUNC");
+    std::env::remove_var("AMPLFUNC");
+    let err_result = NlProblem::from_nl_data(data);
+    if let Some(v) = prev {
+        std::env::set_var("AMPLFUNC", v);
+    }
+
+    let err = err_result
         .err()
-        .expect("IDAES Helmholtz problem must be rejected at construction");
+        .expect("IDAES Helmholtz problem must be rejected when AMPLFUNC is unset");
     assert!(
         err.contains("external function"),
         "error should mention external functions, got: {err}"
     );
-    // The first Funcall encountered in the objective/constraints references
-    // one of the declared names.
     assert!(
         names.iter().any(|n| err.contains(n)),
         "error should name one of the imported functions, got: {err}"
     );
+}
+
+/// With `AMPLFUNC` pointing at the IDAES Helmholtz dylib, the IDAES fixture
+/// should actually build into an `NlProblem` — that means tape-level
+/// `Funcall` nodes were resolved against the loaded library. Skip when the
+/// dylib isn't installed locally; this isn't a ripopt bug.
+#[test]
+fn nl_build_idaes_helmholtz_with_amplfunc() {
+    let home = match std::env::var_os("HOME") {
+        Some(h) => std::path::PathBuf::from(h),
+        None => return,
+    };
+    let dylib = home.join(".idaes/bin/general_helmholtz_external.dylib");
+    if !dylib.exists() {
+        eprintln!("skipping: {} not installed", dylib.display());
+        return;
+    }
+
+    let nl = include_str!("fixtures/issue_15/idaes_helmholtz.nl");
+    let data = parse_nl_file(nl).expect("parse");
+
+    // Safety: env is process-global. This test stomps AMPLFUNC for its run;
+    // we restore it at the end so neighbouring tests aren't affected. Take the
+    // env lock so this doesn't race with nl_parse_idaes_helmholtz_fixture.
+    let _g = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let prev = std::env::var_os("AMPLFUNC");
+    // SAFETY: `std::env::set_var` is only unsafe in the edition-2024 sense;
+    // in this crate's 2021 edition it's a stable safe function.
+    std::env::set_var("AMPLFUNC", dylib.as_os_str());
+    let result = NlProblem::from_nl_data(data);
+    match prev {
+        Some(v) => std::env::set_var("AMPLFUNC", v),
+        None => std::env::remove_var("AMPLFUNC"),
+    }
+
+    let _problem = result.expect("from_nl_data should succeed with AMPLFUNC set");
 }
 
 /// When the same `f<id>` token appears in a constraint, the error should
