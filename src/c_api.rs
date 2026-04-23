@@ -3,7 +3,7 @@
 //! Compile with `crate-type = ["cdylib", "rlib"]` to produce a shared library.
 //! Include `ripopt.h` from C/C++ code.
 
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::io::Write;
 use std::os::raw::{c_char, c_double, c_int, c_void};
 
