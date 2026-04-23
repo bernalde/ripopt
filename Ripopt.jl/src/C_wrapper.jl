@@ -8,15 +8,20 @@
 # Return status codes (must match RipoptReturnStatus in ripopt.h)
 # -------------------------------------------------------------------------
 
-const SOLVE_SUCCEEDED               = Cint(0)
-const ACCEPTABLE_LEVEL              = Cint(1)
-const INFEASIBLE_PROBLEM            = Cint(2)
-const MAXITER_EXCEEDED              = Cint(5)
-const RESTORATION_FAILED            = Cint(6)
-const ERROR_IN_STEP_COMPUTATION     = Cint(7)
-const NOT_ENOUGH_DEGREES_OF_FREEDOM = Cint(10)
-const INVALID_PROBLEM_DEFINITION    = Cint(11)
-const INTERNAL_ERROR                = Cint(-1)
+const SOLVE_SUCCEEDED                = Cint(0)
+const ACCEPTABLE_LEVEL               = Cint(1)   # reserved; not currently returned
+const INFEASIBLE_PROBLEM             = Cint(2)
+const SEARCH_DIRECTION_TOO_SMALL     = Cint(3)
+const DIVERGING_ITERATES             = Cint(4)
+const USER_REQUESTED_STOP            = Cint(5)
+const MAXITER_EXCEEDED               = Cint(-1)
+const RESTORATION_FAILED             = Cint(-2)
+const ERROR_IN_STEP_COMPUTATION      = Cint(-3)
+const MAX_WALLTIME_EXCEEDED          = Cint(-5)
+const NOT_ENOUGH_DEGREES_OF_FREEDOM  = Cint(-10)
+const INVALID_PROBLEM_DEFINITION     = Cint(-11)
+const INVALID_NUMBER_DETECTED        = Cint(-13)
+const INTERNAL_ERROR                 = Cint(-199)
 
 # -------------------------------------------------------------------------
 # Callback signatures (matching ripopt.h)

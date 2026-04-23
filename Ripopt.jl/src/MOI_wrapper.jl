@@ -268,11 +268,16 @@ const _STATUS_MAP = Dict{Cint,MOI.TerminationStatusCode}(
     SOLVE_SUCCEEDED               => MOI.LOCALLY_SOLVED,
     ACCEPTABLE_LEVEL              => MOI.ALMOST_LOCALLY_SOLVED,
     INFEASIBLE_PROBLEM            => MOI.LOCALLY_INFEASIBLE,
+    SEARCH_DIRECTION_TOO_SMALL    => MOI.SLOW_PROGRESS,
+    DIVERGING_ITERATES            => MOI.NORM_LIMIT,
+    USER_REQUESTED_STOP           => MOI.INTERRUPTED,
     MAXITER_EXCEEDED              => MOI.ITERATION_LIMIT,
     RESTORATION_FAILED            => MOI.NUMERICAL_ERROR,
     ERROR_IN_STEP_COMPUTATION     => MOI.NUMERICAL_ERROR,
+    MAX_WALLTIME_EXCEEDED         => MOI.TIME_LIMIT,
     NOT_ENOUGH_DEGREES_OF_FREEDOM => MOI.INVALID_MODEL,
     INVALID_PROBLEM_DEFINITION    => MOI.INVALID_MODEL,
+    INVALID_NUMBER_DETECTED       => MOI.INVALID_MODEL,
     INTERNAL_ERROR                => MOI.OTHER_ERROR,
 )
 
@@ -280,11 +285,16 @@ const _RAW_STATUS_MAP = Dict{Cint,String}(
     SOLVE_SUCCEEDED               => "Solve_Succeeded",
     ACCEPTABLE_LEVEL              => "Acceptable_Level",
     INFEASIBLE_PROBLEM            => "Infeasible_Problem_Detected",
+    SEARCH_DIRECTION_TOO_SMALL    => "Search_Direction_Becomes_Too_Small",
+    DIVERGING_ITERATES            => "Diverging_Iterates",
+    USER_REQUESTED_STOP           => "User_Requested_Stop",
     MAXITER_EXCEEDED              => "Maximum_Iterations_Exceeded",
     RESTORATION_FAILED            => "Restoration_Failed",
     ERROR_IN_STEP_COMPUTATION     => "Error_In_Step_Computation",
+    MAX_WALLTIME_EXCEEDED         => "Maximum_WallTime_Exceeded",
     NOT_ENOUGH_DEGREES_OF_FREEDOM => "Not_Enough_Degrees_Of_Freedom",
     INVALID_PROBLEM_DEFINITION    => "Invalid_Problem_Definition",
+    INVALID_NUMBER_DETECTED       => "Invalid_Number_Detected",
     INTERNAL_ERROR                => "Internal_Error",
 )
 
@@ -295,7 +305,9 @@ function _primal_status(status::Cint)
         return MOI.NEARLY_FEASIBLE_POINT
     elseif status == INFEASIBLE_PROBLEM
         return MOI.INFEASIBLE_POINT
-    elseif status in (MAXITER_EXCEEDED, RESTORATION_FAILED, ERROR_IN_STEP_COMPUTATION)
+    elseif status in (SEARCH_DIRECTION_TOO_SMALL, DIVERGING_ITERATES,
+                      USER_REQUESTED_STOP, MAXITER_EXCEEDED, RESTORATION_FAILED,
+                      ERROR_IN_STEP_COMPUTATION, MAX_WALLTIME_EXCEEDED)
         return MOI.UNKNOWN_RESULT_STATUS
     else
         return MOI.NO_SOLUTION
@@ -608,7 +620,9 @@ function MOI.get(model::Optimizer, ::MOI.ResultCount)
     end
     status = model.inner.status
     if status in (SOLVE_SUCCEEDED, ACCEPTABLE_LEVEL, INFEASIBLE_PROBLEM,
-                  MAXITER_EXCEEDED, RESTORATION_FAILED, ERROR_IN_STEP_COMPUTATION)
+                  SEARCH_DIRECTION_TOO_SMALL, DIVERGING_ITERATES, USER_REQUESTED_STOP,
+                  MAXITER_EXCEEDED, RESTORATION_FAILED, ERROR_IN_STEP_COMPUTATION,
+                  MAX_WALLTIME_EXCEEDED)
         return 1
     end
     return 0
