@@ -352,43 +352,89 @@ DllExport int STDCALL ripReadyAPI(void *Cptr, gmoHandle_t gmo)
     return 0;
 }
 
-/** Map ripopt return status to GAMS model/solve status. */
+/** Map ripopt return status to GAMS model/solve status.
+ *
+ * Integer values here match `RipoptReturnStatus` in src/c_api.rs — the enum
+ * uses Ipopt's ApplicationReturnStatus numbering, which mixes positive and
+ * negative values. Non-optimal terminal codes that still carry a usable
+ * primal iterate map to gmoModelStat_Feasible (7) so GAMS sees the point
+ * rather than treating it as an internal failure.
+ */
 static void map_status_to_gams(int ripopt_status, int *model_stat, int *solve_stat)
 {
     switch (ripopt_status) {
-    case 0:  /* SOLVE_SUCCEEDED */
+    case 0:    /* SolveSucceeded */
         *model_stat = gmoModelStat_OptimalLocal;
         *solve_stat = gmoSolveStat_Normal;
         break;
-    case 1:  /* ACCEPTABLE_LEVEL — removed in v0.5.0, unreachable */
+    case 1:    /* SolvedToAcceptableLevel */
         *model_stat = gmoModelStat_Feasible;
         *solve_stat = gmoSolveStat_Normal;
         break;
-    case 2:  /* INFEASIBLE_PROBLEM */
-        *model_stat = gmoModelStat_InfeasibleLocal;
-        *solve_stat = gmoSolveStat_Normal;
-        break;
-    case 5:  /* MAXITER_EXCEEDED */
-        *model_stat = gmoModelStat_InfeasibleIntermed;
-        *solve_stat = gmoSolveStat_Iteration;
-        break;
-    case 6:  /* RESTORATION_FAILED */
+    case 2:    /* InfeasibleProblem / LocalInfeasibility */
         *model_stat = gmoModelStat_InfeasibleLocal;
         *solve_stat = gmoSolveStat_Solver;
         break;
-    case 7:  /* ERROR_IN_STEP */
-        *model_stat = gmoModelStat_ErrorNoSolution;
-        *solve_stat = gmoSolveStat_EvalError;
+    case 3:    /* SearchDirectionTooSmall */
+        *model_stat = gmoModelStat_Feasible;
+        *solve_stat = gmoSolveStat_Solver;
         break;
-    case 10: /* NOT_ENOUGH_DOF */
-    case 11: /* INVALID_PROBLEM */
+    case 4:    /* DivergingIterates (Unbounded) */
+        *model_stat = gmoModelStat_Unbounded;
+        *solve_stat = gmoSolveStat_Solver;
+        break;
+    case 5:    /* UserRequestedStop */
+        *model_stat = gmoModelStat_Feasible;
+        *solve_stat = gmoSolveStat_User;
+        break;
+    case -1:   /* MaxIterExceeded */
+        *model_stat = gmoModelStat_Feasible;
+        *solve_stat = gmoSolveStat_Iteration;
+        break;
+    case -2:   /* RestorationFailed */
+        *model_stat = gmoModelStat_InfeasibleIntermed;
+        *solve_stat = gmoSolveStat_Solver;
+        break;
+    case -3:   /* ErrorInStepComputation (NumericalError) */
+        *model_stat = gmoModelStat_Feasible;
+        *solve_stat = gmoSolveStat_SolverErr;
+        break;
+    case -5:   /* MaxWallTimeExceeded */
+        *model_stat = gmoModelStat_Feasible;
+        *solve_stat = gmoSolveStat_Resource;
+        break;
+    case -10:  /* NotEnoughDegreesOfFreedom */
+    case -11:  /* InvalidProblemDefinition */
         *model_stat = gmoModelStat_ErrorNoSolution;
         *solve_stat = gmoSolveStat_SetupErr;
         break;
-    default: /* INTERNAL_ERROR or unknown */
+    case -13:  /* InvalidNumberDetected (EvaluationError) */
+        *model_stat = gmoModelStat_InfeasibleIntermed;
+        *solve_stat = gmoSolveStat_EvalError;
+        break;
+    case -199: /* InternalError */
+    default:
         *model_stat = gmoModelStat_ErrorNoSolution;
         *solve_stat = gmoSolveStat_InternalErr;
         break;
+    }
+}
+
+/** True when ripopt's return status leaves a usable primal point in x. */
+static int ripopt_status_has_solution(int ripopt_status)
+{
+    switch (ripopt_status) {
+    case 0:    /* SolveSucceeded */
+    case 1:    /* SolvedToAcceptableLevel */
+    case 2:    /* Infeasible / LocalInfeasibility (best-so-far) */
+    case 3:    /* SearchDirectionTooSmall */
+    case 5:    /* UserRequestedStop */
+    case -1:   /* MaxIterExceeded */
+    case -3:   /* ErrorInStepComputation */
+    case -5:   /* MaxWallTimeExceeded */
+        return 1;
+    default:
+        return 0;
     }
 }
 
@@ -641,8 +687,11 @@ DllExport int STDCALL ripCallSolver(void *Cptr)
         int model_stat, solve_stat;
         map_status_to_gams(status, &model_stat, &solve_stat);
 
-        /* Objective in GAMS convention (undo our sign flip for max) */
-        if (status == 0 || status == 1) {
+        /* Objective in GAMS convention (undo our sign flip for max).
+         * Report for any status that carries a usable primal iterate, so
+         * GAMS trace rows for MaxIter / timeout / numerical-error returns
+         * show the best-so-far objective instead of zero. */
+        if (ripopt_status_has_solution(status)) {
             double gams_obj = (data->obj_sign < 0.0) ? -obj_val : obj_val;
             gmoSetHeadnTail(gmo, gmoHobjval, gams_obj);
         }

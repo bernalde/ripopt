@@ -59,8 +59,12 @@ benchmarks/electrolyte/electrolyte_stderr.txt
 benchmarks/grid/grid_stderr.txt
 benchmarks/cho/cho_stderr.txt
 
-# nlp problems
+# nlp problems — vendored nlpbench clone is private (GAMS-licensed); keep
+# the whole subtree out of version control, including any ripopt-side
+# reports/testsets/scripts we park inside it for convenience.
 nlpbench*
+gams/nlpbench/
+gams/nlpbench.zip
 *.lst
 *.sol
 *.dylib

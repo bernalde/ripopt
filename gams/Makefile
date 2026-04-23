@@ -74,3 +74,47 @@ test: install
 
 clean:
 	rm -f $(TARGET)
+
+# --- nlpbench benchmark targets ---
+#
+# Each bench-<size> target:
+#   1. runs ripopt and ipopt on gams/testsets/<size>.gms via run_nlpbench.sh
+#   2. generates BENCHMARK_REPORT_<size>_<version>.md in gams/
+#
+# Per-instance timeout is tuned per size bucket. Override with TIMELIMIT=...
+# Override version with VERSION=vX.Y.Z (default reads Cargo.toml).
+
+REPORT_SOLVERS ?= ripopt ipopt
+VERSION ?= $(shell grep '^version' $(RIPOPT_ROOT)/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/v\1/')
+
+.PHONY: bench-smoke bench-small bench-medium bench-large bench-all testsets
+
+bench-smoke:  TIMELIMIT ?= 30
+bench-small:  TIMELIMIT ?= 60
+bench-medium: TIMELIMIT ?= 300
+bench-large:  TIMELIMIT ?= 900
+
+bench-smoke bench-small bench-medium bench-large:
+	@set -e; \
+	size=$(patsubst bench-%,%,$@); \
+	echo "=== bench $$size (TIMELIMIT=$(TIMELIMIT), version=$(VERSION)) ==="; \
+	TIMELIMIT=$(TIMELIMIT) bash nlpbench/run_nlpbench.sh $$size.gms $(REPORT_SOLVERS); \
+	traces=""; \
+	for s in $(REPORT_SOLVERS); do \
+	    trace=nlpbench/runsolver/$$size.gms_$$s.csv; \
+	    if [ ! -f "$$trace" ]; then \
+	        echo "error: expected trace $$trace not produced" >&2; \
+	        exit 1; \
+	    fi; \
+	    traces="$$traces --trace $$trace"; \
+	done; \
+	python3 nlpbench/nlpbench_report.py $$traces \
+	    --out nlpbench/BENCHMARK_REPORT_$${size}_$(VERSION).md \
+	    --version $(VERSION); \
+	echo "report: gams/nlpbench/BENCHMARK_REPORT_$${size}_$(VERSION).md"
+
+bench-all: bench-smoke bench-small bench-medium bench-large
+
+# Regenerate nlpbench/testsets/*.gms from the upstream conopt3 reference trace.
+testsets:
+	python3 nlpbench/gen_testsets.py

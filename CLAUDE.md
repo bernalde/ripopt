@@ -76,6 +76,17 @@ cp benchmarks/BENCHMARK_REPORT.json benchmarks/BENCHMARK_REPORT_vX.Y.Z.json
 ```
 This enables per-problem timing comparisons between versions (e.g. "did problem 12 get faster?") and catches regressions that aggregate pass rates miss.
 
+### GAMS nlpbench reports
+The GAMS nlpbench harness (vendored clone at `gams/nlpbench/`, `.gitignore`d) is driven via targets in `gams/Makefile`:
+```
+make -C gams bench-smoke     # ~10 problems, TIMELIMIT=30
+make -C gams bench-small     # 50 problems, TIMELIMIT=60
+make -C gams bench-medium    # 50 problems, TIMELIMIT=300
+make -C gams bench-large     # 50 problems, TIMELIMIT=900
+make -C gams bench-all       # all four
+```
+Each target runs both `ripopt` and `ipopt`, then writes `gams/nlpbench/BENCHMARK_REPORT_<size>_<version>.md`. Version is read from `Cargo.toml`; override with `make -C gams bench-small VERSION=v0.7.1`. The reports, the report generator, the testset generator, and the curated testsets all live inside the gitignored `gams/nlpbench/` tree because nlpbench is GAMS-licensed and we don't ship any of its derivatives. Testset lists: `gams/nlpbench/testsets/*.gms`, regenerable via `make -C gams testsets`.
+
 <!-- crucible-project -->
 ## Crucible Knowledge Base
 
