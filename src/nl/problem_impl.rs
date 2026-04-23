@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use super::autodiff::Tape;
-use super::parser::NlFileData;
+use super::expr::ExprNode;
+use super::parser::{ImportedFunc, NlFileData};
 use crate::NlpProblem;
 
 /// An NLP problem parsed from an NL file, implementing the NlpProblem trait.
@@ -40,7 +41,18 @@ pub struct NlProblem {
 
 impl NlProblem {
     /// Build an NlProblem from parsed NL file data.
-    pub fn from_nl_data(data: NlFileData) -> Self {
+    ///
+    /// Returns an error if the problem uses AMPL imported (external) functions —
+    /// these reference compiled C routines via AMPL's `funcadd` ABI and are not
+    /// yet supported by ripopt.
+    pub fn from_nl_data(data: NlFileData) -> Result<Self, String> {
+        if let Some(name) = find_external_func(&data) {
+            return Err(format!(
+                "problem uses external function '{}'; external functions \
+                 (AMPL imported functions) are not supported by ripopt",
+                name
+            ));
+        }
         let n = data.header.n_vars;
         let m = data.header.n_constrs;
 
@@ -148,7 +160,7 @@ impl NlProblem {
             hess_map.insert((r, c), idx);
         }
 
-        NlProblem {
+        Ok(NlProblem {
             n,
             m,
             x_l: data.x_l,
@@ -167,7 +179,7 @@ impl NlProblem {
             hess_rows,
             hess_cols,
             hess_map,
-        }
+        })
     }
 
     /// Compute the gradient of the objective (nonlinear + linear).
@@ -326,5 +338,65 @@ impl NlpProblem for NlProblem {
             }
         }
         true
+    }
+}
+
+/// Scan parsed NL data for any `ExprNode::Funcall`. If found, return a
+/// human-readable function name (resolved from the F-segment declarations
+/// when possible) so callers can raise a clear error.
+fn find_external_func(data: &NlFileData) -> Option<String> {
+    let mut found: Option<usize> = None;
+    if let Some((_, _, Some(expr))) = data.obj_exprs.first() {
+        walk_for_funcall(expr, &mut found);
+    }
+    if found.is_none() {
+        for expr in data.con_exprs.iter().flatten() {
+            walk_for_funcall(expr, &mut found);
+            if found.is_some() {
+                break;
+            }
+        }
+    }
+    if found.is_none() {
+        for expr in &data.common_exprs {
+            walk_for_funcall(expr, &mut found);
+            if found.is_some() {
+                break;
+            }
+        }
+    }
+    let id = found?;
+    let name = data
+        .imported_funcs
+        .iter()
+        .find(|f: &&ImportedFunc| f.id == id)
+        .map(|f| f.name.clone())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| format!("f{}", id));
+    Some(name)
+}
+
+fn walk_for_funcall(expr: &ExprNode, found: &mut Option<usize>) {
+    if found.is_some() {
+        return;
+    }
+    match expr {
+        ExprNode::Funcall { id, .. } => *found = Some(*id),
+        ExprNode::Const(_) | ExprNode::Var(_) | ExprNode::StringLiteral(_) => {}
+        ExprNode::Binary(_, l, r) => {
+            walk_for_funcall(l, found);
+            walk_for_funcall(r, found);
+        }
+        ExprNode::Unary(_, a) => walk_for_funcall(a, found),
+        ExprNode::Nary(_, args) => {
+            for a in args {
+                walk_for_funcall(a, found);
+            }
+        }
+        ExprNode::If(c, t, e) => {
+            walk_for_funcall(c, found);
+            walk_for_funcall(t, found);
+            walk_for_funcall(e, found);
+        }
     }
 }

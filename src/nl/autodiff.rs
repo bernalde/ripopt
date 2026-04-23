@@ -859,6 +859,9 @@ fn build_recursive(
             ops.push(TapeOp::Const(0.0));
             _idx
         }
+        ExprNode::Funcall { .. } => unreachable!(
+            "ExprNode::Funcall should have been rejected by NlProblem::from_nl_data"
+        ),
     }
 }
 
@@ -1035,6 +1038,9 @@ fn build_recursive_cached(
             ops.push(TapeOp::Const(0.0));
             idx
         }
+        ExprNode::Funcall { .. } => unreachable!(
+            "ExprNode::Funcall should have been rejected by NlProblem::from_nl_data"
+        ),
     }
 }
 

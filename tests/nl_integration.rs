@@ -268,7 +268,7 @@ x2
 1 2
 ";
     let data = parse_nl_file(nl).expect("parse failed");
-    let problem = NlProblem::from_nl_data(data);
+    let problem = NlProblem::from_nl_data(data).expect("build failed");
 
     // Evaluate objective at initial point x=(1,2)
     let x = vec![1.0, 2.0];
@@ -318,7 +318,7 @@ x3
 2 3
 ";
     let data = parse_nl_file(nl).expect("parse failed");
-    let problem = NlProblem::from_nl_data(data);
+    let problem = NlProblem::from_nl_data(data).expect("build failed");
 
     let x = vec![1.0, 2.0, 3.0];
     let mut f = 0.0; problem.objective(&x, true, &mut f);
@@ -373,7 +373,7 @@ x2
 1 1
 ";
     let data = parse_nl_file(nl).expect("parse failed");
-    let problem = NlProblem::from_nl_data(data);
+    let problem = NlProblem::from_nl_data(data).expect("build failed");
     let result = solve_nl(&problem);
 
     assert_eq!(
@@ -440,5 +440,140 @@ fn nl_sol_writer() {
     assert!(
         output.contains("\n1\n"),
         "SOL should contain constraint count"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// External (AMPL imported) functions (issue #15)
+// ---------------------------------------------------------------------------
+
+/// Parser must accept NL files with F segments and `f<id> <nargs>` expressions
+/// without raising "Unknown expression token". Solve-time construction must
+/// reject the problem with a clear, named error referring to the function.
+#[test]
+fn nl_parse_external_function_reports_clean_error() {
+    // Problem:
+    //   minimize myfunc(x0)
+    //   s.t.     x0 >= 0
+    // Header carries nfunc=1 on dim line 4 (field 1). The F0 segment declares
+    // `myfunc` as a real-valued (type 0) one-argument function. The objective
+    // uses the `f0 1` call with a single argument v0.
+    let nl = "\
+g3 1 1 0
+ 1 0 1 0 0
+ 0 1
+ 0 0
+ 1 0 1
+ 0 1 0 0
+ 0 0 0 0 0
+ 0 1
+ 0 0
+ 0 0 0 0 0
+F0 0 1 myfunc
+O0 0
+f0 1
+v0
+b
+2 0.0
+k0
+G0 1
+0 0
+x1
+0 1
+";
+    let data = parse_nl_file(nl).expect("parse should succeed with f/F tokens");
+    assert_eq!(data.imported_funcs.len(), 1);
+    assert_eq!(data.imported_funcs[0].id, 0);
+    assert_eq!(data.imported_funcs[0].name, "myfunc");
+    assert_eq!(data.header.n_funcs, 1);
+
+    let err = NlProblem::from_nl_data(data)
+        .err()
+        .expect("from_nl_data should reject external functions");
+    assert!(
+        err.contains("myfunc") && err.contains("external function"),
+        "error should name the function and mention external functions, got: {err}"
+    );
+}
+
+/// Regression fixture: the real `.nl` file produced by the IDAES Helmholtz
+/// example in issue #15 (CMarcher). Before this patch the parser failed with
+/// `Unknown expression token: 'f0 4'`; now the parser must accept all three
+/// `F`-segment declarations and the `f<id> <nargs>` calls, and construction
+/// must reject the problem with a clear, named error.
+#[test]
+fn nl_parse_idaes_helmholtz_fixture() {
+    let nl = include_str!("fixtures/issue_15/idaes_helmholtz.nl");
+    let data = parse_nl_file(nl).expect("IDAES fixture should parse without Unknown token error");
+
+    // Header carries three imported functions (see dim line 4 of the fixture).
+    assert_eq!(data.header.n_funcs, 3, "expected nfunc=3");
+    assert_eq!(data.imported_funcs.len(), 3);
+    let names: Vec<String> = data
+        .imported_funcs
+        .iter()
+        .map(|f| f.name.clone())
+        .collect();
+    assert!(names.iter().any(|n| n == "vf_hp"), "expected vf_hp in {names:?}");
+    assert!(names.iter().any(|n| n == "h_liq_hp"), "expected h_liq_hp in {names:?}");
+    assert!(names.iter().any(|n| n == "h_vap_hp"), "expected h_vap_hp in {names:?}");
+
+    let err = NlProblem::from_nl_data(data)
+        .err()
+        .expect("IDAES Helmholtz problem must be rejected at construction");
+    assert!(
+        err.contains("external function"),
+        "error should mention external functions, got: {err}"
+    );
+    // The first Funcall encountered in the objective/constraints references
+    // one of the declared names.
+    assert!(
+        names.iter().any(|n| err.contains(n)),
+        "error should name one of the imported functions, got: {err}"
+    );
+}
+
+/// When the same `f<id>` token appears in a constraint, the error should
+/// still surface — not a parse failure on the token.
+#[test]
+fn nl_parse_external_function_in_constraint() {
+    // Problem:
+    //   minimize x0
+    //   s.t.     g(x0) == 0   with g(.) = myfunc(.)
+    let nl = "\
+g3 1 1 0
+ 1 1 1 0 1
+ 1 1
+ 0 0
+ 1 1 1
+ 0 1 0 0
+ 0 0 0 0 0
+ 1 1
+ 0 0
+ 0 0 0 0 0
+F0 0 1 myfunc
+C0
+f0 1
+v0
+O0 0
+n0
+r
+4 0
+b
+3
+k0
+0
+J0 1
+0 1
+G0 1
+0 1
+x1
+0 1
+";
+    let data = parse_nl_file(nl).expect("parse should succeed");
+    let err = NlProblem::from_nl_data(data).err().expect("should reject");
+    assert!(
+        err.contains("myfunc"),
+        "error should name the function, got: {err}"
     );
 }

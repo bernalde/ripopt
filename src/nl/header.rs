@@ -18,6 +18,8 @@ pub struct NlHeader {
     pub common_expr_counts: [usize; 5],
     pub nnz_jac: usize,
     pub nnz_grad: usize,
+    /// Number of AMPL imported (external) functions declared in the file.
+    pub n_funcs: usize,
 }
 
 impl NlHeader {
@@ -68,6 +70,8 @@ pub fn parse_header<'a>(lines: &mut impl Iterator<Item = &'a str>) -> Result<NlH
         common_expr_counts: [get(8, 0), get(8, 1), get(8, 2), get(8, 3), get(8, 4)],
         nnz_jac: get(6, 0),
         nnz_grad: get(6, 1),
+        // Line 4 (0-indexed dim line): `nwv nfunc arith flags`.
+        n_funcs: get(4, 1),
     })
 }
 

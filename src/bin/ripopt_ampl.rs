@@ -60,7 +60,13 @@ fn main() {
     let n_vars = nl_data.header.n_vars;
     let n_constrs = nl_data.header.n_constrs;
 
-    let problem = NlProblem::from_nl_data(nl_data);
+    let problem = match NlProblem::from_nl_data(nl_data) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     // Solve
     let result = ripopt::solve(&problem, &options);
