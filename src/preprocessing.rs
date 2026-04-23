@@ -220,6 +220,7 @@ impl<'a> PreprocessedProblem<'a> {
         // that happen to have the same Jacobian at one particular point.
         let mut constr_map: Vec<usize> = (0..m).collect();
 
+        'redundancy: {
         if m > 1 && jac_nnz > 0 {
             let mut x0 = vec![0.0; n];
             inner.initial_point(&mut x0);
@@ -229,7 +230,11 @@ impl<'a> PreprocessedProblem<'a> {
                 }
             }
             let mut jac_vals0 = vec![0.0; jac_nnz];
-            let jac0_ok = inner.jacobian_values(&x0, true, &mut jac_vals0);
+            // If any probe eval fails, keep identity constr_map (assume full rank),
+            // matching Ipopt's TNLPAdapter::DetermineDependentConstraints fallback.
+            if !inner.jacobian_values(&x0, true, &mut jac_vals0) {
+                break 'redundancy;
+            }
 
             // Also evaluate at a perturbed point for verification
             let mut x1 = x0.clone();
@@ -249,13 +254,19 @@ impl<'a> PreprocessedProblem<'a> {
                 }
             }
             let mut jac_vals1 = vec![0.0; jac_nnz];
-            let jac1_ok = inner.jacobian_values(&x1, true, &mut jac_vals1);
+            if !inner.jacobian_values(&x1, true, &mut jac_vals1) {
+                break 'redundancy;
+            }
 
             // Also compare constraint values at the perturbed point
             let mut g0 = vec![0.0; m];
             let mut g1 = vec![0.0; m];
-            let g0_ok = inner.constraints(&x0, true, &mut g0);
-            let g1_ok = inner.constraints(&x1, true, &mut g1);
+            if !inner.constraints(&x0, true, &mut g0) {
+                break 'redundancy;
+            }
+            if !inner.constraints(&x1, true, &mut g1) {
+                break 'redundancy;
+            }
 
             let mut g_l = vec![0.0; m];
             let mut g_u = vec![0.0; m];
@@ -320,6 +331,7 @@ impl<'a> PreprocessedProblem<'a> {
 
             constr_map = (0..m).filter(|&i| !is_redundant[i]).collect();
         }
+        } // 'redundancy
 
         // --- Remap Jacobian sparsity ---
         let mut jac_rows_new = Vec::new();
