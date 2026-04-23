@@ -426,3 +426,53 @@ Most of v0.7.0's commits are answers of the form /that was a bug./ A few — the
 The LinkedIn post for v0.7.0 would be written the same evening. It would not end with /the answer is mostly yes./ The question had moved.
 
 The answer, now, was /yes, and here is where it still falls short./
+
+* Chapter Nine: The Adversary and the Map
+
+The v0.7.0 release went out on a Tuesday. By Wednesday the question of /where does it still fall short/ had stopped being rhetorical.
+
+** The Adversary
+
+The idea had been sitting in ~projectSettings~ for a while: an agent whose entire job was to find problems ripopt should solve, pose them, and check the answer against a published optimum. Not a benchmark — a benchmark is a list you curate in advance. An /adversary/ picks problems by class, looks them up in the literature, formulates them from scratch against the ~NlpProblem~ trait, cross-validates with Ipopt via Pyomo, and files a GitHub issue when ripopt does worse than the reference.
+
+The first sweep ran five problems. Rosen-Suzuki from HS43 — a canonical four-variable quadratic with three quadratic inequalities — passed in 9 iterations, relative error 1e-11. The Discrete Boundary Value problem from More-Garbow-Hillstrom Problem 28, at n=20: 2 iterations, quadratic convergence, the behavior you'd hope for on a well-conditioned sparse tridiagonal nonlinear system. Scaled up to n=5000: still 1 Newton step, still 30 ms. A parametric projection ~min Σxᵢ² s.t. Σxᵢ = 3~: exact, 2 iterations, analytical optimum. Powell's badly-scaled function from MGH P3: 91 iterations, objective ~8e-27~, unconstrained minimum to machine precision.
+
+Four PASS.
+
+Then HS13. Hock-Schittkowski problem 13 is a canonical degenerate NLP: ~min (x₁-2)² + x₂² s.t. (1-x₁)³ - x₂ ≥ 0, x ≥ 0~, with optimum ~f* = 1~ at ~x* = (1, 0)~. The active-constraint gradient and the active-bound gradient are anti-parallel at the optimum, so LICQ and MFCQ both fail. Ipopt finishes in ~20 iterations at ~x = (1.003, 0)~, ~f = 0.9946~ — close enough, given the degeneracy. Ripopt finishes in /8004/ iterations at ~x = (1.0455, 0)~, ~f = 0.9111~, and reports ~Optimal~.
+
+Two things were wrong. The status was a lie — ~primal_inf~ was 1e-4 and the iterate had been slow-creeping toward ~x₁ ≈ 1~ for eight thousand iterations without ever reaching it. And the iteration count was three orders of magnitude beyond Ipopt's. The adversary filed issue #19, classified it as ~SOLVER_LIMITATION~, and pointed at two suspects: the termination criterion in ~src/convergence.rs~ using the IPM-evolved z (which is near-complementary by construction, even when nothing else is) instead of Ipopt's post-hoc unscaled z recomputation, and whatever in the KKT perturbation loop was failing to escape the degenerate corner.
+
+The adversary had done in two hours what the curated test suite had failed to do across nine months: find a problem where ripopt was quietly wrong and prove it.
+
+** The Map
+
+That was the raw material. The question was whether it pointed at a pattern — a class of bugs that shared a root — or just a list of one-off fixes.
+
+The way to answer that was to read Ipopt and MUMPS side-by-side with ripopt and rmumps, module by module, looking not at individual commits but at the architectural deltas. Two agents existed for exactly that: ~ipopt-expert~, trained to read the C++ reference, and ~mumps-expert~, trained to read the Fortran reference. They were tasked in parallel.
+
+What came back was ~docs/REFERENCE_GAP_ROADMAP.md~ — about seven hundred lines, two halves. The ipopt-expert half catalogued ten deficiencies (D1 through D10) where ripopt's interior-point logic had diverged from the reference in ways that were either wrong or could become wrong under stress. D1 was the HS13 termination criterion that the adversary had just surfaced. D2 was the post-restoration multiplier reset, which v0.7.0 had partially fixed but not fully. D3-D10 ranged from the Free-mode μ update's interaction with the corrector to the absence of the quality-function oracle to the subtlety that ripopt's Σ computation didn't exactly match Ipopt's when bound multipliers got near zero.
+
+The mumps-expert half catalogued nine (a through i). The biggest single finding was at ~rmumps/src/frontal.rs:745~: a "must-eliminate" code path where the pivot-acceptance threshold had been hardcoded to ~seuil = 0.0~. Every other branch in the same function honored the threshold partial pivoting criterion. That one branch would accept any pivot with nonzero magnitude, no matter how tiny. On a KKT matrix with inertia correction applied, this was unlikely to hurt. On a KKT matrix without it, or on a general symmetric indefinite system delivered through rmumps as a standalone library, this was the kind of silent correctness hole that shows up three users later as /the answer is wrong and we don't know why./
+
+The roadmap ranked all twenty items together, correctness-first, with effort tags. The first three were all in the same ballpark of work and all three were the kind of thing that doesn't surface in aggregate benchmarks — they're tail-risk items. Each one can plausibly affect one problem in a hundred, never in a way the average benchmark problem will touch.
+
+** The Second Release
+
+The adversary had produced a failing example. The roadmap had produced a map of the shape of the failing examples. The work of v0.7.0 proper — the one tagged Tuesday — did not change because of either of them; none of the twenty roadmap items landed. But the /shape/ of what v0.7.0 would include changed.
+
+v0.7.0 as shipped Tuesday was a release about closing the gap. v0.7.0 as redated Thursday is a release about /knowing where the gap still is./ The adversary runs ship in ~adversary/runs/~. The roadmap ships in ~docs/REFERENCE_GAP_ROADMAP.md~. The GAMS nlpbench harness from ~eac674b~ — added the same week — gives the next release cycle a third independent benchmark source beyond HS and CUTEst, run against both solvers with signed-status mapping so the reports don't fib.
+
+And the boring fixes: ~ff9144e~ taught the preprocessor to bail out cleanly instead of panicking when a user's constraints callback returned ~false~ at a synthetic probe point (the redundancy detector had been evaluating at points the user hadn't authorized). ~6e91f55~ removed the last of the dead LS-y helpers that the convergence refactor had stranded.
+
+The headline benchmark numbers didn't move. They don't need to. A release that ships with an adversary sweep and a reference-gap map is not a release that's done; it's a release that admits what it hasn't yet done, in detail, in a committed document.
+
+** The Shape, Again
+
+Chapter Eight said the shape of the work was /narrow the gap./ Chapter Nine adds a second clause: /and publish where the gap still is./
+
+The v0.7.0 release on Tuesday was the first; the v0.7.0 release on Thursday is the second. Same tag. Different contract.
+
+The first contract was: here is what we fixed. The second is: here is what we fixed, here is what we know is still broken, and here is the ordered list of what gets fixed next.
+
+The adversary will run again next week. Some of it will PASS. Some of it will find the next HS13. The roadmap will get shorter in some places and longer in others. The question has moved again — from /is ripopt good enough?/ to /where, specifically, is ripopt not good enough, and can we prove it before someone else does?/

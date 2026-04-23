@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.7.0] - 2026-04-21
+## [0.7.0] - 2026-04-23
 
 First release where ripopt solves strictly more HS **and** more CUTEst
 problems than native Ipopt (+2 HS, +1 CUTEst). The headline theme of
@@ -48,6 +48,23 @@ the barrier-subproblem stop-test gate in Free-mode μ updates.
 - **TSV direction-diff harness** for step-by-step comparison against
   a reference solver trace (e11832f), with an extended trace schema
   (α_max, τ, Σ condition number, SOC-accepted, c6178d6).
+- **GAMS nlpbench benchmark harness** (eac674b). New `gams/Makefile`
+  targets `bench-smoke` / `bench-small` / `bench-medium` / `bench-large`
+  / `bench-all` drive the (vendored, gitignored) `gams/nlpbench/`
+  test-set runner against both ripopt and ipopt and emit
+  `BENCHMARK_REPORT_<size>_<version>.md`. Status returned by ripopt is
+  mapped to nlpbench's signed-status convention so reports classify
+  "locally optimal", "infeasible", and "iteration limit" correctly.
+- **Adversary agent sweep** (new `adversary/runs/`). First full run of
+  the automated NLP correctness-testing harness: Rosen-Suzuki, HS13,
+  Discrete Boundary Value (n ∈ {20, 200, 500, 1000, 2000, 5000}),
+  parametric projection, Powell badly-scaled. Four PASS; HS13 filed as
+  issue #19 (solver limitation on a known LICQ/MFCQ-degenerate problem).
+- **Reference-gap roadmap** (`docs/REFERENCE_GAP_ROADMAP.md`). ~700-line
+  ripopt-vs-Ipopt and rmumps-vs-MUMPS gap analysis drafted with the
+  ipopt-expert and mumps-expert agents, cataloging known deficiencies
+  (D1-D10 for ripopt, (a)-(i) for rmumps), genuine advantages, and a
+  ranked roadmap of 20 cross-cutting items (correctness-first).
 
 ### Changed
 - **Post-restoration multiplier reset matches Ipopt exactly** (07dcdcc,
@@ -96,6 +113,24 @@ the barrier-subproblem stop-test gate in Free-mode μ updates.
 - CI: gate `cat_a_probe` example behind the `cutest` feature (2b293e2).
 - Two cyipopt-style spelling aliases were accepted on both the
   Python and Rust option paths (4779b37).
+- **Preprocessing: skip redundancy detection on callback eval failure**
+  (ff9144e). `detect_redundant_constraints` previously panicked when
+  the user's `constraints()` callback returned `false` at the synthetic
+  probe point; it now bails out cleanly, leaves the original
+  constraint set intact, and lets the IPM handle the eval failure
+  through the normal α-halving path.
+- **Julia binding: status-code constants align with `RipoptReturnStatus`**
+  (437bba0, 7733576). `Ripopt.jl` and the embedded C wrapper status
+  enums had drifted from the Rust-side `RipoptReturnStatus`
+  definitions; both are now regenerated from the canonical list so
+  `MOI.TerminationStatus` reports the correct Ipopt-compatible code.
+- **GAMS bridge: pass `index_style` to `ripopt_create`** (61aa808).
+  The GAMS bridge was calling `ripopt_create` without the new
+  `index_style` argument, causing 1-based / 0-based indexing confusion
+  on GAMS-formulated NLPs.
+- **Dead code removed** (6e91f55). LS-y helpers and unused imports
+  pruned from `src/ipm.rs`, `src/kkt.rs`, and `src/c_api.rs`. No
+  behavioral change.
 
 ### Performance
 Fresh benchmark results (2026-04-21 on Apple Mac Mini, aarch64-apple-darwin):
