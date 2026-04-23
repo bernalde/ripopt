@@ -265,6 +265,18 @@ The code had been visible there for weeks, but there is a difference between /vi
 
 April 5 was a release day. v0.6.1. Pyomo got PyPI packaging with bundled binary wheels, so a Python user could write ~pip install pyomo-ripopt~ and get a working interior point solver — the binary in the wheel, no compilation. The Crucible knowledge base — a tool John had been building for managing primary sources — was added to CLAUDE.md as a way to direct future agent sessions toward original literature rather than re-deriving everything from scratch each session. The tagged benchmark snapshots were saved as ~v0.6.1~ baselines. The solver was now installable; a user who had never heard of Rust could type two pip commands and use it.
 
+** The Adversary
+
+John's LinkedIn reflection had named the plateau directly: progress stalled /until I got some new problems to work on that exposed bugs and gaps in the code logic./ The fix was to stop waiting for new problems to arrive and arrange for them to arrive on a schedule.
+
+On April 4, John added an adversary agent to the project. It lives as a slash command (~/adversary~) with a strict contract: never modify ripopt source code; work only in ~adversary/~. Its job is to find a published NLP problem with a known optimum that ripopt has not seen, formulate it as a Rust binary and a Pyomo script, solve it with both ripopt and Ipopt, and classify the result. The classes rotate — unconstrained, bound-constrained, equality, inequality, nonlinear equations, large-sparse, degenerate, parametric — and the agent picks the least-tested class on each run to keep coverage balanced.
+
+The rules for what counts as a finding are explicit. A relative error above 1e-4 with verified derivatives and alternative options is a SOLVER_BUG. A non-Optimal status that Ipopt solves cleanly is a SOLVER_LIMITATION. A ripopt wall time more than 3x Ipopt's with an absolute gap over 0.1s is a PERFORMANCE_REGRESSION. Each of those three triggers a GitHub issue — automatically, with a top-line disclosure that the adversary agent found it — tagged ~bug~, ~enhancement~, or ~performance~. Formulation errors, reference errors, and tolerance misses are logged but do not file issues; they are the agent's problem, not the solver's.
+
+The first day, April 4, ran seven problems — HS100, Beale, Rosenbrock Bounded, Maratos, Brown Almost-Linear, Degenerate Sphere — and found one real bug. Issue #6, /Incorrect solution on Rosenbrock Bounded/, was filed April 5. Ripopt had returned ~Optimal~ at 0.3731 on a problem whose known minimum was 0.25. That is exactly the kind of finding the honesty rule from February existed to surface: a clean status on a wrong answer.
+
+The adversary did not replace the benchmark suites. HS and CUTEst continued to run on every release. What the adversary added was /breadth/: a steady drip of small, hand-formulated, literature-cited problems drawn from outside the benchmark distribution, arriving weekly, each one a fresh chance to expose a gap the benchmarks had not. Two weeks later it would file issue #11, a SOLVER_LIMITATION on gas40 — but gas40 was already the subject of its own week of work by then.
+
 ** gas40
 
 The next week was about a single problem.
@@ -328,3 +340,89 @@ The agents do not feel that distinction. To them, every session is the same: rea
 The LinkedIn post had ended with /the answer is mostly yes./ Two weeks later, with v0.6.2 on crates.io and a multifrontal solver that could read its own pivot statistics, the answer was the same.
 
 It was just a little more yes.
+
+* Chapter Eight: Closing the Gaps
+
+** Python, First
+
+v0.6.2 had shipped with a Pyomo adapter. What it did not have was a Python interface a working engineer would actually reach for — the kind where you write a function, get an objective and constraints, and let automatic differentiation do the rest.
+
+That came first, after the release. Commit b89f169 added a direct Python interface backed by JAX autodiff; a9ba046 gave it a persistent ~Problem~ class with dual warm-starts; 4779b37 taught it the cyipopt option aliases — ~mu_strategy~, ~sb~, ~bound_push~ — so that code written against Ipopt's Python binding would run against ripopt with nothing but an import change. By e32b57b the PyPI publishing scaffolding was in place, and by 8cce31a the README carried the PyPI badges for both ~ripopt~ and ~pyomo-ripopt~.
+
+This was a reorientation. Up to v0.6.2, ripopt had been a Rust solver with C bindings and a Julia wrapper, aimed at people who would compile it. After b89f169, it was a Python package — aimed at the same people who install ~scipy~ and never think about it again. The solver had not changed. The audience had.
+
+** The Boring Robustness
+
+Then came a week of boring, important work.
+
+Ipopt's C API has a ~new_x~ flag that tells a callback whether the point has changed since the previous call; ripopt's trait had not. A user requested it in issue #5. d138a25 added it. 42f4015 added NaN/Inf hardening at every callback boundary and closed a handful of small gaps with the Ipopt C API. 66d77a1 made evaluation failures a first-class solver state — an objective that returned NaN no longer crashed the solver; it triggered an α-halving retry (2b5cb99), and if the retry failed, the status softened from a hard ~EvalError~ to ~NumericalError~ (07cf37f). 0ed77e1 removed the element-wise NaN checks on the gradient and constraint vectors that had been duplicating work already done by the main KKT residual check.
+
+a9804d2 lowered the NLP scaling floor from ripopt's default down to Ipopt's 1e-8. This was a two-line change that a reviewer would miss, and it reached onto a dozen problems where the scaling floor had been silently clamping the objective gradient into a shape the filter disliked.
+
+None of this made the benchmark numbers move. All of it made the solver less likely to surprise a user.
+
+** The Mehrotra Audit
+
+By mid-April the easy fixes were gone. What remained required actually reading Ipopt's output next to ripopt's, iteration by iteration.
+
+e11832f built the tool: a TSV direction-diff harness that dumped the IPM state at every iteration — α, τ, Σ conditioning, SOC acceptance, step components — to a file that could be diffed against an equivalent dump from Ipopt. c6178d6 extended the schema. What the harness revealed was uncomfortable: ripopt's Mehrotra predictor-corrector was off.
+
+9deaff4 fixed a missing cross-term in the Mehrotra primal RHS and corrected the ~dz~ recovery. 72bae01 removed a gate that had been skipping the predictor-corrector on iterations where it should have fired. 7f333de added the barrier-subproblem stop-test gate to the Free-mode μ update that Ipopt has and ripopt had been missing. 02471aa re-applied the Loqo μ-oracle's monotone floor — the same floor that had been added, reverted, and re-added over the preceding week as the interaction with the new gates got sorted out.
+
+By the end of the audit the two solvers were taking nearly identical steps on matched problems. The divergences that remained were real algorithmic differences, not bugs.
+
+** The Breaking Change
+
+The harness had also revealed something else. Ripopt's convergence test was fundamentally different from Ipopt's.
+
+Since the earliest days, ripopt had been computing a second set of bound multipliers — ~z_opt~ — by solving the stationarity equation at the current primal, and declaring convergence based on /those/ multipliers rather than the ones the IPM had iteratively constructed. The argument for this had always been: the IPM multipliers lag, the stationarity-derived ones are fresher, use the fresher ones. A late status called ~Acceptable~ had been built on top of this in 62a7f6c — problems that satisfied the relaxed ~z_opt~ test but not the strict iterative-z test would finish as ~Acceptable~ rather than ~Optimal~.
+
+CLAUDE.md had a rule about this: /hiding known failures behind lenient statuses is prohibited./ The rule had been written in February. It had taken two months to notice that ripopt itself was quietly violating it.
+
+e35407c was the correction. It dropped ~z_opt~ entirely, removed the ~Acceptable~ status, and re-grounded the convergence test on the same iterative z that Ipopt uses — with a two-gate structure: strict optimality first, then a dual-scaled gate matching Ipopt's ~s_d~ formula exactly. The ~!~ in the commit subject was deliberate. It was a breaking change. Any user who had been relying on the old convergence criterion would see a different answer.
+
+eeae3d5 followed the same day, removing a z double-count in the condensed RHS and splitting the Mehrotra and filter-LS paths that had been sharing code in a way that only happened to work. 96329a2 added iterative refinement to the custom-RHS and condensed solve paths. The three commits together were the most invasive change since the rmumps inertia-correction work.
+
+** The Restoration Boundary
+
+Then the boundary case that nobody had been looking at: what happens immediately after the restoration phase succeeds.
+
+07dcdcc matched Ipopt's nuclear-reset semantics — at the moment restoration hands control back to the main IPM, Ipopt resets the bound multipliers to their bound-push initial values, and ripopt had been doing something almost-but-not-quite equivalent. 20b51ce made the post-restoration least-squares ~y~ absorb the contribution from the reset z. af0bf09 replaced the approximate LS-y with Ipopt's exact augmented-system formulation. ec94b5e aligned the SOC ~c_soc~ initialization and accumulation with Ipopt's.
+
+Four commits for a code path that fires on maybe one in twenty benchmark problems. But on those problems, the fixes turned /Restoration Failed/ into /Optimal/.
+
+** The Cost of Correctness
+
+Not every fix was a win.
+
+3211838 added a rejection gate: if the KKT solve returned a direction whose magnitude exceeded a pre-set threshold by several orders of magnitude, the solution was declared rank-deficient and rejected. This caught a class of pathologies where the Schur complement was silently producing garbage that the residual check was accepting. 66bce53 followed up: always verify the backward error, and stop the habit of undoing an inertia-correction perturbation once the system had become well-conditioned with it. Undoing the perturbation had been a memory optimization that occasionally erased the condition that had made the solve succeed.
+
+The cost was measurable. A handful of problems that had been finishing /Optimal/ now finished ~NumericalError~ because the new gates caught genuine rank deficiency that the old code had been papering over. The honesty rule applied here too. A ~NumericalError~ on a rank-deficient problem was a better answer than a fake ~Optimal~.
+
+** The Latent Debt
+
+Two fixes landed that had nothing to do with v0.7.0 and everything to do with v0.6.
+
+7733576 fixed the Julia wrapper. 61aa808 fixed the GAMS wrapper. Same bug, both: the ~ripopt_create~ C entry point had gained an ~index_style~ argument at position nine months earlier, and neither wrapper had been updated to pass it. On AAPCS64, the missing argument shifted every following argument by one register slot; the callbacks were being invoked in the wrong order; the Julia ~c_wrapper_hs071.jl~ example had been segfaulting since v0.6.0 and nobody had run it.
+
+Both wrappers had been compiling. Both had been declared working in the release notes. The latent debt had survived two releases. The lesson — again — was that claims about correctness are only as strong as the test that checks them, and examples that nobody runs are not tests.
+
+** The Headline
+
+On April 21, v0.7.0 was tagged. The HS suite was at 117/120 for ripopt against Ipopt's 116/120 — one problem ahead. CUTEst had moved again. The speedup ratios, computed only over problems where both solvers returned strict ~Optimal~, were steady.
+
+The release notes listed: direct Python interface, PyPI publishing, evaluation failure handling, Ipopt C API parity, TSV direction-diff harness, Mehrotra corrector fixes, μ-update gate alignment, dropped ~z_opt~, dropped ~Acceptable~, nuclear-reset parity, rank-deficient rejection, Julia and GAMS wrapper fixes.
+
+The changelog, read top-to-bottom, is mostly about matching Ipopt more closely. One interpretation: ripopt spent two weeks giving up ground, aligning its algorithm to Ipopt's in places where it had been doing its own thing. Another interpretation: ripopt spent two weeks removing the places where /doing its own thing/ had meant /producing quietly wrong answers./ Both interpretations are true.
+
+** The Shape of the Work, Again
+
+Chapter Seven had observed that the shape of the work had changed — from a sprint with an end to a project without one. Chapter Eight adds a codicil.
+
+The sprint shape had been /build the thing./ The project shape, at first, had been /maintain the thing./ v0.7.0 made it clearer that the project shape is actually /narrow the gap./ There is a reference implementation. Every iteration asks the same question, in a different place: where does this solver still differ from the reference, and is that difference a feature or a bug?
+
+Most of v0.7.0's commits are answers of the form /that was a bug./ A few — the Python interface, the direction-diff harness, the intermediate callback — are answers of the form /that is a feature./ The ratio matters less than the practice of asking. The solver that ships at v0.7.0 is not better than the one that shipped at v0.6.2 because it is cleverer. It is better because it has been compared, line by line, against the thing it is trying to be.
+
+The LinkedIn post for v0.7.0 would be written the same evening. It would not end with /the answer is mostly yes./ The question had moved.
+
+The answer, now, was /yes, and here is where it still falls short./
