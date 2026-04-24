@@ -4424,6 +4424,68 @@ fn factor_kkt_with_recovery<P: NlpProblem>(
 /// Extracted from `solve_ipm` as part of the v0.8 main-loop decomposition
 /// (pre-work step 2). Does not return a value — all effects are via
 /// `&mut` on state, mu_state, filter, last_mehrotra_sigma.
+/// Loqo barrier-parameter oracle (IpLoqoMuOracle.cpp).
+///
+/// Centrality-driven μ update: ξ = min(z_i·s_i) / avg_compl, then
+/// σ = 0.1 · min(0.05·(1-ξ)/ξ, 2)³, and μ_new = σ · avg_compl,
+/// floored from below by Ipopt's monotone schedule
+/// `min(κ_μ·μ, μ^sldp)` (so the Loqo-proposed μ can't undershoot
+/// a gradual monotone schedule on a single step) and from above
+/// by 1e5. The lower clamp `mu_floor` is `mu_min` when the
+/// barrier subproblem is approximately solved
+/// (`barrier_err ≤ kappa_eps · μ`) and `μ/5` otherwise.
+fn compute_loqo_mu(
+    state: &SolverState,
+    options: &SolverOptions,
+    avg_compl: f64,
+) -> f64 {
+    let n = state.n;
+    let barrier_err = compute_barrier_error(state);
+    let mu_floor = if barrier_err <= options.barrier_tol_factor * state.mu {
+        options.mu_min
+    } else {
+        (state.mu / 5.0).max(options.mu_min)
+    };
+
+    // Compute centrality measure: xi = min(z_i*s_i) / avg_compl
+    let mut min_compl = f64::INFINITY;
+    for i in 0..n {
+        if state.x_l[i].is_finite() {
+            let s = (state.x[i] - state.x_l[i]).max(1e-20);
+            min_compl = min_compl.min(s * state.z_l[i]);
+        }
+        if state.x_u[i].is_finite() {
+            let s = (state.x_u[i] - state.x[i]).max(1e-20);
+            min_compl = min_compl.min(s * state.z_u[i]);
+        }
+    }
+    let xi = if avg_compl > 0.0 && min_compl.is_finite() {
+        (min_compl / avg_compl).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+
+    let ratio = if xi > 1e-20 {
+        (0.05 * (1.0 - xi) / xi).min(2.0)
+    } else {
+        2.0
+    };
+    let sigma = 0.1 * ratio.powi(3);
+    let loqo_mu = sigma * avg_compl;
+    let monotone_floor =
+        (options.mu_linear_decrease_factor * state.mu)
+            .min(state.mu.powf(options.mu_superlinear_decrease_power));
+    let new_mu = loqo_mu
+        .max(monotone_floor)
+        .clamp(mu_floor, 1e5);
+
+    if options.print_level >= 5 {
+        rip_log!("ripopt: mu loqo: xi={:.4} sigma={:.4} avg_compl={:.3e} floor={:.3e} -> mu={:.3e}",
+            xi, sigma, avg_compl, monotone_floor, new_mu);
+    }
+    new_mu
+}
+
 fn update_barrier_parameter(
     state: &mut SolverState,
     mu_state: &mut MuState,
@@ -4493,64 +4555,7 @@ fn update_barrier_parameter(
                 mu_state.remember_accepted(kkt_error);
                 let avg_compl = compute_avg_complementarity(state);
                 if options.mu_oracle_quality_function && avg_compl > 0.0 {
-                    // Loqo mu oracle (IpLoqoMuOracle.cpp).
-                    // Uses centrality measure to set the centering parameter sigma.
-                    // When well-centered (xi≈1), sigma is tiny → aggressive mu decrease.
-                    // When off-center (xi≈0), sigma→0.8 → conservative mu decrease.
-                    let barrier_err = compute_barrier_error(state);
-                    let mu_floor = if barrier_err <= options.barrier_tol_factor * state.mu {
-                        options.mu_min
-                    } else {
-                        (state.mu / 5.0).max(options.mu_min)
-                    };
-
-                    // Compute centrality measure: xi = min(z_i*s_i) / avg_compl
-                    let mut min_compl = f64::INFINITY;
-                    for i in 0..n {
-                        if state.x_l[i].is_finite() {
-                            let s = (state.x[i] - state.x_l[i]).max(1e-20);
-                            min_compl = min_compl.min(s * state.z_l[i]);
-                        }
-                        if state.x_u[i].is_finite() {
-                            let s = (state.x_u[i] - state.x[i]).max(1e-20);
-                            min_compl = min_compl.min(s * state.z_u[i]);
-                        }
-                    }
-                    let xi = if avg_compl > 0.0 && min_compl.is_finite() {
-                        (min_compl / avg_compl).clamp(0.0, 1.0)
-                    } else {
-                        1.0
-                    };
-
-                    // Loqo formula: sigma = 0.1 * min(0.05*(1-xi)/xi, 2)^3.
-                    // Diagnostic (2026-04-18 direction diff vs Ipopt on a
-                    // 3-var log-band problem): ripopt's uncapped Loqo oracle
-                    // collapsed μ by 7 orders of magnitude in a single
-                    // iteration (e.g. 6.6e-3 → 9e-10) when the iterate was
-                    // well-centered (ξ ≈ 0.82 → σ ≈ 1e-7). Ipopt's
-                    // MonotoneMuUpdate floor max(σ·avg_compl, min(κ_μ·μ, μ^sldp))
-                    // bounds the per-iteration decrease even in adaptive mode;
-                    // apply the same floor here so the Loqo-proposed μ can't
-                    // undershoot a gradual monotone schedule.
-                    let ratio = if xi > 1e-20 {
-                        (0.05 * (1.0 - xi) / xi).min(2.0)
-                    } else {
-                        2.0
-                    };
-                    let sigma = 0.1 * ratio.powi(3);
-                    let loqo_mu = sigma * avg_compl;
-                    let monotone_floor =
-                        (options.mu_linear_decrease_factor * state.mu)
-                            .min(state.mu.powf(options.mu_superlinear_decrease_power));
-                    let new_mu = loqo_mu
-                        .max(monotone_floor)
-                        .clamp(mu_floor, 1e5);
-
-                    if options.print_level >= 5 {
-                        rip_log!("ripopt: mu loqo: xi={:.4} sigma={:.4} avg_compl={:.3e} floor={:.3e} -> mu={:.3e}",
-                            xi, sigma, avg_compl, monotone_floor, new_mu);
-                    }
-                    state.mu = new_mu;
+                    state.mu = compute_loqo_mu(state, options, avg_compl);
                 } else if avg_compl > 0.0 {
                     // Loqo fallback with rate limit (at most 5x decrease if subproblem not solved)
                     let barrier_err = compute_barrier_error(state);
