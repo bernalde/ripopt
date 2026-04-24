@@ -6672,7 +6672,34 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         track_post_step_acceptable(&mut state, options);
     }
 
-    // At max_iter: log convergence diagnostics using iterative z (Ipopt semantics).
+    finalize_after_max_iter(
+        &state, options, n, m, ever_feasible, &theta_history, theta_history_len,
+        &timings, ipm_start,
+    )
+}
+
+/// After the main IPM loop terminates at `max_iter`, decide the final
+/// `SolveStatus`:
+///
+///   1. Log MaxIter diagnostics at print_level ≥ 5.
+///   2. Infeasibility check (only if never feasible): `||∇θ|| ≈ 0`
+///      → `LocalInfeasibility`; theta stagnation history → `Infeasible`.
+///   3. Print phase timing summary.
+///   4. Strict Optimal at final iterate (catches MGH10LS-class zero-residual
+///      stalls where the counter reset).
+///   5. Relaxed Acceptable at final iterate (Ipopt default thresholds).
+///   6. Fallback: `MaxIterations`.
+fn finalize_after_max_iter(
+    state: &SolverState,
+    options: &SolverOptions,
+    n: usize,
+    m: usize,
+    ever_feasible: bool,
+    theta_history: &[f64],
+    theta_history_len: usize,
+    timings: &PhaseTimings,
+    ipm_start: Instant,
+) -> SolveResult {
     if options.print_level >= 5 {
         let final_primal_inf = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
         let final_dual_inf = convergence::dual_infeasibility(
@@ -6705,11 +6732,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         );
     }
 
-    // At max_iter: check if the problem is actually infeasible.
-    // Never declare infeasible if we were ever feasible.
+    // Infeasibility detection (only when never feasible).
     let final_theta = state.constraint_violation();
     if !ever_feasible && final_theta > options.constr_viol_tol {
-        // Check stationarity of violation: if ||∇θ|| ≈ 0, declare local infeasibility
         let mut violation = vec![0.0; m];
         for i in 0..m {
             let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
@@ -6731,56 +6756,48 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         let grad_theta_norm = grad_theta.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
         let stationarity_tol = 1e-4 * final_theta.max(1.0);
         if grad_theta_norm < stationarity_tol {
-            return make_result(&state, SolveStatus::LocalInfeasibility);
+            return make_result(state, SolveStatus::LocalInfeasibility);
         }
 
-        // Fallback: check if theta hasn't improved over recent history
         if final_theta > 1e4 && theta_history.len() >= theta_history_len {
             let min_theta = theta_history.iter().cloned().fold(f64::INFINITY, f64::min);
             if final_theta > 0.01 * min_theta {
-                return make_result(&state, SolveStatus::Infeasible);
+                return make_result(state, SolveStatus::Infeasible);
             }
         }
     }
+
     if options.print_level >= 5 {
         timings.print_summary(options.max_iter, ipm_start.elapsed());
     }
-    // Post-max_iter convergence check: if the final iterate satisfies
-    // strict Optimal or relaxed Acceptable tolerances, report that instead
-    // of MaxIterations. Catches MGH10LS-class (pr=du=co=0 but counter
-    // reset) and close-but-stalled problems (HS89/92 at ~1e-6 residual
-    // that didn't achieve 15 consecutive iters during the run).
+
+    let primal_inf = state.constraint_violation();
+    let dual_inf = convergence::dual_infeasibility(
+        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+        &state.y, &state.z_l, &state.z_u, state.n,
+    );
+    let compl_inf = convergence::complementarity_error(
+        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
+    );
+    if primal_inf <= options.constr_viol_tol
+        && dual_inf <= options.dual_inf_tol
+        && compl_inf <= options.compl_inf_tol
+        && primal_inf <= options.tol
+        && dual_inf <= options.tol
+        && compl_inf <= options.tol
     {
-        let primal_inf = state.constraint_violation();
-        let dual_inf = convergence::dual_infeasibility(
-            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-            &state.y, &state.z_l, &state.z_u, state.n,
-        );
-        let compl_inf = convergence::complementarity_error(
-            &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
-        );
-        // Strict Optimal at final iterate
-        if primal_inf <= options.constr_viol_tol
-            && dual_inf <= options.dual_inf_tol
-            && compl_inf <= options.compl_inf_tol
-            && primal_inf <= options.tol
-            && dual_inf <= options.tol
-            && compl_inf <= options.tol
-        {
-            return make_result(&state, SolveStatus::Optimal);
-        }
-        // Relaxed Acceptable at final iterate (Ipopt default thresholds)
-        if primal_inf <= 1e-2
-            && dual_inf <= 1e10
-            && compl_inf <= 1e-2
-            && primal_inf <= 1e-6
-            && dual_inf <= 1e-6
-            && compl_inf <= 1e-6
-        {
-            return make_result(&state, SolveStatus::Acceptable);
-        }
+        return make_result(state, SolveStatus::Optimal);
     }
-    make_result(&state, SolveStatus::MaxIterations)
+    if primal_inf <= 1e-2
+        && dual_inf <= 1e10
+        && compl_inf <= 1e-2
+        && primal_inf <= 1e-6
+        && dual_inf <= 1e-6
+        && compl_inf <= 1e-6
+    {
+        return make_result(state, SolveStatus::Acceptable);
+    }
+    make_result(state, SolveStatus::MaxIterations)
 }
 
 /// Attempt a second-order correction step.
