@@ -2675,6 +2675,70 @@ fn check_time_limits(
     None
 }
 
+/// Per-iteration KKT residuals used by the log row, filter, and
+/// convergence check.
+struct OptimalityMeasures {
+    /// 1-norm constraint violation (filter/log).
+    primal_inf: f64,
+    /// Max-norm primal infeasibility (convergence gate).
+    primal_inf_max: f64,
+    /// Iterative-z dual infeasibility `||∇f + J^T y - z_L + z_U||_∞`.
+    dual_inf: f64,
+    /// Component-wise scaled dual infeasibility for the unscaled gate
+    /// (divides each component by `1 + |∇f_i|`).
+    dual_inf_unscaled: f64,
+    /// Complementarity error `max_i {(x-x_L)_i z_{L,i}, (x_U-x)_i z_{U,i}}`
+    /// against target 0 (unscaled).
+    compl_inf: f64,
+}
+
+/// Compute the per-iteration optimality residuals.
+///
+/// Ipopt parallel: `IpIpoptCalculatedQuantities::curr_dual_infeasibility`
+/// / `curr_primal_infeasibility` / `curr_complementarity`.
+///
+/// Extracted from `solve_ipm` as part of the v0.8 main-loop
+/// decomposition. Pure function of `state`.
+fn compute_optimality_measures(state: &SolverState) -> OptimalityMeasures {
+    let n = state.n;
+    let primal_inf = state.constraint_violation();
+    let primal_inf_max = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
+
+    // Iterative-z dual infeasibility (matches Ipopt's curr_dual_infeasibility):
+    // honest KKT residual. If iterative z is inconsistent with ∇f + J^T y the
+    // residual stays large and iteration continues.
+    let dual_inf = convergence::dual_infeasibility(
+        &state.grad_f,
+        &state.jac_rows,
+        &state.jac_cols,
+        &state.jac_vals,
+        &state.y,
+        &state.z_l,
+        &state.z_u,
+        n,
+    );
+    let dual_inf_unscaled = convergence::dual_infeasibility_scaled(
+        &state.grad_f,
+        &state.jac_rows,
+        &state.jac_cols,
+        &state.jac_vals,
+        &state.y,
+        &state.z_l,
+        &state.z_u,
+        n,
+    );
+    let compl_inf = convergence::complementarity_error(
+        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
+    );
+    OptimalityMeasures {
+        primal_inf,
+        primal_inf_max,
+        dual_inf,
+        dual_inf_unscaled,
+        compl_inf,
+    }
+}
+
 /// Detect and recover from dual-infeasibility stagnation.
 ///
 /// Tracks the best dual-infeasibility seen so far (`last_good_du`,
@@ -3474,39 +3538,13 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             return result;
         }
 
-        // Compute optimality measures.
-        // Use 1-norm for filter/iteration log, max-norm for convergence testing.
-        let primal_inf = state.constraint_violation();
-        let primal_inf_max = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
-
-        // Dual infeasibility uses iterative z (matches Ipopt's curr_dual_infeasibility).
-        // This is the honest KKT residual ||grad_f + J^T y - z_L + z_U||_inf; if iterative z
-        // doesn't match grad_f + J^T y, the residual is large and iteration continues.
-        let dual_inf = convergence::dual_infeasibility(
-            &state.grad_f,
-            &state.jac_rows,
-            &state.jac_cols,
-            &state.jac_vals,
-            &state.y,
-            &state.z_l,
-            &state.z_u,
-            n,
-        );
-
-        // Component-wise scaled version for the unscaled gate (divide by 1+|grad_i|).
-        let dual_inf_unscaled = convergence::dual_infeasibility_scaled(
-            &state.grad_f,
-            &state.jac_rows,
-            &state.jac_cols,
-            &state.jac_vals,
-            &state.y,
-            &state.z_l,
-            &state.z_u,
-            n,
-        );
-        let compl_inf = convergence::complementarity_error(
-            &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
-        );
+        let OptimalityMeasures {
+            primal_inf,
+            primal_inf_max,
+            dual_inf,
+            dual_inf_unscaled,
+            compl_inf,
+        } = compute_optimality_measures(&state);
 
         log_iteration_row(
             iteration,
