@@ -2630,6 +2630,65 @@ fn update_dual_variables(
 /// condensed (this helper only runs on the full-augmented path).
 ///
 /// Reference: Gondzio (1994, Comput. Optim. Appl.); Gondzio (2007).
+/// Combine the Gondzio MCC corrector step `(ddx, ddy)` with the
+/// current Newton direction stored in `state.{dx, dy, dz_l, dz_u}`,
+/// recovering the bound-multiplier corrections via
+/// `dz_L = -(z_L/s_L)·ddx`, `dz_U = (z_U/s_U)·ddx` (no centering
+/// term). If the resulting `dx_c` deflects more than ~45° from the
+/// original `state.dx` (cos(angle) < 0.7), damp the correction with
+/// blending factor `alpha_damp = 0.3` to keep the corrected step
+/// close to the Newton direction.
+///
+/// Returns `(dx_c, dy_c, dz_l_c, dz_u_c)`.
+fn build_mcc_corrected_direction(
+    state: &SolverState,
+    ddx: &[f64],
+    ddy: &[f64],
+    iteration: usize,
+    n: usize,
+    m: usize,
+    dx_norm_orig: f64,
+) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
+    let mut ddz_l = vec![0.0_f64; n];
+    let mut ddz_u = vec![0.0_f64; n];
+    for i in 0..n {
+        if state.x_l[i].is_finite() {
+            let s_l = (state.x[i] - state.x_l[i]).max(1e-20);
+            ddz_l[i] = -(state.z_l[i] / s_l) * ddx[i];
+        }
+        if state.x_u[i].is_finite() {
+            let s_u = (state.x_u[i] - state.x[i]).max(1e-20);
+            ddz_u[i] = (state.z_u[i] / s_u) * ddx[i];
+        }
+    }
+
+    let mut dx_c: Vec<f64> = state.dx.iter().zip(ddx.iter()).map(|(a, b)| a + b).collect();
+    let mut dy_c: Vec<f64> = state.dy.iter().zip(ddy.iter()).map(|(a, b)| a + b).collect();
+    let mut dz_l_c: Vec<f64> = state.dz_l.iter().zip(ddz_l.iter()).map(|(a, b)| a + b).collect();
+    let mut dz_u_c: Vec<f64> = state.dz_u.iter().zip(ddz_u.iter()).map(|(a, b)| a + b).collect();
+
+    if dx_norm_orig > 1e-30 {
+        let dx_c_norm: f64 = dx_c.iter().map(|v| v * v).sum::<f64>().sqrt();
+        if dx_c_norm > 1e-30 {
+            let dot: f64 = state.dx.iter().zip(dx_c.iter()).map(|(a, b)| a * b).sum::<f64>();
+            let cos_angle = dot / (dx_norm_orig * dx_c_norm);
+            if cos_angle < 0.7 {
+                let alpha_damp = 0.3;
+                for i in 0..n { dx_c[i] = (1.0 - alpha_damp) * state.dx[i] + alpha_damp * dx_c[i]; }
+                for i in 0..m { dy_c[i] = (1.0 - alpha_damp) * state.dy[i] + alpha_damp * dy_c[i]; }
+                for i in 0..n { dz_l_c[i] = (1.0 - alpha_damp) * state.dz_l[i] + alpha_damp * dz_l_c[i]; }
+                for i in 0..n { dz_u_c[i] = (1.0 - alpha_damp) * state.dz_u[i] + alpha_damp * dz_u_c[i]; }
+                log::debug!(
+                    "Gondzio MCC iter {}: dampened correction (cos={:.3})",
+                    iteration, cos_angle
+                );
+            }
+        }
+    }
+
+    (dx_c, dy_c, dz_l_c, dz_u_c)
+}
+
 /// Build the Gondzio multiple-centrality-corrections (MCC)
 /// corrector RHS for the augmented KKT system. For each bound,
 /// projects the trial complementarity `c = z·s` at the current
@@ -2759,43 +2818,9 @@ fn apply_gondzio_mcc(
                     );
                     break;
                 }
-                // Bound-multiplier corrections from the Newton step (no centering).
-                let mut ddz_l = vec![0.0_f64; n];
-                let mut ddz_u = vec![0.0_f64; n];
-                for i in 0..n {
-                    if state.x_l[i].is_finite() {
-                        let s_l = (state.x[i] - state.x_l[i]).max(1e-20);
-                        ddz_l[i] = -(state.z_l[i] / s_l) * ddx[i];
-                    }
-                    if state.x_u[i].is_finite() {
-                        let s_u = (state.x_u[i] - state.x[i]).max(1e-20);
-                        ddz_u[i] = (state.z_u[i] / s_u) * ddx[i];
-                    }
-                }
-
-                let mut dx_c: Vec<f64> = state.dx.iter().zip(ddx.iter()).map(|(a, b)| a + b).collect();
-                let mut dy_c: Vec<f64> = state.dy.iter().zip(ddy.iter()).map(|(a, b)| a + b).collect();
-                let mut dz_l_c: Vec<f64> = state.dz_l.iter().zip(ddz_l.iter()).map(|(a, b)| a + b).collect();
-                let mut dz_u_c: Vec<f64> = state.dz_u.iter().zip(ddz_u.iter()).map(|(a, b)| a + b).collect();
-
-                if dx_norm_orig > 1e-30 {
-                    let dx_c_norm: f64 = dx_c.iter().map(|v| v * v).sum::<f64>().sqrt();
-                    if dx_c_norm > 1e-30 {
-                        let dot: f64 = state.dx.iter().zip(dx_c.iter()).map(|(a, b)| a * b).sum::<f64>();
-                        let cos_angle = dot / (dx_norm_orig * dx_c_norm);
-                        if cos_angle < 0.7 {
-                            let alpha_damp = 0.3;
-                            for i in 0..n { dx_c[i] = (1.0 - alpha_damp) * state.dx[i] + alpha_damp * dx_c[i]; }
-                            for i in 0..m { dy_c[i] = (1.0 - alpha_damp) * state.dy[i] + alpha_damp * dy_c[i]; }
-                            for i in 0..n { dz_l_c[i] = (1.0 - alpha_damp) * state.dz_l[i] + alpha_damp * dz_l_c[i]; }
-                            for i in 0..n { dz_u_c[i] = (1.0 - alpha_damp) * state.dz_u[i] + alpha_damp * dz_u_c[i]; }
-                            log::debug!(
-                                "Gondzio MCC iter {}: dampened correction (cos={:.3})",
-                                iteration, cos_angle
-                            );
-                        }
-                    }
-                }
+                let (dx_c, dy_c, dz_l_c, dz_u_c) = build_mcc_corrected_direction(
+                    state, &ddx, &ddy, iteration, n, m, dx_norm_orig,
+                );
 
                 let alpha_new = compute_mcc_alpha_max(
                     state, &dx_c, &dz_l_c, &dz_u_c, tau_mcc, n,
