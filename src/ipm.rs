@@ -2922,6 +2922,130 @@ enum DirectionSolveDecision {
     Return(SolveResult),
 }
 
+/// Outcome of the dense-condensed branch in `solve_for_search_direction`.
+/// `Solved` carries the primal/dual step and (when the BK factorization
+/// of the n×n Schur complement succeeded) the cached `DenseLdl` used by
+/// SOC. `Continue` and `Return` propagate restoration / NumericalError.
+enum CondensedDirectionOutcome {
+    Solved {
+        dx: Vec<f64>,
+        dy: Vec<f64>,
+        cond_solver: Option<DenseLdl>,
+    },
+    Continue,
+    Return(SolveResult),
+}
+
+/// Dense condensed direction solve: Bunch-Kaufman on the n×n Schur
+/// complement `H + Σ + J^T·D_c^{-1}·J`. On BK or solve failure rebuilds
+/// the full augmented KKT, factors it with inertia correction, and
+/// solves; falls back to restoration on persistent failure.
+#[allow(clippy::too_many_arguments)]
+fn solve_dense_condensed_direction<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    options: &SolverOptions,
+    n: usize,
+    m: usize,
+    use_sparse: bool,
+    cond: &kkt::CondensedKktSystem,
+    sigma: &[f64],
+    kkt_system_opt: &mut Option<kkt::KktSystem>,
+    lin_solver: &mut dyn LinearSolver,
+    inertia_params: &mut InertiaCorrectionParams,
+    filter: &Filter,
+    restoration: &mut RestorationPhase,
+    lbfgs_state: &mut Option<LbfgsIpmState>,
+    lbfgs_mode: bool,
+    linear_constraints: Option<&[bool]>,
+    deadline: Option<Instant>,
+) -> CondensedDirectionOutcome {
+    let mut cond_solver = DenseLdl::new();
+    let t_cond_bk = Instant::now();
+    let cond_ok = cond_solver.bunch_kaufman_factor(&cond.matrix).is_ok();
+    if options.print_level >= 5 {
+        rip_log!("ripopt: Dense condensed BK factor n={}: {:.3}s (ok={})",
+            n, t_cond_bk.elapsed().as_secs_f64(), cond_ok);
+    }
+    let cond_result = if cond_ok {
+        kkt::solve_condensed(cond, &mut cond_solver).ok()
+    } else {
+        None
+    };
+
+    if let Some((dx, dy)) = cond_result {
+        return CondensedDirectionOutcome::Solved {
+            dx,
+            dy,
+            cond_solver: Some(cond_solver),
+        };
+    }
+
+    // Condensed failed — build full KKT on demand.
+    let mut kkt = kkt::assemble_kkt(
+        n, m,
+        &state.hess_rows, &state.hess_cols, &state.hess_vals,
+        &state.jac_rows, &state.jac_cols, &state.jac_vals,
+        sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
+        &state.y, &state.z_l, &state.z_u,
+        &state.x, &state.x_l, &state.x_u, state.mu,
+        use_sparse, &state.v_l, &state.v_u,
+    );
+    let fb_ic = kkt::factor_with_inertia_correction(
+        &mut kkt, lin_solver, inertia_params,
+    );
+    if fb_ic.is_err() {
+        let (x_rest, success) = restoration.restore(
+            &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
+            &state.jac_rows, &state.jac_cols, n, m, options,
+            &|theta, phi| filter.is_acceptable(theta, phi),
+            &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
+            &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
+            Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
+            deadline,
+        );
+        if success {
+            state.x = x_rest;
+            state.alpha_primal = 0.0;
+            let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+            update_lbfgs_hessian(lbfgs_state, state);
+            return CondensedDirectionOutcome::Continue;
+        }
+        return CondensedDirectionOutcome::Return(make_result(state, SolveStatus::NumericalError));
+    }
+    let (fb_dw, fb_dc) = fb_ic.unwrap();
+    match kkt::solve_for_direction(&kkt, lin_solver, fb_dw, fb_dc) {
+        Ok((dx, dy)) => {
+            *kkt_system_opt = Some(kkt);
+            CondensedDirectionOutcome::Solved {
+                dx,
+                dy,
+                cond_solver: None,
+            }
+        }
+        Err(e) => {
+            log::warn!("KKT solve failed: {}", e);
+            let (x_rest, success) = restoration.restore(
+                &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
+                &state.jac_rows, &state.jac_cols, n, m, options,
+                &|theta, phi| filter.is_acceptable(theta, phi),
+                &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
+                &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
+                Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
+                deadline,
+            );
+            if success {
+                state.x = x_rest;
+                state.alpha_primal = 0.0;
+                let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+                update_lbfgs_hessian(lbfgs_state, state);
+                return CondensedDirectionOutcome::Continue;
+            }
+            CondensedDirectionOutcome::Return(make_result(state, SolveStatus::NumericalError))
+        }
+    }
+}
+
 /// Solve the KKT system for the primal-dual Newton search direction.
 ///
 /// Dispatches over the three KKT representations:
@@ -2969,84 +3093,17 @@ fn solve_for_search_direction<P: NlpProblem>(
     let mut mehrotra_aff: Option<(Vec<f64>, Vec<f64>, Vec<f64>, f64)> = None;
 
     let (dx, dy) = if let Some(cond) = condensed_system.as_ref() {
-        // Dense condensed: BK on the n×n Schur complement.
-        let mut cond_solver = DenseLdl::new();
-        let t_cond_bk = Instant::now();
-        let cond_ok = cond_solver.bunch_kaufman_factor(&cond.matrix).is_ok();
-        if options.print_level >= 5 {
-            rip_log!("ripopt: Dense condensed BK factor n={}: {:.3}s (ok={})",
-                n, t_cond_bk.elapsed().as_secs_f64(), cond_ok);
-        }
-        let cond_result = if cond_ok {
-            kkt::solve_condensed(cond, &mut cond_solver).ok()
-        } else {
-            None
-        };
-
-        if let Some(d) = cond_result {
-            cond_solver_for_soc = Some(cond_solver);
-            d
-        } else {
-            // Condensed failed — build full KKT on demand.
-            let mut kkt = kkt::assemble_kkt(
-                n, m,
-                &state.hess_rows, &state.hess_cols, &state.hess_vals,
-                &state.jac_rows, &state.jac_cols, &state.jac_vals,
-                sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
-                &state.y, &state.z_l, &state.z_u,
-                &state.x, &state.x_l, &state.x_u, state.mu,
-                use_sparse, &state.v_l, &state.v_u,
-            );
-            let fb_ic = kkt::factor_with_inertia_correction(
-                &mut kkt, lin_solver, inertia_params,
-            );
-            if fb_ic.is_err() {
-                let (x_rest, success) = restoration.restore(
-                    &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
-                    &state.jac_rows, &state.jac_cols, n, m, options,
-                    &|theta, phi| filter.is_acceptable(theta, phi),
-                    &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
-                    &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
-                    Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
-                    deadline,
-                );
-                if success {
-                    state.x = x_rest;
-                    state.alpha_primal = 0.0;
-                    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-                    update_lbfgs_hessian(lbfgs_state, state);
-                    return DirectionSolveDecision::Continue;
-                }
-                return DirectionSolveDecision::Return(make_result(state, SolveStatus::NumericalError));
+        match solve_dense_condensed_direction(
+            state, problem, options, n, m, use_sparse, cond, sigma,
+            kkt_system_opt, lin_solver, inertia_params, filter, restoration,
+            lbfgs_state, lbfgs_mode, linear_constraints, deadline,
+        ) {
+            CondensedDirectionOutcome::Solved { dx, dy, cond_solver } => {
+                cond_solver_for_soc = cond_solver;
+                (dx, dy)
             }
-            let (fb_dw, fb_dc) = fb_ic.unwrap();
-            match kkt::solve_for_direction(&kkt, lin_solver, fb_dw, fb_dc) {
-                Ok(d) => {
-                    let _ = (fb_dw, fb_dc);
-                    *kkt_system_opt = Some(kkt);
-                    d
-                }
-                Err(e) => {
-                    log::warn!("KKT solve failed: {}", e);
-                    let (x_rest, success) = restoration.restore(
-                        &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
-                        &state.jac_rows, &state.jac_cols, n, m, options,
-                        &|theta, phi| filter.is_acceptable(theta, phi),
-                        &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
-                        &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
-                        Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
-                        deadline,
-                    );
-                    if success {
-                        state.x = x_rest;
-                        state.alpha_primal = 0.0;
-                        let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-                        update_lbfgs_hessian(lbfgs_state, state);
-                        return DirectionSolveDecision::Continue;
-                    }
-                    return DirectionSolveDecision::Return(make_result(state, SolveStatus::NumericalError));
-                }
-            }
+            CondensedDirectionOutcome::Continue => return DirectionSolveDecision::Continue,
+            CondensedDirectionOutcome::Return(r) => return DirectionSolveDecision::Return(r),
         }
     } else if let Some(sc) = sparse_condensed_system.as_ref() {
         // Sparse condensed: factor S with banded / sparse solver.
