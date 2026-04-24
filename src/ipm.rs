@@ -5658,6 +5658,69 @@ fn estimate_schur_density_disable<P: NlpProblem>(
     disable
 }
 
+/// Evaluate the NLP at the initial point. If the evaluation fails, produces
+/// NaN/Inf in `obj` or `grad_f`, try up to three bound-push perturbations
+/// (1%, 10%, 50% of each bound range) and retry. If every perturbation also
+/// fails, return `Err(SolveResult)` with `SolveStatus::EvaluationError`.
+fn initial_evaluate_with_recovery<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    lbfgs_state: &mut Option<LbfgsIpmState>,
+    linear_constraints: Option<&[bool]>,
+    lbfgs_mode: bool,
+    n: usize,
+    options: &SolverOptions,
+) -> Result<(), SolveResult> {
+    let init_eval_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+    update_lbfgs_hessian(lbfgs_state, state);
+
+    if init_eval_ok && !state.obj.is_nan() && !state.obj.is_infinite()
+        && !state.grad_f.iter().any(|v| v.is_nan() || v.is_infinite())
+    {
+        return Ok(());
+    }
+
+    let x_saved = state.x.clone();
+    for &push_factor in &[1e-2, 1e-1, 0.5] {
+        state.x.copy_from_slice(&x_saved);
+        for i in 0..n {
+            if state.x_l[i].is_finite() && state.x_u[i].is_finite() {
+                let range = state.x_u[i] - state.x_l[i];
+                let push = push_factor * range;
+                if range > 2.0 * push {
+                    state.x[i] = state.x[i].max(state.x_l[i] + push).min(state.x_u[i] - push);
+                } else {
+                    state.x[i] = 0.5 * (state.x_l[i] + state.x_u[i]);
+                }
+            } else if state.x_l[i].is_finite() {
+                let push = push_factor * state.x_l[i].abs().max(1.0);
+                state.x[i] = state.x[i].max(state.x_l[i] + push);
+            } else if state.x_u[i].is_finite() {
+                let push = push_factor * state.x_u[i].abs().max(1.0);
+                state.x[i] = state.x[i].min(state.x_u[i] - push);
+            }
+        }
+        for i in 0..n {
+            if state.x_l[i].is_finite() {
+                let slack = (state.x[i] - state.x_l[i]).max(1e-20);
+                state.z_l[i] = options.mu_init / slack;
+            }
+            if state.x_u[i].is_finite() {
+                let slack = (state.x_u[i] - state.x[i]).max(1e-20);
+                state.z_u[i] = options.mu_init / slack;
+            }
+        }
+        let perturb_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+        update_lbfgs_hessian(lbfgs_state, state);
+        if perturb_ok && !state.obj.is_nan() && !state.obj.is_infinite()
+            && !state.grad_f.iter().any(|v| v.is_nan() || v.is_infinite())
+        {
+            return Ok(());
+        }
+    }
+    Err(make_result(state, SolveStatus::EvaluationError))
+}
+
 /// Compute gradient-based NLP scaling at the initial point `x0`, matching
 /// Ipopt's `nlp_scaling_method = gradient-based`:
 ///
@@ -5945,59 +6008,11 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     // Strategy 4: Complementarity polishing — force mu small when compl is bottleneck
     let mut _tried_compl_polish: bool = false;
 
-    // Initial evaluation
-    let init_eval_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        update_lbfgs_hessian(&mut lbfgs_state, &mut state);
-
-    // NaN/Inf guard on initial evaluation — try perturbation before giving up
-    if !init_eval_ok || state.obj.is_nan() || state.obj.is_infinite()
-        || state.grad_f.iter().any(|v| v.is_nan() || v.is_infinite())
-    {
-        let mut recovered = false;
-        let x_saved = state.x.clone();
-        for &push_factor in &[1e-2, 1e-1, 0.5] {
-            // Reset to saved point and apply stronger push
-            state.x.copy_from_slice(&x_saved);
-            for i in 0..n {
-                if state.x_l[i].is_finite() && state.x_u[i].is_finite() {
-                    let range = state.x_u[i] - state.x_l[i];
-                    let push = push_factor * range;
-                    if range > 2.0 * push {
-                        state.x[i] = state.x[i].max(state.x_l[i] + push).min(state.x_u[i] - push);
-                    } else {
-                        state.x[i] = 0.5 * (state.x_l[i] + state.x_u[i]);
-                    }
-                } else if state.x_l[i].is_finite() {
-                    let push = push_factor * state.x_l[i].abs().max(1.0);
-                    state.x[i] = state.x[i].max(state.x_l[i] + push);
-                } else if state.x_u[i].is_finite() {
-                    let push = push_factor * state.x_u[i].abs().max(1.0);
-                    state.x[i] = state.x[i].min(state.x_u[i] - push);
-                }
-            }
-            // Re-initialize bound multipliers after perturbation
-            for i in 0..n {
-                if state.x_l[i].is_finite() {
-                    let slack = (state.x[i] - state.x_l[i]).max(1e-20);
-                    state.z_l[i] = options.mu_init / slack;
-                }
-                if state.x_u[i].is_finite() {
-                    let slack = (state.x_u[i] - state.x[i]).max(1e-20);
-                    state.z_u[i] = options.mu_init / slack;
-                }
-            }
-            let perturb_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        update_lbfgs_hessian(&mut lbfgs_state, &mut state);
-            if perturb_ok && !state.obj.is_nan() && !state.obj.is_infinite()
-                && !state.grad_f.iter().any(|v| v.is_nan() || v.is_infinite())
-            {
-                recovered = true;
-                break;
-            }
-        }
-        if !recovered {
-            return make_result(&state, SolveStatus::EvaluationError);
-        }
+    // Initial evaluation with NaN/Inf recovery by bound-push perturbation.
+    if let Err(result) = initial_evaluate_with_recovery(
+        &mut state, problem, &mut lbfgs_state, linear_constraints.as_deref(), lbfgs_mode, n, options,
+    ) {
+        return result;
     }
 
     // Initialize constraint slack barrier multipliers v_l, v_u (Ipopt's v_L, v_U).
