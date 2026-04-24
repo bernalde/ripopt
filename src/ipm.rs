@@ -2739,6 +2739,96 @@ fn compute_optimality_measures(state: &SolverState) -> OptimalityMeasures {
     }
 }
 
+/// Compute the multiplier-based scaling factor `s_d` used by the
+/// Ipopt acceptable-tolerance gate and the overall-progress stall
+/// detector, then update `state.consecutive_acceptable`.
+///
+/// Scaling matches `IpIpoptCalculatedQuantities::ComputeOptimalityErrorScaling`
+/// with `s_max=100` and the 1e4 cap preserved for compatibility with
+/// the rest of ripopt's tolerance pipeline. Acceptable thresholds
+/// match `IpOptErrorConvCheck.cpp:70-121` defaults
+/// (acceptable_tol=1e-6, acceptable_constr_viol_tol=1e-2,
+/// acceptable_dual_inf_tol=1e10, acceptable_compl_inf_tol=1e-2).
+///
+/// Returns `s_d_for_acc` because it is consumed downstream by
+/// `detect_and_handle_progress_stall`.
+fn track_consecutive_acceptable(
+    state: &mut SolverState,
+    primal_inf: f64,
+    dual_inf: f64,
+    dual_inf_unscaled: f64,
+    compl_inf: f64,
+    multiplier_sum: f64,
+) -> f64 {
+    let n = state.n;
+    let m = state.m;
+    let s_d_for_acc = {
+        let s_max: f64 = 100.0;
+        let s_d_max: f64 = 1e4;
+        if (m + 2 * n) > 0 {
+            ((s_max.max(multiplier_sum / (m + 2 * n) as f64)) / s_max).min(s_d_max)
+        } else {
+            1.0
+        }
+    };
+    let meets_acc_scaled = primal_inf <= 1e-6
+        && dual_inf <= 1e-6 * s_d_for_acc
+        && compl_inf <= 1e-6 * s_d_for_acc;
+    let meets_acc_unscaled = primal_inf <= 1e-2
+        && dual_inf_unscaled <= 1e10
+        && compl_inf <= 1e-2;
+    if meets_acc_scaled && meets_acc_unscaled {
+        state.consecutive_acceptable += 1;
+    } else {
+        state.consecutive_acceptable = 0;
+    }
+    s_d_for_acc
+}
+
+/// Record the current iterate as the best-du point if its dual
+/// infeasibility beats the previous best.
+///
+/// Used by the overall-progress stall detector to revert before a
+/// `NumericalError` exit, and by the dual-stagnation detector to
+/// restart from the good point.
+fn update_best_du_iterate(
+    state: &SolverState,
+    dual_inf: f64,
+    best_du_val: &mut f64,
+    best_du_x: &mut Option<Vec<f64>>,
+    best_du_y: &mut Option<Vec<f64>>,
+    best_du_zl: &mut Option<Vec<f64>>,
+    best_du_zu: &mut Option<Vec<f64>>,
+) {
+    if dual_inf < *best_du_val {
+        *best_du_val = dual_inf;
+        *best_du_x = Some(state.x.clone());
+        *best_du_y = Some(state.y.clone());
+        *best_du_zl = Some(state.z_l.clone());
+        *best_du_zu = Some(state.z_u.clone());
+    }
+}
+
+/// Detect unboundedness by requiring 10 consecutive iterations of
+/// `obj < -1e20` at a feasible iterate. The counter prevents false
+/// positives from transient dips.
+fn detect_unbounded(
+    state: &SolverState,
+    options: &SolverOptions,
+    primal_inf: f64,
+    consecutive_unbounded: &mut usize,
+) -> Option<SolveResult> {
+    if state.obj < -1e20 && primal_inf < options.constr_viol_tol {
+        *consecutive_unbounded += 1;
+        if *consecutive_unbounded >= 10 {
+            return Some(make_result(state, SolveStatus::Unbounded));
+        }
+    } else {
+        *consecutive_unbounded = 0;
+    }
+    None
+}
+
 /// Primal-infeasibility divergence detector.
 ///
 /// Tracks consecutive iterations where θ is strictly increasing (by
@@ -4043,41 +4133,24 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             return result;
         }
 
-        // Track consecutive acceptable iterations (using same criteria as check_convergence)
-        let s_d_for_acc = {
-            let s_max: f64 = 100.0;
-            let s_d_max: f64 = 1e4;
-            if (m + 2 * n) > 0 {
-                ((s_max.max(multiplier_sum / (m + 2 * n) as f64)) / s_max).min(s_d_max)
-            } else {
-                1.0
-            }
-        };
-        // Acceptable-level increment matching Ipopt's defaults
-        // (IpOptErrorConvCheck.cpp:70-121): acceptable_tol=1e-6,
-        // acceptable_constr_viol_tol=1e-2, acceptable_dual_inf_tol=1e10,
-        // acceptable_compl_inf_tol=1e-2. The counter must hit
-        // acceptable_iter=15 for Acceptable status to fire.
-        let meets_acc_scaled = primal_inf <= 1e-6
-            && dual_inf <= 1e-6 * s_d_for_acc
-            && compl_inf <= 1e-6 * s_d_for_acc;
-        let meets_acc_unscaled = primal_inf <= 1e-2
-            && dual_inf_unscaled <= 1e10
-            && compl_inf <= 1e-2;
-        if meets_acc_scaled && meets_acc_unscaled {
-            state.consecutive_acceptable += 1;
-        } else {
-            state.consecutive_acceptable = 0;
-        }
+        let s_d_for_acc = track_consecutive_acceptable(
+            &mut state,
+            primal_inf,
+            dual_inf,
+            dual_inf_unscaled,
+            compl_inf,
+            multiplier_sum,
+        );
 
-        // Track best-du point for cycling/stall detection at max_iter exit.
-        if dual_inf < best_du_val {
-            best_du_val = dual_inf;
-            best_du_x = Some(state.x.clone());
-            best_du_y = Some(state.y.clone());
-            best_du_zl = Some(state.z_l.clone());
-            best_du_zu = Some(state.z_u.clone());
-        }
+        update_best_du_iterate(
+            &state,
+            dual_inf,
+            &mut best_du_val,
+            &mut best_du_x,
+            &mut best_du_y,
+            &mut best_du_zl,
+            &mut best_du_zu,
+        );
 
         if let Some(result) = track_feasibility_and_detect_infeasibility(
             &state,
@@ -4092,15 +4165,13 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             return result;
         }
 
-        // Unbounded detection: objective diverging negatively with satisfied constraints.
-        // Require 10 consecutive iterations to avoid false positives from transient dips.
-        if state.obj < -1e20 && primal_inf < options.constr_viol_tol {
-            consecutive_unbounded += 1;
-            if consecutive_unbounded >= 10 {
-                return make_result(&state, SolveStatus::Unbounded);
-            }
-        } else {
-            consecutive_unbounded = 0;
+        if let Some(result) = detect_unbounded(
+            &state,
+            options,
+            primal_inf,
+            &mut consecutive_unbounded,
+        ) {
+            return result;
         }
 
         // Overall-progress stall detection — see helper doc comment.
