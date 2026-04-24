@@ -2089,6 +2089,33 @@ fn dump_kkt_matrix(
     }
 }
 
+/// Update the L-BFGS Hessian approximation (no-op when `lbfgs_state` is `None`).
+///
+/// Recomputes the Lagrangian gradient at the current iterate and feeds
+/// `(x, grad_L)` into the L-BFGS memory, then fills `state.hess_vals` with
+/// the dense approximate Hessian `B_k`. When exact Hessian is used
+/// (`lbfgs_state == None`) this is a no-op — the Hessian was populated
+/// directly by `state.evaluate_with_linear`.
+///
+/// Ipopt parallel: `HessianUpdater` strategy object
+/// (`IpHessianUpdater.{hpp,cpp}` with `LimMemQuasiNewtonUpdater` /
+/// `ExactHessianUpdater` subclasses).
+///
+/// Extracted from `solve_ipm` as part of the v0.8 main-loop decomposition
+/// (pre-work step 2). Replaces ~16 copies of the same 6-line pattern.
+fn update_lbfgs_hessian(
+    lbfgs_state: &mut Option<LbfgsIpmState>,
+    state: &mut SolverState,
+) {
+    if let Some(ref mut lbfgs) = lbfgs_state {
+        let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
+            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
+        );
+        lbfgs.update(&state.x, &lag_grad);
+        lbfgs.fill_hessian(&mut state.hess_vals);
+    }
+}
+
 /// Update the barrier parameter μ (interior-point centering parameter) once
 /// per iteration after the step has been accepted.
 ///
@@ -3202,13 +3229,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
     // Initial evaluation
     let init_eval_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        if let Some(ref mut lbfgs) = lbfgs_state {
-            let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
-                &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
-            );
-            lbfgs.update(&state.x, &lag_grad);
-            lbfgs.fill_hessian(&mut state.hess_vals);
-        }
+        update_lbfgs_hessian(&mut lbfgs_state, &mut state);
 
     // NaN/Inf guard on initial evaluation — try perturbation before giving up
     if !init_eval_ok || state.obj.is_nan() || state.obj.is_infinite()
@@ -3248,13 +3269,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 }
             }
             let perturb_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        if let Some(ref mut lbfgs) = lbfgs_state {
-            let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
-                &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
-            );
-            lbfgs.update(&state.x, &lag_grad);
-            lbfgs.fill_hessian(&mut state.hess_vals);
-        }
+        update_lbfgs_hessian(&mut lbfgs_state, &mut state);
             if perturb_ok && !state.obj.is_nan() && !state.obj.is_infinite()
                 && !state.grad_f.iter().any(|v| v.is_nan() || v.is_infinite())
             {
@@ -3349,13 +3364,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     if let Some(ref bdzl) = best_du_zl { state.z_l.copy_from_slice(bdzl); }
                     if let Some(ref bdzu) = best_du_zu { state.z_u.copy_from_slice(bdzu); }
                     let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        if let Some(ref mut lbfgs) = lbfgs_state {
-            let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
-                &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
-            );
-            lbfgs.update(&state.x, &lag_grad);
-            lbfgs.fill_hessian(&mut state.hess_vals);
-        }
+        update_lbfgs_hessian(&mut lbfgs_state, &mut state);
 
                     // Reset filter and bump mu for a fresh start from the good point.
                     filter.reset();
@@ -4083,13 +4092,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         }
                     }
                     let pert_eval_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        if let Some(ref mut lbfgs) = lbfgs_state {
-            let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
-                &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
-            );
-            lbfgs.update(&state.x, &lag_grad);
-            lbfgs.fill_hessian(&mut state.hess_vals);
-        }
+        update_lbfgs_hessian(&mut lbfgs_state, &mut state);
                     if pert_eval_ok && !state.obj.is_nan() && !state.obj.is_infinite()
                         && !state.grad_f.iter().any(|v| v.is_nan() || v.is_infinite())
                     {
@@ -4162,13 +4165,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 }
                 if fb_accepted {
                     let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        if let Some(ref mut lbfgs) = lbfgs_state {
-            let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
-                &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
-            );
-            lbfgs.update(&state.x, &lag_grad);
-            lbfgs.fill_hessian(&mut state.hess_vals);
-        }
+        update_lbfgs_hessian(&mut lbfgs_state, &mut state);
                     continue;
                 }
             }
@@ -4186,13 +4183,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 state.x = x_rest;
                 state.alpha_primal = 0.0;
                 let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        if let Some(ref mut lbfgs) = lbfgs_state {
-            let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
-                &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
-            );
-            lbfgs.update(&state.x, &lag_grad);
-            lbfgs.fill_hessian(&mut state.hess_vals);
-        }
+        update_lbfgs_hessian(&mut lbfgs_state, &mut state);
                 continue;
             }
             // Last resort: perturb x and retry factorization
@@ -4210,13 +4201,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     }
                 }
                 let pert2_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        if let Some(ref mut lbfgs) = lbfgs_state {
-            let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
-                &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
-            );
-            lbfgs.update(&state.x, &lag_grad);
-            lbfgs.fill_hessian(&mut state.hess_vals);
-        }
+        update_lbfgs_hessian(&mut lbfgs_state, &mut state);
                 if pert2_ok && !state.obj.is_nan() && !state.obj.is_infinite() {
                     recovered_from_perturb = true;
                     break;
@@ -4285,13 +4270,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         state.x = x_rest;
                         state.alpha_primal = 0.0;
                         let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        if let Some(ref mut lbfgs) = lbfgs_state {
-            let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
-                &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
-            );
-            lbfgs.update(&state.x, &lag_grad);
-            lbfgs.fill_hessian(&mut state.hess_vals);
-        }
+        update_lbfgs_hessian(&mut lbfgs_state, &mut state);
                         continue;
                     }
                     return make_result(&state, SolveStatus::NumericalError);
@@ -4318,13 +4297,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             state.x = x_rest;
                             state.alpha_primal = 0.0;
                             let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        if let Some(ref mut lbfgs) = lbfgs_state {
-            let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
-                &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
-            );
-            lbfgs.update(&state.x, &lag_grad);
-            lbfgs.fill_hessian(&mut state.hess_vals);
-        }
+        update_lbfgs_hessian(&mut lbfgs_state, &mut state);
                             continue;
                         }
                         return make_result(&state, SolveStatus::NumericalError);
@@ -4602,13 +4575,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                             state.x = x_rest;
                             state.alpha_primal = 0.0;
                             let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        if let Some(ref mut lbfgs) = lbfgs_state {
-            let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
-                &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
-            );
-            lbfgs.update(&state.x, &lag_grad);
-            lbfgs.fill_hessian(&mut state.hess_vals);
-        }
+        update_lbfgs_hessian(&mut lbfgs_state, &mut state);
                             continue;
                         }
                         return make_result(&state, SolveStatus::NumericalError);
@@ -5339,13 +5306,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                         }
                     }
                     let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        if let Some(ref mut lbfgs) = lbfgs_state {
-            let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
-                &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
-            );
-            lbfgs.update(&state.x, &lag_grad);
-            lbfgs.fill_hessian(&mut state.hess_vals);
-        }
+        update_lbfgs_hessian(&mut lbfgs_state, &mut state);
                 }
                 continue;
             }
@@ -5434,13 +5395,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                     state.g = saved.g.clone();
                     state.grad_f = saved.grad_f.clone();
                     let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        if let Some(ref mut lbfgs) = lbfgs_state {
-            let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
-                &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
-            );
-            lbfgs.update(&state.x, &lag_grad);
-            lbfgs.fill_hessian(&mut state.hess_vals);
-        }
+        update_lbfgs_hessian(&mut lbfgs_state, &mut state);
 
                     watchdog_active = false;
                     watchdog_trial_count = 0;
@@ -5513,13 +5468,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         let t_eval = Instant::now();
         let eval_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
         if eval_ok {
-            if let Some(ref mut lbfgs) = lbfgs_state {
-                let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
-                    &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
-                );
-                lbfgs.update(&state.x, &lag_grad);
-                lbfgs.fill_hessian(&mut state.hess_vals);
-            }
+            update_lbfgs_hessian(&mut lbfgs_state, &mut state);
         }
         timings.problem_eval += t_eval.elapsed();
 
@@ -5542,13 +5491,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 if state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode) {
                     state.alpha_primal = retry_alpha;
                     state.alpha_dual = retry_alpha_dual;
-                    if let Some(ref mut lbfgs) = lbfgs_state {
-                        let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
-                            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
-                        );
-                        lbfgs.update(&state.x, &lag_grad);
-                        lbfgs.fill_hessian(&mut state.hess_vals);
-                    }
+                    update_lbfgs_hessian(&mut lbfgs_state, &mut state);
                     recovered = true;
                     break;
                 }
@@ -5570,13 +5513,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 state.x = x_rest;
                 state.alpha_primal = 0.0;
                 if state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode) {
-                    if let Some(ref mut lbfgs) = lbfgs_state {
-                        let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
-                            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
-                        );
-                        lbfgs.update(&state.x, &lag_grad);
-                        lbfgs.fill_hessian(&mut state.hess_vals);
-                    }
+                    update_lbfgs_hessian(&mut lbfgs_state, &mut state);
                     continue;
                 }
             }
@@ -6265,13 +6202,7 @@ fn apply_restoration_success<P: NlpProblem>(
     state.alpha_primal = 0.0;
 
     let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-    if let Some(ref mut lbfgs) = lbfgs_state {
-        let lag_grad = LbfgsIpmState::compute_lagrangian_gradient(
-            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals, &state.y, state.n,
-        );
-        lbfgs.update(&state.x, &lag_grad);
-        lbfgs.fill_hessian(&mut state.hess_vals);
-    }
+    update_lbfgs_hessian(lbfgs_state, state);
 
     // Reset bound multipliers after restoration, matching Ipopt
     // IpRestoMinC_1Nrm.cpp:374-419:
