@@ -2205,6 +2205,84 @@ fn assemble_kkt_systems(
     }
 }
 
+/// Apply the accepted step to the dual variables (y, z_l, z_u) and
+/// enforce Ipopt's kappa_sigma safeguard on bound multipliers.
+///
+/// - `y` (constraint multipliers) use `alpha_for_y = primal`: the
+///   accepted primal step length (Ipopt default). Near convergence
+///   (`consecutive_acceptable >= 1`), persistent sign changes in
+///   `dy_i` across ≥3 iterations trigger 50% damping to suppress
+///   oscillation.
+/// - `z_l`, `z_u` use `alpha_d` (fraction-to-boundary on bound
+///   multipliers). After the update, each is clamped to keep `z*s`
+///   inside `[mu_ks/kappa_sigma, kappa_sigma*mu_ks]` (Ipopt
+///   `IpIpoptCalculatedQuantities::ComputePDSystem`-style safeguard
+///   with `kappa_sigma = 1e10`).
+///
+/// Writes `state.alpha_dual = alpha_d`. Returns `mu_ks`, which the
+/// caller reuses when resetting slack-constraint multipliers `v_l`,
+/// `v_u` after the post-step re-evaluation.
+fn update_dual_variables(
+    state: &mut SolverState,
+    mu_state: &MuState,
+    alpha_dual_max: f64,
+    prev_dy: &mut Option<Vec<f64>>,
+    dy_sign_change_count: &mut [u8],
+) -> f64 {
+    let n = state.n;
+    let m = state.m;
+    let alpha_y = state.alpha_primal;
+    let alpha_d = alpha_dual_max;
+    let near_convergence = state.consecutive_acceptable >= 1;
+    for i in 0..m {
+        let sign_change = if let Some(ref pdy) = prev_dy {
+            pdy[i] * state.dy[i] < 0.0
+        } else {
+            false
+        };
+        if near_convergence && sign_change {
+            dy_sign_change_count[i] = dy_sign_change_count[i].saturating_add(1);
+        } else if !sign_change {
+            dy_sign_change_count[i] = 0;
+        }
+        let dy_i = if near_convergence && dy_sign_change_count[i] >= 3 {
+            0.5 * state.dy[i]
+        } else {
+            state.dy[i]
+        };
+        state.y[i] += alpha_y * dy_i;
+    }
+    *prev_dy = Some(state.dy.clone());
+
+    let kappa_sigma = 1e10;
+    let mu_ks = if mu_state.mode == MuMode::Free {
+        compute_avg_complementarity(state)
+            .max(state.mu)
+            .min(1e3)
+    } else {
+        state.mu
+    };
+    for i in 0..n {
+        if state.x_l[i].is_finite() {
+            let z_new = (state.z_l[i] + alpha_d * state.dz_l[i]).max(1e-20);
+            let s_l = (state.x[i] - state.x_l[i]).max(1e-20);
+            let z_lo = mu_ks / (kappa_sigma * s_l);
+            let z_hi = kappa_sigma * mu_ks / s_l;
+            state.z_l[i] = z_new.clamp(z_lo, z_hi);
+        }
+        if state.x_u[i].is_finite() {
+            let z_new = (state.z_u[i] + alpha_d * state.dz_u[i]).max(1e-20);
+            let s_u = (state.x_u[i] - state.x[i]).max(1e-20);
+            let z_lo = mu_ks / (kappa_sigma * s_u);
+            let z_hi = kappa_sigma * mu_ks / s_u;
+            state.z_u[i] = z_new.clamp(z_lo, z_hi);
+        }
+    }
+
+    state.alpha_dual = alpha_d;
+    mu_ks
+}
+
 /// Fraction-to-boundary step limits for primal and dual.
 ///
 /// `tau` = `max(1 - NLP_error, tau_min)` in Free mode or
@@ -5866,61 +5944,13 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
         timings.line_search += t_ls.elapsed();
 
-        // Update dual variables.
-        // Ipopt default: alpha_for_y = "primal" — use the accepted primal step length
-        // for the y (constraint multiplier) update. This prevents dual divergence on
-        // feasibility problems where y is undetermined and dy can be arbitrarily large.
-        // z_l/z_u/v_l/v_u still use alpha_dual (fraction-to-boundary on bound multipliers).
-        let alpha_y = state.alpha_primal;
-        let alpha_d = alpha_dual_max;
-        let near_convergence = state.consecutive_acceptable >= 1;
-        for i in 0..m {
-            let sign_change = if let Some(ref pdy) = prev_dy {
-                pdy[i] * state.dy[i] < 0.0
-            } else {
-                false
-            };
-            if near_convergence && sign_change {
-                dy_sign_change_count[i] = dy_sign_change_count[i].saturating_add(1);
-            } else if !sign_change {
-                dy_sign_change_count[i] = 0;
-            }
-            let dy_i = if near_convergence && dy_sign_change_count[i] >= 3 {
-                // Persistent oscillation (≥3 consecutive sign changes): damp to stabilize
-                0.5 * state.dy[i]
-            } else {
-                state.dy[i]
-            };
-            state.y[i] += alpha_y * dy_i;
-        }
-        prev_dy = Some(state.dy.clone());
-        // Ipopt kappa_sigma safeguard: keep z*s in [mu_ks/kappa_sigma, kappa_sigma*mu_ks]
-        let kappa_sigma = 1e10;
-        let mu_ks = if mu_state.mode == MuMode::Free {
-            compute_avg_complementarity(&state)
-                .max(state.mu)
-                .min(1e3)
-        } else {
-            state.mu
-        };
-        for i in 0..n {
-            if state.x_l[i].is_finite() {
-                let z_new = (state.z_l[i] + alpha_d * state.dz_l[i]).max(1e-20);
-                let s_l = (state.x[i] - state.x_l[i]).max(1e-20);
-                let z_lo = mu_ks / (kappa_sigma * s_l);
-                let z_hi = kappa_sigma * mu_ks / s_l;
-                state.z_l[i] = z_new.clamp(z_lo, z_hi);
-            }
-            if state.x_u[i].is_finite() {
-                let z_new = (state.z_u[i] + alpha_d * state.dz_u[i]).max(1e-20);
-                let s_u = (state.x_u[i] - state.x[i]).max(1e-20);
-                let z_lo = mu_ks / (kappa_sigma * s_u);
-                let z_hi = kappa_sigma * mu_ks / s_u;
-                state.z_u[i] = z_new.clamp(z_lo, z_hi);
-            }
-        }
-
-        state.alpha_dual = alpha_d;
+        let mu_ks = update_dual_variables(
+            &mut state,
+            &mu_state,
+            alpha_dual_max,
+            &mut prev_dy,
+            &mut dy_sign_change_count,
+        );
 
         // Re-evaluate at new point (evaluate_with_linear checks NaN/Inf on
         // obj, grad_f, g — matching Ipopt's OrigIpoptNLP Eval_Error semantics)
