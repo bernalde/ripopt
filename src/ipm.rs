@@ -7166,3 +7166,151 @@ fn make_result(state: &SolverState, status: SolveStatus) -> SolveResult {
         diagnostics: diag,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Build a minimal SolverState for testing private mu/complementarity helpers.
+    // The caller supplies only fields the test exercises; everything else is zeroed.
+    fn minimal_state(n: usize, m: usize) -> SolverState {
+        SolverState {
+            x: vec![0.0; n],
+            y: vec![0.0; m],
+            z_l: vec![0.0; n],
+            z_u: vec![0.0; n],
+            v_l: vec![0.0; m],
+            v_u: vec![0.0; m],
+            dx: vec![0.0; n],
+            dy: vec![0.0; m],
+            dz_l: vec![0.0; n],
+            dz_u: vec![0.0; n],
+            mu: 0.1,
+            alpha_primal: 0.0,
+            alpha_dual: 0.0,
+            iter: 0,
+            x_l: vec![f64::NEG_INFINITY; n],
+            x_u: vec![f64::INFINITY; n],
+            g_l: vec![f64::NEG_INFINITY; m],
+            g_u: vec![f64::INFINITY; m],
+            n,
+            m,
+            obj: 0.0,
+            grad_f: vec![0.0; n],
+            g: vec![0.0; m],
+            jac_rows: Vec::new(),
+            jac_cols: Vec::new(),
+            jac_vals: Vec::new(),
+            hess_rows: Vec::new(),
+            hess_cols: Vec::new(),
+            hess_vals: Vec::new(),
+            consecutive_acceptable: 0,
+            obj_scaling: 1.0,
+            g_scaling: vec![1.0; m],
+            diagnostics: SolverDiagnostics::default(),
+            x_last_eval: vec![f64::NAN; n],
+        }
+    }
+
+    #[test]
+    fn test_avg_compl_variable_bounds_only() {
+        // 2 vars, lower-bound only. x = [1.5, 2.0], x_l = [1.0, 1.0], z_l = [2.0, 3.0].
+        // slacks = [0.5, 1.0]; avg_compl = (0.5*2.0 + 1.0*3.0) / 2 = 4.0 / 2 = 2.0
+        let mut state = minimal_state(2, 0);
+        state.x = vec![1.5, 2.0];
+        state.x_l = vec![1.0, 1.0];
+        state.z_l = vec![2.0, 3.0];
+        let avg = compute_avg_complementarity(&state);
+        assert!((avg - 2.0).abs() < 1e-12, "expected 2.0, got {}", avg);
+    }
+
+    #[test]
+    fn test_avg_compl_both_bounds() {
+        // 1 var, both bounds. x = 1.5, x_l = 1.0, x_u = 2.0, z_l = 2.0, z_u = 3.0.
+        // avg = (0.5*2.0 + 0.5*3.0) / 2 = 2.5 / 2 = 1.25
+        let mut state = minimal_state(1, 0);
+        state.x = vec![1.5];
+        state.x_l = vec![1.0];
+        state.x_u = vec![2.0];
+        state.z_l = vec![2.0];
+        state.z_u = vec![3.0];
+        let avg = compute_avg_complementarity(&state);
+        assert!((avg - 1.25).abs() < 1e-12, "expected 1.25, got {}", avg);
+    }
+
+    #[test]
+    fn test_avg_compl_inequality_fallback() {
+        // No variable bounds, but an inequality constraint with v_l > 0 triggers fallback.
+        // g = 2.0, g_l = 1.0, v_l = 0.5 -> slack = 1.0, contrib = 0.5; avg = 0.5 / 1 = 0.5.
+        let mut state = minimal_state(1, 1);
+        state.g = vec![2.0];
+        state.g_l = vec![1.0];
+        state.g_u = vec![f64::INFINITY];
+        state.v_l = vec![0.5];
+        let avg = compute_avg_complementarity(&state);
+        assert!((avg - 0.5).abs() < 1e-12, "fallback path: expected 0.5, got {}", avg);
+    }
+
+    #[test]
+    fn test_avg_compl_inequality_fallback_skipped_when_bounds_exist() {
+        // Variable bounds present AND inequality constraint with v_l > 0: fallback is skipped.
+        // Only the variable bound contributes, so avg_compl = slack * z_l / 1 = 1.0 * 1.0 = 1.0.
+        let mut state = minimal_state(1, 1);
+        state.x = vec![2.0];
+        state.x_l = vec![1.0];
+        state.z_l = vec![1.0];
+        state.g = vec![2.0];
+        state.g_l = vec![1.0];
+        state.v_l = vec![99.0]; // Would bias avg if fallback ran
+        let avg = compute_avg_complementarity(&state);
+        assert!((avg - 1.0).abs() < 1e-12,
+            "fallback must skip when var bounds present: got {}", avg);
+    }
+
+    #[test]
+    fn test_avg_compl_no_bounds_anywhere() {
+        // Unconstrained, no bounds: avg_compl = 0.0 (count stays at 0).
+        let state = minimal_state(3, 0);
+        let avg = compute_avg_complementarity(&state);
+        assert_eq!(avg, 0.0);
+    }
+
+    #[test]
+    fn test_quality_function_mu_degenerate_range() {
+        // mu_upper <= mu_lower → returns mu_upper unchanged
+        let state = minimal_state(1, 0);
+        let mu = quality_function_mu(&state, 1.0, 1.0, 5);
+        assert_eq!(mu, 1.0);
+        let mu2 = quality_function_mu(&state, 2.0, 1.0, 5);
+        assert_eq!(mu2, 1.0, "lower > upper still returns upper");
+    }
+
+    #[test]
+    fn test_quality_function_mu_too_few_candidates() {
+        // n_candidates < 2 → returns mu_upper
+        let state = minimal_state(1, 0);
+        let mu = quality_function_mu(&state, 1e-6, 1e-3, 1);
+        assert_eq!(mu, 1e-3);
+        let mu0 = quality_function_mu(&state, 1e-6, 1e-3, 0);
+        assert_eq!(mu0, 1e-3);
+    }
+
+    #[test]
+    fn test_quality_function_mu_picks_candidate_in_range() {
+        // Well-posed state: 1 lower-bound-active variable. The quality function
+        // q(mu) = pi^2 + di^2 + ci(mu)^2 where ci is complementarity_error.
+        // With pi=di=0 (satisfied primal/dual) and slack*z = 0.5*0.2 = 0.1,
+        // ci(mu) is minimized at mu ≈ 0.1 (interior of [1e-6, 1e-1]).
+        let mut state = minimal_state(1, 0);
+        state.x = vec![1.5];
+        state.x_l = vec![1.0];
+        state.z_l = vec![0.2];
+        let mu = quality_function_mu(&state, 1e-6, 1e-1, 11);
+        // Candidate grid is log-spaced over [1e-6, 1e-1]; ci(mu=0.1)=0 exactly.
+        // exp(ln(1e-1)) has a ~1e-16 rounding overshoot, so allow a slack margin.
+        assert!(mu >= 1e-6 * (1.0 - 1e-12) && mu <= 1e-1 * (1.0 + 1e-12),
+            "mu must lie in range, got {}", mu);
+        // The exact optimum 0.1 is grid point k=10 with n_candidates=11.
+        assert!((mu - 0.1).abs() < 1e-10, "expected mu≈0.1, got {}", mu);
+    }
+}

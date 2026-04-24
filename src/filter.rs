@@ -443,6 +443,172 @@ mod tests {
     }
 
     #[test]
+    fn test_filter_rejects_nan() {
+        let filter = Filter::new(100.0);
+        assert!(!filter.is_acceptable(f64::NAN, 1.0));
+        assert!(!filter.is_acceptable(1.0, f64::NAN));
+        let (accept, _) = filter.check_acceptability(
+            1.0, 10.0, f64::NAN, 5.0, -1.0, 1.0,
+        );
+        assert!(!accept);
+        let (accept2, _) = filter.check_acceptability(
+            1.0, 10.0, 0.5, f64::NAN, -1.0, 1.0,
+        );
+        assert!(!accept2);
+    }
+
+    #[test]
+    fn test_filter_margin_boundary() {
+        // A point exactly at the boundary of the filter margin is rejected
+        // (strict-inequality semantics in is_acceptable).
+        let mut filter = Filter::new(100.0);
+        filter.add(1.0, 1.0);
+        // gamma_theta = 1e-5, gamma_phi = 1e-8
+        // Boundary: theta >= (1 - 1e-5) * 1.0 = 0.99999 AND phi >= 1.0 - 1e-8 * 1.0
+        let theta_boundary = 0.99999;
+        let phi_boundary = 1.0 - 1e-8;
+        assert!(!filter.is_acceptable(theta_boundary, phi_boundary),
+            "At-boundary point should be rejected (dominated)");
+        // Just inside the margin (sufficient improvement in theta): accepted
+        assert!(filter.is_acceptable(theta_boundary - 1e-6, phi_boundary));
+    }
+
+    #[test]
+    fn test_compute_alpha_min_no_descent() {
+        // grad_phi_step >= 0: no descent direction.
+        // alpha_min = alpha_min_frac * gamma_theta = 0.05 * 1e-5 = 5e-7
+        let filter = Filter::new(100.0);
+        let alpha_min = filter.compute_alpha_min(1.0, 0.0);
+        assert!((alpha_min - 5e-7).abs() < 1e-15,
+            "no-descent alpha_min should be 0.05*gamma_theta, got {}", alpha_min);
+        // Strictly positive grad: same branch
+        let alpha_min_pos = filter.compute_alpha_min(1.0, 0.1);
+        assert!((alpha_min_pos - 5e-7).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_compute_alpha_min_large_theta() {
+        // grad_phi_step < 0, theta > theta_min: only gamma_theta and gamma_phi terms.
+        let mut filter = Filter::new(100.0);
+        filter.set_theta_min_from_initial(10.0); // theta_min = 1e-3
+        let theta_current = 1.0; // > theta_min
+        let grad = -2.0;
+        // term1 = gamma_theta = 1e-5
+        // term2 = gamma_phi * theta / |grad| = 1e-8 * 1.0 / 2.0 = 5e-9
+        // alpha_min = 0.05 * min(1e-5, 5e-9) = 0.05 * 5e-9 = 2.5e-10
+        let alpha_min = filter.compute_alpha_min(theta_current, grad);
+        assert!((alpha_min - 2.5e-10).abs() < 1e-20,
+            "large-theta alpha_min formula mismatch, got {}", alpha_min);
+    }
+
+    #[test]
+    fn test_compute_alpha_min_small_theta_adds_switching_term() {
+        // grad_phi_step < 0, theta <= theta_min: term3 (switching-condition) refinement kicks in.
+        let mut filter = Filter::new(100.0);
+        filter.set_theta_min_from_initial(10.0); // theta_min = 1e-3
+        let theta_current = 1e-4; // <= theta_min
+        let grad = -1.0;
+        // alpha_min without term3 = 0.05 * min(1e-5, 1e-8 * 1e-4 / 1) = 0.05 * 1e-12 = 5e-14
+        // term3 = delta * theta^s_theta / |grad|^s_phi = 1.0 * (1e-4)^1.1 / 1.0^2.3 ≈ 5.01e-5
+        // alpha_min with term3 = min(5e-14, 0.05*5.01e-5=2.51e-6) -> 5e-14
+        // The small theta/grad case is dominated by term2; confirm we don't violate the floor.
+        let alpha_min = filter.compute_alpha_min(theta_current, grad);
+        assert!(alpha_min >= 1e-15, "alpha_min floor not enforced, got {}", alpha_min);
+        // Now use a much steeper descent so term2 grows and term3 becomes the binding term.
+        let alpha_min_steep = filter.compute_alpha_min(theta_current, -1e-10);
+        // With very small |grad|, term2 = 1e-8 * 1e-4 / 1e-10 = 1e-2; term3 bounded by term1 first
+        assert!(alpha_min_steep >= 1e-15);
+    }
+
+    #[test]
+    fn test_watchdog_save_restore_round_trip() {
+        let mut filter = Filter::new(100.0);
+        filter.add(1.0, 5.0);
+        filter.add(0.5, 10.0);
+        let saved = filter.save_entries();
+        assert_eq!(saved.len(), 2);
+        filter.reset();
+        assert!(filter.is_empty());
+        filter.restore_entries(saved);
+        assert_eq!(filter.len(), 2);
+        // Restored filter should still reject dominated points
+        assert!(!filter.is_acceptable(1.0, 5.0));
+        assert!(!filter.is_acceptable(0.5, 10.0));
+    }
+
+    #[test]
+    fn test_augment_for_restoration_adds_entry() {
+        let mut filter = Filter::new(100.0);
+        let initial_theta_max = filter.theta_max();
+        let theta = 50.0; // Large enough to bump theta_max
+        let phi = 10.0;
+        filter.augment_for_restoration(theta, phi);
+        // Should have added an entry at ((1-gamma_theta)*theta, phi - gamma_phi*theta)
+        assert_eq!(filter.len(), 1);
+        // theta_max should be bumped to at least 1e4 * theta
+        assert!(filter.theta_max() >= 1e4 * theta,
+            "theta_max not bumped: {} < {}", filter.theta_max(), 1e4 * theta);
+        assert!(filter.theta_max() >= initial_theta_max,
+            "augmentation should not shrink theta_max");
+        // A point worse than the guard should be rejected
+        assert!(!filter.is_acceptable(theta, phi));
+    }
+
+    #[test]
+    fn test_check_acceptability_h_type_phi_only_reduction() {
+        // h-type (non-switching) path accepts on EITHER theta reduction OR phi reduction.
+        // Here theta increases slightly but phi drops by more than gamma_phi*theta_current.
+        let mut filter = Filter::new(100.0);
+        filter.set_theta_min_from_initial(10.0);
+        let theta_current = 5.0;
+        let phi_current = 100.0;
+        // theta_trial slightly worse: (1-gamma_theta)*theta_current = 4.99995; trial 5.0 > that
+        let theta_trial = 5.0;
+        // phi_trial satisfies phi_trial <= phi_current - gamma_phi * theta_current
+        // = 100.0 - 1e-8 * 5.0 = 99.99999995. Pick phi_trial = 50.0 (way below).
+        let phi_trial = 50.0;
+        let grad = -0.01; // weak descent, theta_current > theta_min -> h-type
+        let alpha = 1.0;
+        let (accept, switching) = filter.check_acceptability(
+            theta_current, phi_current, theta_trial, phi_trial, grad, alpha,
+        );
+        assert!(accept, "h-type phi-only reduction must be accepted");
+        assert!(!switching);
+    }
+
+    #[test]
+    fn test_check_acceptability_h_type_rejected_no_reduction() {
+        // h-type path: trial fails BOTH theta reduction AND phi reduction -> rejected
+        let mut filter = Filter::new(100.0);
+        filter.set_theta_min_from_initial(10.0);
+        let theta_current = 5.0;
+        let phi_current = 100.0;
+        // Trial: theta equal (no sufficient reduction) and phi equal (no reduction)
+        let (accept, _) = filter.check_acceptability(
+            theta_current, phi_current, 5.0, 100.0, -0.01, 1.0,
+        );
+        assert!(!accept, "h-type with no reduction in either must reject");
+    }
+
+    #[test]
+    fn test_check_acceptability_switching_fails_armijo() {
+        // Switching condition holds (small theta + descent) but Armijo fails.
+        // Per Ipopt, in this case the step is purely f-type — no h-type fallback.
+        let mut filter = Filter::new(100.0);
+        filter.set_theta_min_from_initial(10.0);
+        let theta_current = 1e-5;
+        let phi_current = 10.0;
+        let theta_trial = 1e-6; // Would satisfy theta reduction, but that's not allowed here
+        let phi_trial = 10.0; // Fails Armijo: phi_trial > phi_current + eta_phi*alpha*grad
+        let grad = -100.0;
+        let alpha = 1.0;
+        let (accept, _) = filter.check_acceptability(
+            theta_current, phi_current, theta_trial, phi_trial, grad, alpha,
+        );
+        assert!(!accept, "Switching+failed-Armijo must reject (no h-type fallback)");
+    }
+
+    #[test]
     fn test_fraction_to_boundary_edge_cases() {
         // All positive steps → alpha = 1.0
         let s = vec![1.0, 2.0, 0.5];

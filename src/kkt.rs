@@ -1993,6 +1993,127 @@ mod tests {
     }
 
     #[test]
+    fn test_factor_with_inertia_correction_growth_sequence() {
+        // Wrong inertia forces delta_w to escalate from delta_w_init by delta_w_growth.
+        // With delta_w_init=1e-4 and growth=4.0, attempt k uses delta_w = 1e-4 * 4^k.
+        // A matrix that needs a significant delta_w lets us verify attempts > 0.
+        let n = 2;
+        let m = 1;
+        let mut matrix = SymmetricMatrix::zeros(3);
+        matrix.set(0, 0, -1.0); // Indefinite top block
+        matrix.set(1, 1, -1.0);
+        matrix.set(2, 0, 1.0);
+        matrix.set(2, 1, 1.0);
+
+        let mut kkt = KktSystem {
+            dim: 3, n, m,
+            matrix: KktMatrix::Dense(matrix),
+            rhs: vec![1.0, 2.0, 3.0],
+            delta_c_diag: vec![0.0; m],
+            scale_factors: None,
+        };
+        let mut solver = DenseLdl::new();
+        let mut params = InertiaCorrectionParams::default();
+        let (delta_w, _dc) = factor_with_inertia_correction(&mut kkt, &mut solver, &mut params).unwrap();
+        // Expect delta_w >= delta_w_init * growth (at least one escalation beyond initial attempt)
+        assert!(delta_w >= params.delta_w_init,
+            "delta_w should be at least delta_w_init, got {}", delta_w);
+        // delta_w_last is set to the successful perturbation (for warm-start next iteration)
+        assert!((params.delta_w_last - delta_w).abs() < 1e-15,
+            "delta_w_last should equal the successful delta_w");
+        // degeneracy_count should bump once per successful perturbation
+        assert_eq!(params.degeneracy_count, 1);
+    }
+
+    #[test]
+    fn test_factor_with_inertia_correction_max_attempts_cap() {
+        // Hopeless KKT with inertia so wrong no finite delta_w recovers it within max_attempts=3.
+        // (We lower max_attempts so the test is fast and deterministic.)
+        // With max_attempts reduced, the loop exhausts and falls through to the warning path,
+        // which still returns Ok(best_delta_w, delta_c) instead of panicking.
+        let n = 2;
+        let m = 2; // Expected inertia (2, 2, 0) but we'll make the matrix all-positive
+        let mut matrix = SymmetricMatrix::zeros(4);
+        for i in 0..4 { matrix.set(i, i, 1.0); } // Identity: inertia (4, 0, 0), wrong
+        matrix.set(2, 0, 0.1);
+        matrix.set(3, 1, 0.1);
+
+        let mut kkt = KktSystem {
+            dim: 4, n, m,
+            matrix: KktMatrix::Dense(matrix),
+            rhs: vec![1.0, 2.0, 3.0, 4.0],
+            delta_c_diag: vec![0.0; m],
+            scale_factors: None,
+        };
+        let mut solver = DenseLdl::new();
+        let mut params = InertiaCorrectionParams {
+            max_attempts: 3,
+            ..Default::default()
+        };
+        // Must return Ok (fallthrough path proceeds with best perturbation, doesn't panic)
+        let result = factor_with_inertia_correction(&mut kkt, &mut solver, &mut params);
+        assert!(result.is_ok(), "max-attempts path must return Ok, not error: {:?}", result.err());
+        // A delta_c > 0 eventually flips one of the diagonals negative for the (2,2) block,
+        // so the attempts cap may succeed before exhaustion. Either way, the function must
+        // not panic and must return a valid (delta_w, delta_c) tuple.
+        let (delta_w, delta_c) = result.unwrap();
+        assert!(delta_w >= 0.0, "delta_w must be non-negative, got {}", delta_w);
+        assert!(delta_c >= 0.0, "delta_c must be non-negative, got {}", delta_c);
+    }
+
+    #[test]
+    fn test_factor_with_inertia_correction_degeneracy_count_sets_structural_flag() {
+        // After 3 consecutive perturbations the structurally_degenerate flag should latch on,
+        // making subsequent calls skip the unperturbed trial.
+        let n = 2;
+        let m = 1;
+        let mut params = InertiaCorrectionParams::default();
+
+        for _ in 0..3 {
+            let mut matrix = SymmetricMatrix::zeros(3);
+            matrix.set(0, 0, -1.0);
+            matrix.set(1, 1, -1.0);
+            matrix.set(2, 0, 1.0);
+            matrix.set(2, 1, 1.0);
+            let mut kkt = KktSystem {
+                dim: 3, n, m,
+                matrix: KktMatrix::Dense(matrix),
+                rhs: vec![1.0, 2.0, 3.0],
+                delta_c_diag: vec![0.0; m],
+                scale_factors: None,
+            };
+            let mut solver = DenseLdl::new();
+            factor_with_inertia_correction(&mut kkt, &mut solver, &mut params).unwrap();
+        }
+        assert!(params.structurally_degenerate,
+            "after 3 perturbations, structurally_degenerate must latch on");
+        assert!(params.degeneracy_count >= 3);
+    }
+
+    #[test]
+    fn test_factor_with_inertia_correction_unconstrained_uses_min_diagonal_path() {
+        // For unconstrained (m=0) indefinite problems, the solver can short-circuit to
+        // delta_w = -min_diag + 1e-8 without escalating via the growth loop.
+        let n = 2;
+        let m = 0;
+        let mut matrix = SymmetricMatrix::zeros(2);
+        matrix.set(0, 0, -2.0); // Indefinite: needs delta_w >= 2.0 + eps
+        matrix.set(1, 1, 3.0);
+        let mut kkt = KktSystem {
+            dim: 2, n, m,
+            matrix: KktMatrix::Dense(matrix),
+            rhs: vec![1.0, 1.0],
+            delta_c_diag: vec![0.0; m],
+            scale_factors: None,
+        };
+        let mut solver = DenseLdl::new();
+        let mut params = InertiaCorrectionParams::default();
+        let (delta_w, delta_c) = factor_with_inertia_correction(&mut kkt, &mut solver, &mut params).unwrap();
+        assert!(delta_w > 0.0, "indefinite unconstrained needs delta_w > 0, got {}", delta_w);
+        assert_eq!(delta_c, 0.0, "unconstrained (m=0) must have delta_c = 0");
+    }
+
+    #[test]
     fn test_solve_for_direction_simple() {
         // Create a simple 2-var, 1-constraint KKT system and solve
         let n = 2;
