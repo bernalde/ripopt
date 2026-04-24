@@ -2205,6 +2205,93 @@ fn assemble_kkt_systems(
     }
 }
 
+/// Fraction-to-boundary step limits for primal and dual.
+///
+/// `tau` = `max(1 - NLP_error, tau_min)` in Free mode or
+/// `max(1 - mu, tau_min)` in Fixed mode. Primal bound:
+/// `x + alpha*dx > x_l` and `< x_u` by a factor of `tau`.
+/// Dual bound: `z + alpha*dz > 0` by a factor of `tau`.
+fn compute_alpha_max(
+    state: &SolverState,
+    options: &SolverOptions,
+    mu_state: &MuState,
+    primal_inf: f64,
+    dual_inf: f64,
+    compl_inf: f64,
+) -> (f64, f64, f64) {
+    let n = state.n;
+    let tau = if mu_state.mode == MuMode::Free {
+        let nlp_error = primal_inf + dual_inf + compl_inf;
+        (1.0 - nlp_error).max(options.tau_min)
+    } else {
+        (1.0 - state.mu).max(options.tau_min)
+    };
+
+    let mut alpha_primal_max: f64 = 1.0;
+    for i in 0..n {
+        if state.x_l[i].is_finite() && state.dx[i] < 0.0 {
+            let slack = state.x[i] - state.x_l[i];
+            let ratio = -tau * slack / state.dx[i];
+            alpha_primal_max = alpha_primal_max.min(ratio);
+        }
+        if state.x_u[i].is_finite() && state.dx[i] > 0.0 {
+            let slack = state.x_u[i] - state.x[i];
+            let ratio = tau * slack / state.dx[i];
+            alpha_primal_max = alpha_primal_max.min(ratio);
+        }
+    }
+    alpha_primal_max = alpha_primal_max.clamp(0.0, 1.0);
+
+    let alpha_dual_max_l = filter::fraction_to_boundary(&state.z_l, &state.dz_l, tau);
+    let alpha_dual_max_u = filter::fraction_to_boundary(&state.z_u, &state.dz_u, tau);
+    let alpha_dual_max = alpha_dual_max_l.min(alpha_dual_max_u);
+
+    (tau, alpha_primal_max, alpha_dual_max)
+}
+
+/// Ipopt-style tiny-step detection: when the relative step size is
+/// below `10*eps` for two consecutive iterations and primal
+/// infeasibility is small, force a monotone μ decrease and set the
+/// `tiny_step` flag so downstream logic knows to accept the full step.
+///
+/// Resets the filter on μ change (standard Ipopt convention).
+fn detect_tiny_step(
+    state: &mut SolverState,
+    options: &SolverOptions,
+    mu_state: &mut MuState,
+    filter: &mut Filter,
+    consecutive_tiny_steps: &mut usize,
+    alpha_primal_max: f64,
+    primal_inf: f64,
+) {
+    let n = state.n;
+    let max_rel_step: f64 = (0..n)
+        .map(|i| (alpha_primal_max * state.dx[i]).abs() / (state.x[i].abs() + 1.0))
+        .fold(0.0f64, f64::max);
+    if max_rel_step < 1e-14 && primal_inf < 1e-4 {
+        *consecutive_tiny_steps += 1;
+        mu_state.tiny_step = true;
+        if *consecutive_tiny_steps >= 2 {
+            let new_mu = (options.mu_linear_decrease_factor * state.mu)
+                .min(state.mu.powf(options.mu_superlinear_decrease_power))
+                .max(options.mu_min);
+            if (new_mu - state.mu).abs() < 1e-20 {
+                log::debug!("Tiny step with mu at minimum, checking acceptability");
+            } else {
+                state.mu = new_mu;
+                filter.reset();
+                let theta_new = state.constraint_violation();
+                filter.set_theta_min_from_initial(theta_new);
+                log::debug!("Tiny step detected, forced mu decrease to {:.2e}", state.mu);
+            }
+            *consecutive_tiny_steps = 0;
+        }
+    } else {
+        *consecutive_tiny_steps = 0;
+        mu_state.tiny_step = false;
+    }
+}
+
 /// Outcome of one factorization attempt with inertia correction.
 ///
 /// `Continue` and `Return` correspond to the main loop's `continue`
@@ -5233,71 +5320,21 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             }
         }
 
-        // Compute maximum step sizes using fraction-to-boundary rule.
-        // Free mode: tau based on NLP error. Fixed mode: tau based on mu.
-        let tau = if mu_state.mode == MuMode::Free {
-            let nlp_error = primal_inf + dual_inf + compl_inf;
-            (1.0 - nlp_error).max(options.tau_min)
-        } else {
-            (1.0 - state.mu).max(options.tau_min)
-        };
-
-        // Primal step: ensure x + alpha*dx stays within variable bounds
-        let mut alpha_primal_max: f64 = 1.0;
-        for i in 0..n {
-            if state.x_l[i].is_finite() && state.dx[i] < 0.0 {
-                let slack = state.x[i] - state.x_l[i];
-                let ratio = -tau * slack / state.dx[i];
-                alpha_primal_max = alpha_primal_max.min(ratio);
-            }
-            if state.x_u[i].is_finite() && state.dx[i] > 0.0 {
-                let slack = state.x_u[i] - state.x[i];
-                let ratio = tau * slack / state.dx[i];
-                alpha_primal_max = alpha_primal_max.min(ratio);
-            }
-        }
-
-        alpha_primal_max = alpha_primal_max.clamp(0.0, 1.0);
-
-        // Capture for TSV trace.
+        let (tau, alpha_primal_max, alpha_dual_max) = compute_alpha_max(
+            &state, options, &mu_state, primal_inf, dual_inf, compl_inf,
+        );
         last_alpha_primal_max = Some(alpha_primal_max);
         last_tau_used = Some(tau);
 
-        // Dual step: ensure z + alpha*dz > 0
-        let alpha_dual_max_l = filter::fraction_to_boundary(&state.z_l, &state.dz_l, tau);
-        let alpha_dual_max_u = filter::fraction_to_boundary(&state.z_u, &state.dz_u, tau);
-        let alpha_dual_max = alpha_dual_max_l.min(alpha_dual_max_u);
-
-        // Ipopt-like tiny step detection: if relative step size is < 10*eps for
-        // 2 consecutive iterations, force mu decrease and accept the full step.
-        {
-            let max_rel_step: f64 = (0..n)
-                .map(|i| (alpha_primal_max * state.dx[i]).abs() / (state.x[i].abs() + 1.0))
-                .fold(0.0f64, f64::max);
-            if max_rel_step < 1e-14 && primal_inf < 1e-4 {
-                consecutive_tiny_steps += 1;
-                mu_state.tiny_step = true;
-                if consecutive_tiny_steps >= 2 {
-                    // Force mu decrease (Ipopt: monotone decrease on tiny step)
-                    let new_mu = (options.mu_linear_decrease_factor * state.mu)
-                        .min(state.mu.powf(options.mu_superlinear_decrease_power))
-                        .max(options.mu_min);
-                    if (new_mu - state.mu).abs() < 1e-20 {
-                        log::debug!("Tiny step with mu at minimum, checking acceptability");
-                    } else {
-                        state.mu = new_mu;
-                        filter.reset();
-                        let theta_new = state.constraint_violation();
-                        filter.set_theta_min_from_initial(theta_new);
-                        log::debug!("Tiny step detected, forced mu decrease to {:.2e}", state.mu);
-                    }
-                    consecutive_tiny_steps = 0;
-                }
-            } else {
-                consecutive_tiny_steps = 0;
-                mu_state.tiny_step = false;
-            }
-        }
+        detect_tiny_step(
+            &mut state,
+            options,
+            &mut mu_state,
+            &mut filter,
+            &mut consecutive_tiny_steps,
+            alpha_primal_max,
+            primal_inf,
+        );
 
         // Line search
         let t_ls = Instant::now();
