@@ -2739,6 +2739,64 @@ fn compute_optimality_measures(state: &SolverState) -> OptimalityMeasures {
     }
 }
 
+/// Primal-infeasibility divergence detector.
+///
+/// Tracks consecutive iterations where θ is strictly increasing (by
+/// at least 1e-6 relative). After 8 such iterations *and* a cumulative
+/// 20%+ growth from the start of the divergence run, sets the
+/// force-restoration flag so the main loop re-enters restoration
+/// rather than continuing with worsening feasibility.
+///
+/// Catches the pattern where after NLP restoration the filter accepts
+/// steps via a slight φ decrease while θ grows steadily. Ipopt has no
+/// direct analogue — this is a ripopt safety valve.
+///
+/// Extracted from `solve_ipm` as part of the v0.8 main-loop
+/// decomposition. Returns `true` when the caller should force
+/// restoration on the next step.
+fn detect_primal_divergence(
+    options: &SolverOptions,
+    iteration: usize,
+    primal_inf: f64,
+    consecutive_pr_increase: &mut usize,
+    pr_prev_for_divergence: &mut f64,
+    pr_at_divergence_start: &mut f64,
+    m: usize,
+) -> bool {
+    let mut force_restoration = false;
+    if m > 0 && iteration > 5 && primal_inf > options.constr_viol_tol {
+        if primal_inf > *pr_prev_for_divergence * (1.0 + 1e-6) {
+            if *consecutive_pr_increase == 0 {
+                *pr_at_divergence_start = *pr_prev_for_divergence;
+            }
+            *consecutive_pr_increase += 1;
+        } else {
+            *consecutive_pr_increase = 0;
+        }
+        // After 8 consecutive increases AND cumulative growth of at least
+        // 20%, force restoration. The growth check prevents triggering on
+        // tiny numerical oscillations.
+        if *consecutive_pr_increase >= 8 && primal_inf > 1.2 * *pr_at_divergence_start {
+            log::info!(
+                "Primal divergence at iter {}: pr grew for {} consecutive iterations ({:.2e} -> {:.2e}), forcing restoration",
+                iteration, *consecutive_pr_increase, *pr_at_divergence_start, primal_inf
+            );
+            if options.print_level >= 3 {
+                rip_log!(
+                    "ripopt: Primal divergence detected (pr grew {:.2e} -> {:.2e} over {} iters), re-entering restoration",
+                    *pr_at_divergence_start, primal_inf, *consecutive_pr_increase
+                );
+            }
+            force_restoration = true;
+            *consecutive_pr_increase = 0;
+        }
+    } else {
+        *consecutive_pr_increase = 0;
+    }
+    *pr_prev_for_divergence = primal_inf;
+    force_restoration
+}
+
 /// Outcome of the overall-progress stall detector.
 enum StallDecision {
     /// No stall (or not yet activated) — fall through to normal step.
@@ -4073,43 +4131,15 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             StallDecision::Continue => continue,
             StallDecision::Proceed => {}
         }
-        // Primal divergence detection: when pr is growing for several consecutive
-        // iterations, force re-entry into restoration rather than continuing with
-        // worsening feasibility. This catches the pattern where after NLP restoration,
-        // the filter accepts steps via slight phi decrease while theta grows steadily.
-        let mut force_restoration = false;
-        if m > 0 && iteration > 5 && primal_inf > options.constr_viol_tol {
-            if primal_inf > pr_prev_for_divergence * (1.0 + 1e-6) {
-                if consecutive_pr_increase == 0 {
-                    pr_at_divergence_start = pr_prev_for_divergence;
-                }
-                consecutive_pr_increase += 1;
-            } else {
-                consecutive_pr_increase = 0;
-            }
-            // After 8 consecutive increases AND pr has grown by at least 20% total,
-            // force restoration to find a more feasible point. The growth check
-            // prevents triggering on tiny numerical oscillations.
-            if consecutive_pr_increase >= 8
-                && primal_inf > 1.2 * pr_at_divergence_start
-            {
-                log::info!(
-                    "Primal divergence at iter {}: pr grew for {} consecutive iterations ({:.2e} -> {:.2e}), forcing restoration",
-                    iteration, consecutive_pr_increase, pr_at_divergence_start, primal_inf
-                );
-                if options.print_level >= 3 {
-                    rip_log!(
-                        "ripopt: Primal divergence detected (pr grew {:.2e} -> {:.2e} over {} iters), re-entering restoration",
-                        pr_at_divergence_start, primal_inf, consecutive_pr_increase
-                    );
-                }
-                force_restoration = true;
-                consecutive_pr_increase = 0;
-            }
-        } else {
-            consecutive_pr_increase = 0;
-        }
-        pr_prev_for_divergence = primal_inf;
+        let force_restoration = detect_primal_divergence(
+            options,
+            iteration,
+            primal_inf,
+            &mut consecutive_pr_increase,
+            &mut pr_prev_for_divergence,
+            &mut pr_at_divergence_start,
+            m,
+        );
 
         // Compute sigma (barrier diagonal)
         let sigma = kkt::compute_sigma(&state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u);
