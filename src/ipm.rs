@@ -2936,6 +2936,47 @@ enum CondensedDirectionOutcome {
     Return(SolveResult),
 }
 
+/// Mehrotra PC deflection revert: solve the original (μ-current)
+/// RHS via iterative refinement and check the angle between the
+/// PC step `dx_dir` and the original step `dx_orig`. If
+/// cos(angle) < 0.7 (i.e. >~45° deflection), revert to the
+/// original direction, restore the original RHS in
+/// `kkt_system_opt`, and clear `mehrotra_aff`. This guards against
+/// the predictor probe pushing the search direction far from a
+/// reasonable Newton step in early iterations.
+fn maybe_revert_mehrotra_deflection(
+    dx_dir: &mut Vec<f64>,
+    dy_dir: &mut Vec<f64>,
+    mehrotra_aff: &mut Option<(Vec<f64>, Vec<f64>, Vec<f64>, f64)>,
+    saved_rhs: &Option<Vec<f64>>,
+    kkt_system_opt: &mut Option<kkt::KktSystem>,
+    lin_solver: &mut dyn LinearSolver,
+) {
+    let Some(orig_rhs) = saved_rhs.as_ref() else { return };
+    let Some(kkt) = kkt_system_opt.as_ref() else { return };
+    let Ok((dx_orig, dy_orig)) = kkt::solve_with_custom_rhs_refined(
+        &kkt.matrix, kkt.n, kkt.dim, lin_solver, orig_rhs,
+    ) else { return };
+    let norm_orig: f64 = dx_orig.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let norm_pc: f64 = dx_dir.iter().map(|v| v * v).sum::<f64>().sqrt();
+    if norm_orig <= 1e-30 || norm_pc <= 1e-30 {
+        return;
+    }
+    let dot: f64 = dx_orig.iter().zip(dx_dir.iter()).map(|(a, b)| a * b).sum::<f64>();
+    let cos_angle = dot / (norm_orig * norm_pc);
+    if cos_angle >= 0.7 {
+        return;
+    }
+    log::debug!(
+        "Mehrotra PC deflection too large (cos={:.3}), reverting",
+        cos_angle
+    );
+    *dx_dir = dx_orig;
+    *dy_dir = dy_orig;
+    kkt_system_opt.as_mut().unwrap().rhs = orig_rhs.clone();
+    *mehrotra_aff = None;
+}
+
 /// Ipopt-style quality escalation around `kkt::solve_for_direction`
 /// for the full augmented KKT path. After the initial solve, on a
 /// `PretendSingular` error walks the escalation ladder:
@@ -3377,32 +3418,11 @@ fn solve_for_search_direction<P: NlpProblem>(
             }
         };
 
-        // Mehrotra PC deflection revert.
         if mehrotra_applied {
-            if let Some(orig_rhs) = saved_rhs.as_ref() {
-                if let Some(kkt) = kkt_system_opt.as_ref() {
-                    if let Ok((dx_orig, dy_orig)) = kkt::solve_with_custom_rhs_refined(
-                        &kkt.matrix, kkt.n, kkt.dim, lin_solver, orig_rhs,
-                    ) {
-                        let norm_orig: f64 = dx_orig.iter().map(|v| v * v).sum::<f64>().sqrt();
-                        let norm_pc: f64 = dx_dir.iter().map(|v| v * v).sum::<f64>().sqrt();
-                        if norm_orig > 1e-30 && norm_pc > 1e-30 {
-                            let dot: f64 = dx_orig.iter().zip(dx_dir.iter()).map(|(a, b)| a * b).sum::<f64>();
-                            let cos_angle = dot / (norm_orig * norm_pc);
-                            if cos_angle < 0.7 {
-                                log::debug!(
-                                    "Mehrotra PC deflection too large (cos={:.3}), reverting",
-                                    cos_angle
-                                );
-                                dx_dir = dx_orig;
-                                dy_dir = dy_orig;
-                                kkt_system_opt.as_mut().unwrap().rhs = orig_rhs.clone();
-                                mehrotra_aff = None;
-                            }
-                        }
-                    }
-                }
-            }
+            maybe_revert_mehrotra_deflection(
+                &mut dx_dir, &mut dy_dir, &mut mehrotra_aff,
+                &saved_rhs, kkt_system_opt, lin_solver,
+            );
         }
 
         (dx_dir, dy_dir)
