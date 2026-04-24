@@ -5596,75 +5596,93 @@ fn log_iteration_row(
     *log_line_count += 1;
 }
 
+/// Compute gradient-based NLP scaling at the initial point `x0`, matching
+/// Ipopt's `nlp_scaling_method = gradient-based`:
+///
+///   * Objective: if `||∇f(x0)||_∞ > 100`, set `obj_scaling = 100/||∇f||_∞`,
+///     clamped below by `1e-2`.
+///   * Constraints: row-wise on `J(x0)`. If `max_j |J_{ij}| > 100`, set
+///     `g_scaling[i] = 100/max_j |J_{ij}|`, clamped below by `1e-2`.
+///
+/// User-provided scalings (`options.user_obj_scaling`, `options.user_g_scaling`)
+/// take priority — when either is set, skips automatic scaling entirely.
+///
+/// Constraint scaling is skipped when the initial constraint violation exceeds
+/// `1e6` (Ipopt's threshold — at highly infeasible points J has no signal).
+fn compute_nlp_scaling<P: NlpProblem>(
+    problem: &P,
+    options: &SolverOptions,
+    x0: &[f64],
+    jac_rows_sc: &[usize],
+) -> (f64, Vec<f64>) {
+    let n_sc = problem.num_variables();
+    let m_sc = problem.num_constraints();
+
+    if options.user_obj_scaling.is_some() || options.user_g_scaling.is_some() {
+        let os = options.user_obj_scaling.unwrap_or(1.0);
+        let gs = options.user_g_scaling.clone().unwrap_or_else(|| vec![1.0; m_sc]);
+        return (os, gs);
+    }
+
+    let nlp_scaling_max_gradient = 100.0;
+    let nlp_scaling_min_value = 1e-2;
+    let mut grad_f0 = vec![0.0; n_sc];
+    let grad_ok = problem.gradient(x0, true, &mut grad_f0);
+    let grad_max = if grad_ok {
+        grad_f0.iter().map(|v| v.abs()).fold(0.0f64, f64::max)
+    } else {
+        0.0
+    };
+    let os = if grad_max > nlp_scaling_max_gradient && grad_max.is_finite() {
+        (nlp_scaling_max_gradient / grad_max).max(nlp_scaling_min_value)
+    } else {
+        1.0
+    };
+
+    let mut gs = vec![1.0; m_sc];
+    if m_sc > 0 {
+        let mut g0_sc = vec![0.0; m_sc];
+        let constr_ok = problem.constraints(x0, false, &mut g0_sc);
+        let mut g_l_sc = vec![0.0; m_sc];
+        let mut g_u_sc = vec![0.0; m_sc];
+        problem.constraint_bounds(&mut g_l_sc, &mut g_u_sc);
+        let init_cv = if constr_ok {
+            convergence::primal_infeasibility(&g0_sc, &g_l_sc, &g_u_sc)
+        } else {
+            f64::INFINITY
+        };
+
+        if init_cv < 1e6 {
+            let mut jac_vals0 = vec![0.0; jac_rows_sc.len()];
+            if problem.jacobian_values(x0, false, &mut jac_vals0) {
+                let mut row_max = vec![0.0f64; m_sc];
+                for (idx, &row) in jac_rows_sc.iter().enumerate() {
+                    let v = jac_vals0[idx].abs();
+                    if v.is_finite() && v > row_max[row] {
+                        row_max[row] = v;
+                    }
+                }
+                for i in 0..m_sc {
+                    if row_max[i] > nlp_scaling_max_gradient {
+                        gs[i] = (nlp_scaling_max_gradient / row_max[i]).max(nlp_scaling_min_value);
+                    }
+                }
+            }
+        }
+    }
+    (os, gs)
+}
+
 /// Core IPM solver implementation.
 fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult {
-    // --- NLP Scaling (gradient-based, matching Ipopt's nlp_scaling_method) ---
-    // Scale objective and constraints so max gradient norm at x0 is ≤ 100.
     let n_sc = problem.num_variables();
     let m_sc = problem.num_constraints();
 
     let mut x0 = vec![0.0; n_sc];
     problem.initial_point(&mut x0);
 
-    // --- Problem scaling ---
-    // User-provided scaling takes priority over automatic gradient-based scaling.
     let (jac_rows_sc, _) = problem.jacobian_structure();
-    let (obj_scaling, g_scaling) = if options.user_obj_scaling.is_some() || options.user_g_scaling.is_some() {
-        let os = options.user_obj_scaling.unwrap_or(1.0);
-        let gs = options.user_g_scaling.clone().unwrap_or_else(|| vec![1.0; m_sc]);
-        (os, gs)
-    } else {
-        // Automatic gradient-based scaling
-        let nlp_scaling_max_gradient = 100.0;
-        let nlp_scaling_min_value = 1e-2;
-        let mut grad_f0 = vec![0.0; n_sc];
-        let grad_ok = problem.gradient(&x0, true, &mut grad_f0);
-        let grad_max = if grad_ok {
-            grad_f0.iter().map(|v| v.abs()).fold(0.0f64, f64::max)
-        } else {
-            0.0
-        };
-        let os = if grad_max > nlp_scaling_max_gradient && grad_max.is_finite() {
-            (nlp_scaling_max_gradient / grad_max).max(nlp_scaling_min_value)
-        } else {
-            1.0
-        };
-
-        let mut gs = vec![1.0; m_sc];
-        if m_sc > 0 {
-            let mut g0_sc = vec![0.0; m_sc];
-            let constr_ok = problem.constraints(&x0, false, &mut g0_sc);
-            let mut g_l_sc = vec![0.0; m_sc];
-            let mut g_u_sc = vec![0.0; m_sc];
-            problem.constraint_bounds(&mut g_l_sc, &mut g_u_sc);
-            let init_cv = if constr_ok {
-                convergence::primal_infeasibility(&g0_sc, &g_l_sc, &g_u_sc)
-            } else {
-                f64::INFINITY
-            };
-
-            if init_cv < 1e6 {
-                let mut jac_vals0 = vec![0.0; jac_rows_sc.len()];
-                if !problem.jacobian_values(&x0, false, &mut jac_vals0) {
-                    // Jacobian eval failed, skip constraint scaling
-                } else {
-                    let mut row_max = vec![0.0f64; m_sc];
-                    for (idx, &row) in jac_rows_sc.iter().enumerate() {
-                        let v = jac_vals0[idx].abs();
-                        if v.is_finite() && v > row_max[row] {
-                            row_max[row] = v;
-                        }
-                    }
-                    for i in 0..m_sc {
-                        if row_max[i] > nlp_scaling_max_gradient {
-                            gs[i] = (nlp_scaling_max_gradient / row_max[i]).max(nlp_scaling_min_value);
-                        }
-                    }
-                }
-            }
-        }
-        (os, gs)
-    };
+    let (obj_scaling, g_scaling) = compute_nlp_scaling(problem, options, &x0, &jac_rows_sc);
 
     if options.print_level >= 5
         && (obj_scaling != 1.0 || g_scaling.iter().any(|&s| s != 1.0))
