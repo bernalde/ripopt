@@ -5596,6 +5596,68 @@ fn log_iteration_row(
     *log_line_count += 1;
 }
 
+/// Pick the linear solver for the KKT factorization.
+///
+/// Dense (`DenseLdl`) for small systems (`n + m < sparse_threshold`). For
+/// sparse, when the `rmumps` feature is enabled and the problem has
+/// constraints (`m > 0`), use the KKT-aware `MultifrontalLdl::new_kkt(n)`
+/// which enables CB pivot search for numerically stable primal-dual 2×2
+/// pivots. Otherwise fall back to the user's `options.linear_solver` choice.
+fn select_linear_solver(use_sparse: bool, n: usize, m: usize, options: &SolverOptions) -> Box<dyn LinearSolver> {
+    if use_sparse {
+        #[cfg(feature = "rmumps")]
+        {
+            let _ = n;
+            if m > 0 {
+                Box::new(MultifrontalLdl::new_kkt(n))
+            } else {
+                new_sparse_solver_with_choice(options.linear_solver)
+            }
+        }
+        #[cfg(not(feature = "rmumps"))]
+        {
+            let _ = (n, m);
+            new_sparse_solver_with_choice(options.linear_solver)
+        }
+    } else {
+        Box::new(DenseLdl::new())
+    }
+}
+
+/// Estimate whether sparse condensed KKT should be disabled in favor of the
+/// full augmented system based on Jacobian structure. The Schur complement
+/// `J^T·D^{-1}·J` has at most `Σ k_i*(k_i+1)/2` nonzeros (before dedup),
+/// where `k_i` is the nnz in row `i`. If that exceeds `2×` the nnz of the
+/// augmented KKT (`hess_nnz + jac_nnz + n`), factoring the Schur complement
+/// costs more than factoring the full system, so return `true`.
+fn estimate_schur_density_disable<P: NlpProblem>(
+    problem: &P,
+    n: usize,
+    m: usize,
+    use_sparse: bool,
+    options: &SolverOptions,
+) -> bool {
+    if !(use_sparse && m > 0) {
+        return false;
+    }
+    let (jac_rows_est, _) = problem.jacobian_structure();
+    let mut row_nnz = vec![0usize; m];
+    for &r in &jac_rows_est {
+        row_nnz[r] += 1;
+    }
+    let schur_nnz_upper: usize = row_nnz.iter().map(|&k| k * (k + 1) / 2).sum();
+    let (hess_rows_est, _) = problem.hessian_structure();
+    let augmented_nnz = hess_rows_est.len() + jac_rows_est.len() + n;
+    let disable = schur_nnz_upper > 2 * augmented_nnz;
+    if disable && options.print_level >= 3 {
+        rip_log!(
+            "ripopt: Disabling sparse condensed KKT: Schur complement nnz estimate ({}) > 2× augmented KKT nnz ({})",
+            schur_nnz_upper, augmented_nnz
+        );
+    }
+    disable
+}
+
 /// Compute gradient-based NLP scaling at the initial point `x0`, matching
 /// Ipopt's `nlp_scaling_method = gradient-based`:
 ///
@@ -5765,53 +5827,11 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
     // Initialize linear solver — use sparse for large KKT systems
     let use_sparse = (n + m) >= options.sparse_threshold;
-    let mut lin_solver: Box<dyn LinearSolver> = if use_sparse {
-        // For constrained problems, enable KKT-aware CB pivot search
-        // for numerically stable primal-dual 2×2 pivots
-        #[cfg(feature = "rmumps")]
-        {
-            if m > 0 {
-                Box::new(MultifrontalLdl::new_kkt(n))
-            } else {
-                new_sparse_solver_with_choice(options.linear_solver)
-            }
-        }
-        #[cfg(not(feature = "rmumps"))]
-        {
-            new_sparse_solver_with_choice(options.linear_solver)
-        }
-    } else {
-        Box::new(DenseLdl::new())
-    };
+    let mut lin_solver = select_linear_solver(use_sparse, n, m, options);
     let mut inertia_params = InertiaCorrectionParams::default();
     let mut restoration = RestorationPhase::new(500);
 
-    // Estimate Schur complement density from Jacobian structure.
-    // If J^T·D·J would be denser than the full augmented KKT system,
-    // disable sparse condensed and use the full (n+m)×(n+m) system instead.
-    let mut disable_sparse_condensed = if use_sparse && m > 0 {
-        let (jac_rows_est, _) = problem.jacobian_structure();
-        // Build row counts
-        let mut row_nnz = vec![0usize; m];
-        for &r in &jac_rows_est {
-            row_nnz[r] += 1;
-        }
-        // Estimate Schur complement nnz: Σ k_i*(k_i+1)/2 (before dedup)
-        let schur_nnz_upper: usize = row_nnz.iter().map(|&k| k * (k + 1) / 2).sum();
-        // Augmented KKT nnz: hess_nnz + jac_nnz + n (diagonal)
-        let (hess_rows_est, _) = problem.hessian_structure();
-        let augmented_nnz = hess_rows_est.len() + jac_rows_est.len() + n;
-        let disable = schur_nnz_upper > 2 * augmented_nnz;
-        if disable && options.print_level >= 3 {
-            rip_log!(
-                "ripopt: Disabling sparse condensed KKT: Schur complement nnz estimate ({}) > 2× augmented KKT nnz ({})",
-                schur_nnz_upper, augmented_nnz
-            );
-        }
-        disable
-    } else {
-        false
-    };
+    let mut disable_sparse_condensed = estimate_schur_density_disable(problem, n, m, use_sparse, options);
     // Flag set by bandwidth detection: when the sparse condensed Schur complement
     // is essentially dense, switch to dense condensed KKT (n×n) for all subsequent
     // iterations. This avoids the catastrophic rmumps fill-in on PDE problems.
