@@ -2583,6 +2583,238 @@ fn update_watchdog<P: NlpProblem>(
     WatchdogDecision::Proceed
 }
 
+/// Outcome of the post-LS restoration cascade.
+enum RestorationCascadeDecision {
+    Continue,
+    Return(SolveResult),
+}
+
+/// Invoke the restoration cascade after a failed line search. Runs the
+/// fast Gauss–Newton restoration first; on failure, rotates through
+/// (a) NLP restoration at `fail_count ∈ {2, 4}`,
+/// (b) infeasibility / `RestorationFailed` / `MaxIterations` exits,
+/// (c) mu-mode switching and mu perturbation,
+/// (d) x-perturbation on `fail_count >= 3`.
+///
+/// Always ends with either `Continue` (the main loop should re-enter its
+/// top with an updated iterate / recovery state) or `Return(SolveResult)`
+/// (the solver is terminating).
+#[allow(clippy::too_many_arguments)]
+fn run_post_ls_restoration_cascade<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    options: &SolverOptions,
+    filter: &mut Filter,
+    mu_state: &mut MuState,
+    inertia_params: &mut InertiaCorrectionParams,
+    lbfgs_state: &mut Option<LbfgsIpmState>,
+    lbfgs_mode: bool,
+    linear_constraints: Option<&[bool]>,
+    restoration: &mut RestorationPhase,
+    iteration: usize,
+    n: usize,
+    m: usize,
+    start_time: Instant,
+    deadline: Option<Instant>,
+    early_timeout: f64,
+    ever_feasible: bool,
+    theta_current: f64,
+    phi_current: f64,
+    theta_history: &[f64],
+    theta_history_len: usize,
+) -> RestorationCascadeDecision {
+    state.diagnostics.filter_rejects += 1;
+
+    // Add current point to filter before entering restoration (Ipopt convention).
+    // augment_for_restoration adds the margin entry
+    // (phi - gamma_phi*theta, (1-gamma_theta)*theta) AND bumps theta_max —
+    // this prevents restoration from handing back a point as bad as the entry.
+    filter.add(theta_current, phi_current);
+    filter.augment_for_restoration(theta_current, phi_current);
+
+    // Phase 1: Fast GN restoration
+    log::debug!("Line search failed at iteration {}, entering restoration", iteration);
+
+    let (x_rest, gn_success) = restoration.restore(
+        &state.x,
+        &state.x_l,
+        &state.x_u,
+        &state.g_l,
+        &state.g_u,
+        &state.jac_rows,
+        &state.jac_cols,
+        n,
+        m,
+        options,
+        &|theta, phi| filter.is_acceptable(theta, phi),
+        &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
+        &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
+        Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
+        deadline,
+    );
+
+    if gn_success {
+        state.diagnostics.restoration_count += 1;
+        apply_restoration_success(
+            state, filter, mu_state, options, n, m, problem, &x_rest,
+            linear_constraints, lbfgs_mode, lbfgs_state,
+        );
+        return RestorationCascadeDecision::Continue;
+    }
+
+    // GN restoration failed — recovery logic with NLP restoration as last resort.
+    // Bail out of recovery cascade if wall time is nearly exhausted.
+    if options.max_wall_time > 0.0 {
+        let remaining = options.max_wall_time - start_time.elapsed().as_secs_f64();
+        if remaining < 1.0 {
+            return RestorationCascadeDecision::Return(make_result(state, SolveStatus::MaxIterations));
+        }
+    }
+
+    mu_state.consecutive_restoration_failures += 1;
+    let fail_count = mu_state.consecutive_restoration_failures;
+
+    // At fail_count == 2 (or 4): try full NLP restoration. It's Ipopt's primary
+    // method — most robust, but doubles the problem size, so skip for large n+m.
+    let kkt_dim = n + m;
+    let skip_nlp_restoration = iteration < 3
+        && options.early_stall_timeout > 0.0
+        && start_time.elapsed().as_secs_f64() > early_timeout * 0.5;
+    if (fail_count == 2 || fail_count == 4)
+        && !options.disable_nlp_restoration
+        && kkt_dim <= 50000
+        && !skip_nlp_restoration
+    {
+        state.diagnostics.nlp_restoration_count += 1;
+        let (x_nlp, outcome) = attempt_nlp_restoration(
+            problem, state, filter, options, theta_current, start_time,
+        );
+        match outcome {
+            RestorationOutcome::Success => {
+                apply_restoration_success(
+                    state, filter, mu_state, options, n, m,
+                    problem, &x_nlp,
+                    linear_constraints, lbfgs_mode, lbfgs_state,
+                );
+                return RestorationCascadeDecision::Continue;
+            }
+            RestorationOutcome::LocalInfeasibility | RestorationOutcome::Failed => {
+                // Fall through to continue recovery. Don't immediately return
+                // LocalInfeasibility — the fail_count > 6 stationarity check below
+                // is more reliable.
+            }
+        }
+    }
+
+    // For large problems (no NLP restoration), give up sooner.
+    let max_restore_attempts = if kkt_dim > 50000 { 3 } else { 6 };
+    if fail_count > max_restore_attempts {
+        log::warn!(
+            "Restoration failed at iteration {} (attempt #{})",
+            iteration, fail_count
+        );
+        let current_theta = state.constraint_violation();
+
+        if current_theta > options.constr_viol_tol && !ever_feasible {
+            let mut violation = vec![0.0; m];
+            for i in 0..m {
+                let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
+                    && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
+                if is_eq {
+                    violation[i] = state.g[i] - state.g_l[i];
+                } else if state.g_l[i].is_finite() && state.g[i] < state.g_l[i] {
+                    violation[i] = state.g[i] - state.g_l[i];
+                } else if state.g_u[i].is_finite() && state.g[i] > state.g_u[i] {
+                    violation[i] = state.g[i] - state.g_u[i];
+                }
+            }
+            let mut grad_theta = vec![0.0; n];
+            for (idx, (&row, &col)) in
+                state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
+            {
+                grad_theta[col] += state.jac_vals[idx] * violation[row];
+            }
+            let grad_theta_norm = grad_theta.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+            let stationarity_tol = 1e-4 * current_theta.max(1.0);
+            if grad_theta_norm < stationarity_tol {
+                log::info!(
+                    "Local infeasibility detected: theta={:.2e}, ||∇theta||={:.2e}",
+                    current_theta, grad_theta_norm
+                );
+                return RestorationCascadeDecision::Return(make_result(state, SolveStatus::LocalInfeasibility));
+            }
+        }
+
+        if !ever_feasible && current_theta > 1e4 && iteration > 500
+            && theta_history.len() >= theta_history_len
+        {
+            let min_theta = theta_history.iter().cloned().fold(f64::INFINITY, f64::min);
+            if current_theta > 0.01 * min_theta {
+                return RestorationCascadeDecision::Return(make_result(state, SolveStatus::Infeasible));
+            }
+        }
+        return RestorationCascadeDecision::Return(make_result(state, SolveStatus::RestorationFailed));
+    }
+
+    // Recovery strategies: cycle through mode switches and mu perturbations.
+    log::debug!("Restoration failed (attempt #{}), trying recovery", fail_count);
+    let mu_factors: [f64; 6] = [10.0, 0.1, 100.0, 0.01, 1000.0, 0.001];
+
+    match fail_count {
+        1 => {
+            if mu_state.mode == MuMode::Free {
+                state.diagnostics.mu_mode_switches += 1;
+                mu_state.mode = MuMode::Fixed;
+                mu_state.first_iter_in_mode = true;
+                let avg_compl = compute_avg_complementarity(state);
+                if avg_compl > 0.0 {
+                    state.mu = (options.adaptive_mu_monotone_init_factor * avg_compl)
+                        .clamp(options.mu_min, 1e5);
+                } else {
+                    state.mu = (options.mu_linear_decrease_factor * state.mu)
+                        .max(options.mu_min);
+                }
+            } else {
+                let new_mu = (options.mu_linear_decrease_factor * state.mu)
+                    .min(state.mu.powf(options.mu_superlinear_decrease_power))
+                    .max(options.mu_min);
+                state.mu = new_mu;
+            }
+        }
+        _ => {
+            let factor = mu_factors[(fail_count - 2) % mu_factors.len()];
+            state.mu = (state.mu * factor).max(options.mu_min).min(1e5);
+        }
+    }
+    filter.reset();
+    let theta_now = state.constraint_violation();
+    filter.set_theta_min_from_initial(theta_now);
+    inertia_params.delta_w_last = 0.0;
+
+    // On attempts 3+: also perturb x to escape current basin.
+    if fail_count >= 3 {
+        for i in 0..n {
+            let range = if state.x_l[i].is_finite() && state.x_u[i].is_finite() {
+                state.x_u[i] - state.x_l[i]
+            } else {
+                state.x[i].abs().max(1.0)
+            };
+            let sign = if (i * 7 + fail_count * 13) % 3 == 0 { -1.0 } else { 1.0 };
+            state.x[i] += sign * 1e-4 * range;
+            if state.x_l[i].is_finite() {
+                state.x[i] = state.x[i].max(state.x_l[i] + 1e-14);
+            }
+            if state.x_u[i].is_finite() {
+                state.x[i] = state.x[i].min(state.x_u[i] - 1e-14);
+            }
+        }
+        let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+        update_lbfgs_hessian(lbfgs_state, state);
+    }
+
+    RestorationCascadeDecision::Continue
+}
+
 /// Outcome of the post-step re-evaluation with α-halving recovery.
 enum PostStepEvalDecision {
     Proceed,
@@ -5937,201 +6169,31 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
 
         if !step_accepted {
-            state.diagnostics.filter_rejects += 1;
-
-            // Add current point to filter before entering restoration (Ipopt convention).
-            // augment_for_restoration adds the margin entry
-            // (phi - gamma_phi*theta, (1-gamma_theta)*theta) AND bumps theta_max —
-            // this prevents restoration from handing back a point as bad as the entry.
-            filter.add(theta_current, phi_current);
-            filter.augment_for_restoration(theta_current, phi_current);
-
-            // Phase 1: Fast GN restoration
-            log::debug!("Line search failed at iteration {}, entering restoration", iteration);
-
-            let (x_rest, gn_success) = restoration.restore(
-                &state.x,
-                &state.x_l,
-                &state.x_u,
-                &state.g_l,
-                &state.g_u,
-                &state.jac_rows,
-                &state.jac_cols,
+            match run_post_ls_restoration_cascade(
+                &mut state,
+                problem,
+                options,
+                &mut filter,
+                &mut mu_state,
+                &mut inertia_params,
+                &mut lbfgs_state,
+                lbfgs_mode,
+                linear_constraints.as_deref(),
+                &mut restoration,
+                iteration,
                 n,
                 m,
-                options,
-                &|theta, phi| filter.is_acceptable(theta, phi),
-                &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
-                &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
-                Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
+                start_time,
                 deadline,
-            );
-
-            if gn_success {
-                state.diagnostics.restoration_count += 1;
-                // GN restoration succeeded — apply standard restoration success handling
-                apply_restoration_success(
-                    &mut state, &mut filter, &mut mu_state, options, n, m, problem, &x_rest,
-                    linear_constraints.as_deref(), lbfgs_mode, &mut lbfgs_state,
-                );
-                continue;
-            }
-
-            // GN restoration failed — recovery logic with NLP restoration as last resort
-            {
-                // Bail out of recovery cascade if wall time is nearly exhausted.
-                // Without this, the cascade (especially NLP restoration) can consume
-                // remaining time and prevent the outer fallback strategies from running.
-                if options.max_wall_time > 0.0 {
-                    let remaining = options.max_wall_time - start_time.elapsed().as_secs_f64();
-                    if remaining < 1.0 {
-                        return make_result(&state, SolveStatus::MaxIterations);
-                    }
-                }
-
-                mu_state.consecutive_restoration_failures += 1;
-                let fail_count = mu_state.consecutive_restoration_failures;
-
-                // At fail_count == 2: try full NLP restoration early.
-                // The NLP restoration is the most robust approach (Ipopt's primary method).
-                // Try it before exhausting simpler recovery strategies.
-                // Skip for large problems: NLP restoration doubles the problem size,
-                // making it prohibitively expensive for n+m > 10000.
-                let kkt_dim = n + m;
-                // Early stall: skip expensive NLP restoration if we've already exceeded timeout
-                let skip_nlp_restoration = iteration < 3
-                    && options.early_stall_timeout > 0.0
-                    && start_time.elapsed().as_secs_f64() > early_timeout * 0.5;
-                if (fail_count == 2 || fail_count == 4) && !options.disable_nlp_restoration && kkt_dim <= 50000 && !skip_nlp_restoration {
-                    state.diagnostics.nlp_restoration_count += 1;
-                    let (x_nlp, outcome) = attempt_nlp_restoration(
-                        problem, &state, &filter, options, theta_current, start_time,
-                    );
-                    match outcome {
-                        RestorationOutcome::Success => {
-                            apply_restoration_success(
-                                &mut state, &mut filter, &mut mu_state, options, n, m,
-                                problem, &x_nlp,
-                                linear_constraints.as_deref(), lbfgs_mode, &mut lbfgs_state,
-                            );
-                            continue;
-                        }
-                        RestorationOutcome::LocalInfeasibility
-                        | RestorationOutcome::Failed => {
-                            // Fall through to continue recovery.
-                            // Don't immediately return LocalInfeasibility — the existing
-                            // infeasibility detection at fail_count > 6 uses stationarity
-                            // checks which are more reliable.
-                        }
-                    }
-                }
-
-                // For large problems (no NLP restoration), give up sooner
-                let max_restore_attempts = if kkt_dim > 50000 { 3 } else { 6 };
-                if fail_count > max_restore_attempts {
-                    // Exhausted recovery attempts: check infeasibility and give up
-                    log::warn!("Restoration failed at iteration {} (attempt #{})", iteration, fail_count);
-                    let current_theta = state.constraint_violation();
-
-                    // Check stationarity of violation
-                    if current_theta > options.constr_viol_tol && !ever_feasible {
-                        let mut violation = vec![0.0; m];
-                        for i in 0..m {
-                            let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
-                                && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
-                            if is_eq {
-                                violation[i] = state.g[i] - state.g_l[i];
-                            } else if state.g_l[i].is_finite() && state.g[i] < state.g_l[i] {
-                                violation[i] = state.g[i] - state.g_l[i];
-                            } else if state.g_u[i].is_finite() && state.g[i] > state.g_u[i] {
-                                violation[i] = state.g[i] - state.g_u[i];
-                            }
-                        }
-                        let mut grad_theta = vec![0.0; n];
-                        for (idx, (&row, &col)) in
-                            state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
-                        {
-                            grad_theta[col] += state.jac_vals[idx] * violation[row];
-                        }
-                        let grad_theta_norm = grad_theta.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
-                        let stationarity_tol = 1e-4 * current_theta.max(1.0);
-                        if grad_theta_norm < stationarity_tol {
-                            log::info!(
-                                "Local infeasibility detected: theta={:.2e}, ||∇theta||={:.2e}",
-                                current_theta, grad_theta_norm
-                            );
-                            return make_result(&state, SolveStatus::LocalInfeasibility);
-                        }
-                    }
-
-                    if !ever_feasible && current_theta > 1e4 && iteration > 500 && theta_history.len() >= theta_history_len {
-                        let min_theta = theta_history.iter().cloned().fold(f64::INFINITY, f64::min);
-                        if current_theta > 0.01 * min_theta {
-                            return make_result(&state, SolveStatus::Infeasible);
-                        }
-                    }
-                    return make_result(&state, SolveStatus::RestorationFailed);
-                }
-
-                // Recovery strategies: cycle through mode switches and mu perturbations
-                log::debug!("Restoration failed (attempt #{}), trying recovery", fail_count);
-                let mu_factors: [f64; 6] = [10.0, 0.1, 100.0, 0.01, 1000.0, 0.001];
-
-                match fail_count {
-                    1 => {
-                        // First failure: switch mode
-                        if mu_state.mode == MuMode::Free {
-                            state.diagnostics.mu_mode_switches += 1;
-                            mu_state.mode = MuMode::Fixed;
-                            mu_state.first_iter_in_mode = true;
-                            let avg_compl = compute_avg_complementarity(&state);
-                            if avg_compl > 0.0 {
-                                state.mu = (options.adaptive_mu_monotone_init_factor * avg_compl)
-                                    .clamp(options.mu_min, 1e5);
-                            } else {
-                                state.mu = (options.mu_linear_decrease_factor * state.mu)
-                                    .max(options.mu_min);
-                            }
-                        } else {
-                            // Force mu decrease
-                            let new_mu = (options.mu_linear_decrease_factor * state.mu)
-                                .min(state.mu.powf(options.mu_superlinear_decrease_power))
-                                .max(options.mu_min);
-                            state.mu = new_mu;
-                        }
-                    }
-                    _ => {
-                        // Subsequent failures: try varied mu perturbation
-                        let factor = mu_factors[(fail_count - 2) % mu_factors.len()];
-                        state.mu = (state.mu * factor).max(options.mu_min).min(1e5);
-                    }
-                }
-                filter.reset();
-                let theta_now = state.constraint_violation();
-                filter.set_theta_min_from_initial(theta_now);
-                inertia_params.delta_w_last = 0.0;
-
-                // On attempts 3+: also perturb x to escape current basin
-                if fail_count >= 3 {
-                    for i in 0..n {
-                        let range = if state.x_l[i].is_finite() && state.x_u[i].is_finite() {
-                            state.x_u[i] - state.x_l[i]
-                        } else {
-                            state.x[i].abs().max(1.0)
-                        };
-                        let sign = if (i * 7 + fail_count * 13) % 3 == 0 { -1.0 } else { 1.0 };
-                        state.x[i] += sign * 1e-4 * range;
-                        if state.x_l[i].is_finite() {
-                            state.x[i] = state.x[i].max(state.x_l[i] + 1e-14);
-                        }
-                        if state.x_u[i].is_finite() {
-                            state.x[i] = state.x[i].min(state.x_u[i] - 1e-14);
-                        }
-                    }
-                    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        update_lbfgs_hessian(&mut lbfgs_state, &mut state);
-                }
-                continue;
+                early_timeout,
+                ever_feasible,
+                theta_current,
+                phi_current,
+                &theta_history,
+                theta_history_len,
+            ) {
+                RestorationCascadeDecision::Continue => continue,
+                RestorationCascadeDecision::Return(result) => return result,
             }
         }
 
