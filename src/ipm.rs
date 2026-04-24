@@ -2142,6 +2142,228 @@ struct AssembledKkt {
 /// Extracted from `solve_ipm` as part of the v0.8 main-loop
 /// decomposition. Does not touch `timings` — the caller records the
 /// elapsed duration.
+/// Outcome of the backtracking line-search trial loop.
+enum LineSearchOutcome {
+    StepAccepted,
+    Rejected,
+    Return(SolveResult),
+}
+
+/// Run the Ipopt-style backtracking line search on the current direction.
+///
+/// Up to 40 α-halving trials starting from `alpha_primal_max`. Each trial:
+///  1. form `x_trial = x + α·dx` (clamped strictly inside bounds),
+///  2. evaluate f, g at the trial; reject NaN/Inf,
+///  3. watchdog shortcut: accept the full step unconditionally,
+///  4. compute φ_trial with the (optional) constraint-slack barrier,
+///  5. run the filter acceptability test (switching + Armijo + sufficient
+///     infeasibility reduction),
+///  6. on failure, attempt a second-order correction (SOC) on the first
+///     trial only (Maratos-effect guard),
+///  7. otherwise backtrack.
+///
+/// Returns `Return(NumericalError)` if the early-iteration stall timeout
+/// trips, `StepAccepted` on any accepted trial / SOC / watchdog full
+/// step, `Rejected` if α falls below `min_alpha` / loop budget exhausts.
+#[allow(clippy::too_many_arguments)]
+fn run_line_search_loop<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    options: &SolverOptions,
+    filter: &mut Filter,
+    condensed_system: &Option<kkt::CondensedKktSystem>,
+    cond_solver_for_soc: &mut Option<DenseLdl>,
+    sparse_condensed_system: &Option<kkt::SparseCondensedKktSystem>,
+    kkt_system_opt: &Option<kkt::KktSystem>,
+    lin_solver: &mut dyn LinearSolver,
+    alpha_primal_max: f64,
+    theta_current: f64,
+    phi_current: f64,
+    grad_phi_step: f64,
+    min_alpha: f64,
+    force_restoration: bool,
+    watchdog_active: bool,
+    iteration: usize,
+    n: usize,
+    m: usize,
+    start_time: Instant,
+    early_timeout: f64,
+    last_soc_accepted: &mut bool,
+    ls_steps: &mut usize,
+) -> LineSearchOutcome {
+    let mut alpha = alpha_primal_max;
+    let mut step_accepted = false;
+    *ls_steps = 0;
+
+    for _ls_iter in 0..40 {
+        if force_restoration {
+            break;
+        }
+        // Intra-iteration early stall check (scaled by problem size)
+        if iteration < 3 && options.early_stall_timeout > 0.0
+            && start_time.elapsed().as_secs_f64() > early_timeout
+        {
+            return LineSearchOutcome::Return(make_result(state, SolveStatus::NumericalError));
+        }
+        if alpha < min_alpha {
+            break;
+        }
+
+        // Compute trial point
+        let mut x_trial = vec![0.0; n];
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..n {
+            x_trial[i] = state.x[i] + alpha * state.dx[i];
+            if state.x_l[i].is_finite() {
+                x_trial[i] = x_trial[i].max(state.x_l[i] + 1e-14);
+            }
+            if state.x_u[i].is_finite() {
+                x_trial[i] = x_trial[i].min(state.x_u[i] - 1e-14);
+            }
+        }
+
+        // Evaluate at trial point
+        let mut obj_trial = f64::INFINITY;
+        let obj_ok = problem.objective(&x_trial, true, &mut obj_trial);
+        let mut g_trial = vec![0.0; m];
+        let constr_ok = if m > 0 {
+            problem.constraints(&x_trial, true, &mut g_trial)
+        } else {
+            true
+        };
+
+        if !obj_ok || !constr_ok || obj_trial.is_nan() || obj_trial.is_infinite()
+            || g_trial.iter().any(|v| v.is_nan() || v.is_infinite())
+        {
+            alpha *= 0.5;
+            *ls_steps += 1;
+            continue;
+        }
+
+        let theta_trial =
+            convergence::primal_infeasibility(&g_trial, &state.g_l, &state.g_u);
+
+        // Watchdog: accept full step unconditionally (bypass filter)
+        if watchdog_active && alpha == alpha_primal_max {
+            state.x = x_trial;
+            state.obj = obj_trial;
+            state.g = g_trial;
+            state.alpha_primal = alpha;
+            step_accepted = true;
+            break;
+        }
+
+        // Barrier objective at trial
+        let mut phi_trial = obj_trial;
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..n {
+            if state.x_l[i].is_finite() {
+                let slack = (x_trial[i] - state.x_l[i]).max(1e-20);
+                phi_trial -= state.mu * slack.ln();
+            }
+            if state.x_u[i].is_finite() {
+                let slack = (state.x_u[i] - x_trial[i]).max(1e-20);
+                phi_trial -= state.mu * slack.ln();
+            }
+        }
+        if options.constraint_slack_barrier {
+            for i in 0..m {
+                let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
+                    && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
+                if is_eq {
+                    continue;
+                }
+                if state.g_l[i].is_finite() {
+                    let slack = g_trial[i] - state.g_l[i];
+                    if slack > state.mu * 1e-2 {
+                        phi_trial -= state.mu * slack.ln();
+                    }
+                }
+                if state.g_u[i].is_finite() {
+                    let slack = state.g_u[i] - g_trial[i];
+                    if slack > state.mu * 1e-2 {
+                        phi_trial -= state.mu * slack.ln();
+                    }
+                }
+            }
+        }
+
+        let (acceptable, used_switching) = filter.check_acceptability(
+            theta_current,
+            phi_current,
+            theta_trial,
+            phi_trial,
+            grad_phi_step,
+            alpha,
+        );
+
+        if !acceptable && options.print_level >= 7 && *ls_steps < 5 {
+            let sw = filter.switching_condition(theta_current, grad_phi_step, alpha);
+            let ar = filter.armijo_condition(phi_current, phi_trial, grad_phi_step, alpha);
+            let sr = filter.sufficient_infeasibility_reduction(theta_current, theta_trial);
+            let fa = filter.is_acceptable(theta_trial, phi_trial);
+            rip_log!("  LS reject: alpha={:.2e} theta_t={:.2e} phi_t={:.2e} switch={} armijo={} suff_red={} filter_ok={}",
+                alpha, theta_trial, phi_trial, sw, ar, sr, fa);
+        }
+
+        if acceptable {
+            state.x = x_trial;
+            state.obj = obj_trial;
+            state.g = g_trial;
+            state.alpha_primal = alpha;
+            step_accepted = true;
+            if !used_switching {
+                filter.add(theta_current, phi_current);
+            }
+            break;
+        }
+
+        // SOC on the first trial only, if full step increased theta
+        if theta_trial > theta_current && options.max_soc > 0 && *ls_steps == 0 {
+            let soc_accepted = if let (Some(cond), Some(cs)) = (condensed_system.as_ref(), cond_solver_for_soc.as_mut()) {
+                attempt_soc_condensed(
+                    state, problem, &g_trial, cs, cond, filter,
+                    theta_current, phi_current, grad_phi_step, alpha, options,
+                )
+            } else if let Some(sc) = sparse_condensed_system.as_ref() {
+                attempt_soc_sparse_condensed(
+                    state, problem, &g_trial, lin_solver, sc, filter,
+                    theta_current, phi_current, grad_phi_step, alpha, options,
+                )
+            } else if let Some(kkt) = kkt_system_opt.as_ref() {
+                attempt_soc(
+                    state, problem, &x_trial, &g_trial,
+                    lin_solver, kkt, filter,
+                    theta_current, phi_current, grad_phi_step, alpha, options,
+                )
+            } else {
+                None
+            };
+
+            if let Some((x_soc, obj_soc, g_soc, alpha_soc)) = soc_accepted {
+                state.diagnostics.soc_corrections += 1;
+                *last_soc_accepted = true;
+                state.x = x_soc;
+                state.obj = obj_soc;
+                state.g = g_soc;
+                state.alpha_primal = alpha_soc;
+                step_accepted = true;
+                filter.add(theta_current, phi_current);
+                break;
+            }
+        }
+
+        alpha *= 0.5;
+        *ls_steps += 1;
+    }
+
+    if step_accepted {
+        LineSearchOutcome::StepAccepted
+    } else {
+        LineSearchOutcome::Rejected
+    }
+}
+
 fn assemble_kkt_systems(
     state: &SolverState,
     n: usize,
@@ -5967,8 +6189,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         let phi_current = state.barrier_objective(options);
         let grad_phi_step = state.barrier_directional_derivative(options);
 
-        let mut alpha = alpha_primal_max;
-        let mut step_accepted = false;
+        let mut step_accepted;
         let min_alpha = filter.compute_alpha_min(theta_current, grad_phi_step);
         // Snapshot x before the line search so we can roll back + halve α if the
         // post-step gradient / Jacobian / Hessian eval trips the NaN/Inf guard
@@ -5976,184 +6197,38 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         // not a hard abort — IpBacktrackingLineSearch.cpp:776-784, 1158, 1193).
         let x_pre_step = state.x.clone();
 
-        // If primal divergence was detected, skip line search to force restoration entry.
-        // The !step_accepted branch below handles filter updates and restoration.
-        // No-op here; just skip the line search loop.
-
-        ls_steps = 0; // reset backtrack counter for this iteration
-        for _ls_iter in 0..40 {
-            if force_restoration {
-                break;
-            }
-            // Intra-iteration early stall check (scaled by problem size)
-            if iteration < 3 && options.early_stall_timeout > 0.0 {
-                if start_time.elapsed().as_secs_f64() > early_timeout {
-                    return make_result(&state, SolveStatus::NumericalError);
-                }
-            }
-            if alpha < min_alpha {
-                break;
-            }
-
-            // Compute trial point
-            let mut x_trial = vec![0.0; n];
-            #[allow(clippy::needless_range_loop)]
-            for i in 0..n {
-                x_trial[i] = state.x[i] + alpha * state.dx[i];
-                // Safeguard: ensure strictly within bounds
-                if state.x_l[i].is_finite() {
-                    x_trial[i] = x_trial[i].max(state.x_l[i] + 1e-14);
-                }
-                if state.x_u[i].is_finite() {
-                    x_trial[i] = x_trial[i].min(state.x_u[i] - 1e-14);
-                }
-            }
-
-            // Evaluate at trial point
-            let mut obj_trial = f64::INFINITY;
-            let obj_ok = problem.objective(&x_trial, true, &mut obj_trial);
-            let mut g_trial = vec![0.0; m];
-            let constr_ok = if m > 0 {
-                problem.constraints(&x_trial, true, &mut g_trial)
-            } else {
-                true
-            };
-
-            // NaN guard: reject trial points with NaN/Inf values or eval failures
-            if !obj_ok || !constr_ok || obj_trial.is_nan() || obj_trial.is_infinite()
-                || g_trial.iter().any(|v| v.is_nan() || v.is_infinite())
-            {
-                alpha *= 0.5;
-                ls_steps += 1;
-                continue;
-            }
-
-            let theta_trial =
-                convergence::primal_infeasibility(&g_trial, &state.g_l, &state.g_u);
-
-            // Watchdog mode: accept full step unconditionally (bypass filter)
-            if watchdog_active && alpha == alpha_primal_max {
-                state.x = x_trial;
-                state.obj = obj_trial;
-                state.g = g_trial;
-                state.alpha_primal = alpha;
+        match run_line_search_loop(
+            &mut state,
+            problem,
+            options,
+            &mut filter,
+            &condensed_system,
+            &mut cond_solver_for_soc,
+            &sparse_condensed_system,
+            &kkt_system_opt,
+            lin_solver.as_mut(),
+            alpha_primal_max,
+            theta_current,
+            phi_current,
+            grad_phi_step,
+            min_alpha,
+            force_restoration,
+            watchdog_active,
+            iteration,
+            n,
+            m,
+            start_time,
+            early_timeout,
+            &mut last_soc_accepted,
+            &mut ls_steps,
+        ) {
+            LineSearchOutcome::StepAccepted => {
                 step_accepted = true;
-                break;
             }
-
-            // Compute barrier objective at trial
-            let mut phi_trial = obj_trial;
-            #[allow(clippy::needless_range_loop)]
-            for i in 0..n {
-                if state.x_l[i].is_finite() {
-                    let slack = (x_trial[i] - state.x_l[i]).max(1e-20);
-                    phi_trial -= state.mu * slack.ln();
-                }
-                if state.x_u[i].is_finite() {
-                    let slack = (state.x_u[i] - x_trial[i]).max(1e-20);
-                    phi_trial -= state.mu * slack.ln();
-                }
+            LineSearchOutcome::Rejected => {
+                step_accepted = false;
             }
-            if options.constraint_slack_barrier {
-                for i in 0..m {
-                    let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
-                        && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
-                    if is_eq {
-                        continue;
-                    }
-                    if state.g_l[i].is_finite() {
-                        let slack = g_trial[i] - state.g_l[i];
-                        if slack > state.mu * 1e-2 {
-                            phi_trial -= state.mu * slack.ln();
-                        }
-                    }
-                    if state.g_u[i].is_finite() {
-                        let slack = state.g_u[i] - g_trial[i];
-                        if slack > state.mu * 1e-2 {
-                            phi_trial -= state.mu * slack.ln();
-                        }
-                    }
-                }
-            }
-
-            // Check acceptability
-            let (acceptable, _used_switching) = filter.check_acceptability(
-                theta_current,
-                phi_current,
-                theta_trial,
-                phi_trial,
-                grad_phi_step,
-                alpha,
-            );
-
-            // Diagnostic: log first few line search rejections
-            if !acceptable && options.print_level >= 7 && ls_steps < 5 {
-                let sw = filter.switching_condition(theta_current, grad_phi_step, alpha);
-                let ar = filter.armijo_condition(phi_current, phi_trial, grad_phi_step, alpha);
-                let sr = filter.sufficient_infeasibility_reduction(theta_current, theta_trial);
-                let fa = filter.is_acceptable(theta_trial, phi_trial);
-                rip_log!("  LS reject: alpha={:.2e} theta_t={:.2e} phi_t={:.2e} switch={} armijo={} suff_red={} filter_ok={}",
-                    alpha, theta_trial, phi_trial, sw, ar, sr, fa);
-            }
-
-            if acceptable {
-                // Accept step
-                state.x = x_trial;
-                state.obj = obj_trial;
-                state.g = g_trial;
-                state.alpha_primal = alpha;
-                step_accepted = true;
-
-                // Add to filter if not using switching condition
-                if !_used_switching {
-                    filter.add(theta_current, phi_current);
-                }
-                break;
-            }
-
-            // Second-order correction (SOC) — only on first trial (full step), matching Ipopt.
-            // SOC corrects the Maratos effect: the full Newton step may increase theta
-            // even though it's a good step. SOC re-solves with the trial constraint
-            // residual to recover. Applying SOC to shortened steps is wasteful and poorly scaled.
-            if theta_trial > theta_current && options.max_soc > 0 && ls_steps == 0 {
-                let soc_accepted = if let (Some(ref cond), Some(ref mut cs)) = (&condensed_system, &mut cond_solver_for_soc) {
-                    // Use condensed SOC (avoids building full KKT)
-                    attempt_soc_condensed(
-                        &state, problem, &g_trial, cs, cond, &filter,
-                        theta_current, phi_current, grad_phi_step, alpha, options,
-                    )
-                } else if let Some(ref sc) = sparse_condensed_system {
-                    // Use sparse condensed SOC
-                    attempt_soc_sparse_condensed(
-                        &state, problem, &g_trial, lin_solver.as_mut(), sc, &filter,
-                        theta_current, phi_current, grad_phi_step, alpha, options,
-                    )
-                } else if let Some(ref kkt) = kkt_system_opt {
-                    attempt_soc(
-                        &state, problem, &x_trial, &g_trial,
-                        lin_solver.as_mut(), kkt, &filter,
-                        theta_current, phi_current, grad_phi_step, alpha, options,
-                    )
-                } else {
-                    None
-                };
-
-                if let Some((x_soc, obj_soc, g_soc, alpha_soc)) = soc_accepted {
-                    state.diagnostics.soc_corrections += 1;
-                    last_soc_accepted = true;
-                    state.x = x_soc;
-                    state.obj = obj_soc;
-                    state.g = g_soc;
-                    state.alpha_primal = alpha_soc;
-                    step_accepted = true;
-                    filter.add(theta_current, phi_current);
-                    break;
-                }
-            }
-
-            // Backtrack
-            alpha *= 0.5;
-            ls_steps += 1;
+            LineSearchOutcome::Return(result) => return result,
         }
 
         if !step_accepted {
