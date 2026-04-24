@@ -2805,6 +2805,408 @@ fn update_watchdog<P: NlpProblem>(
     WatchdogDecision::Proceed
 }
 
+/// Outcome of the search-direction solve.
+enum DirectionSolveDecision {
+    Proceed {
+        dx: Vec<f64>,
+        dy: Vec<f64>,
+        cond_solver_for_soc: Option<DenseLdl>,
+        mehrotra_aff: Option<(Vec<f64>, Vec<f64>, Vec<f64>, f64)>,
+    },
+    Continue,
+    Return(SolveResult),
+}
+
+/// Solve the KKT system for the primal-dual Newton search direction.
+///
+/// Dispatches over the three KKT representations:
+///
+///  * **Dense condensed** (`m ≥ 2n` and small `n`) — Bunch-Kaufman on the
+///    `n×n` Schur complement `H + Σ + J^T·D_c^{-1}·J`. On BK failure
+///    builds the full augmented KKT on demand and retries.
+///  * **Sparse condensed** — sparse factor of the Schur complement.
+///    On factor/solve failure falls back to the full augmented KKT
+///    with `gradient_descent_fallback` as last resort.
+///  * **Full augmented** (`else` branch) — optional Mehrotra
+///    predictor-corrector probe to update μ, then Ipopt-style quality
+///    escalation (Ruiz scaling → raise pivot tolerance → δ_c → δ_w),
+///    with 30° deflection revert if the PC direction strays too far
+///    from the original.
+///
+/// Mirrors `IpPDSearchDirCalc.cpp:81-110` / `IpPDFullSpaceSolver.cpp`
+/// in Ipopt.
+#[allow(clippy::too_many_arguments)]
+fn solve_for_search_direction<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    options: &SolverOptions,
+    iteration: usize,
+    n: usize,
+    m: usize,
+    use_sparse: bool,
+    condensed_system: &Option<kkt::CondensedKktSystem>,
+    sparse_condensed_system: &Option<kkt::SparseCondensedKktSystem>,
+    kkt_system_opt: &mut Option<kkt::KktSystem>,
+    lin_solver: &mut dyn LinearSolver,
+    sigma: &[f64],
+    inertia_params: &mut InertiaCorrectionParams,
+    mut ic_delta_w: f64,
+    mut ic_delta_c: f64,
+    filter: &Filter,
+    restoration: &mut RestorationPhase,
+    lbfgs_state: &mut Option<LbfgsIpmState>,
+    lbfgs_mode: bool,
+    linear_constraints: Option<&[bool]>,
+    last_mehrotra_sigma: &mut Option<f64>,
+    deadline: Option<Instant>,
+) -> DirectionSolveDecision {
+    let mut cond_solver_for_soc: Option<DenseLdl> = None;
+    let mut mehrotra_aff: Option<(Vec<f64>, Vec<f64>, Vec<f64>, f64)> = None;
+
+    let (dx, dy) = if let Some(cond) = condensed_system.as_ref() {
+        // Dense condensed: BK on the n×n Schur complement.
+        let mut cond_solver = DenseLdl::new();
+        let t_cond_bk = Instant::now();
+        let cond_ok = cond_solver.bunch_kaufman_factor(&cond.matrix).is_ok();
+        if options.print_level >= 5 {
+            rip_log!("ripopt: Dense condensed BK factor n={}: {:.3}s (ok={})",
+                n, t_cond_bk.elapsed().as_secs_f64(), cond_ok);
+        }
+        let cond_result = if cond_ok {
+            kkt::solve_condensed(cond, &mut cond_solver).ok()
+        } else {
+            None
+        };
+
+        if let Some(d) = cond_result {
+            cond_solver_for_soc = Some(cond_solver);
+            d
+        } else {
+            // Condensed failed — build full KKT on demand.
+            let mut kkt = kkt::assemble_kkt(
+                n, m,
+                &state.hess_rows, &state.hess_cols, &state.hess_vals,
+                &state.jac_rows, &state.jac_cols, &state.jac_vals,
+                sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
+                &state.y, &state.z_l, &state.z_u,
+                &state.x, &state.x_l, &state.x_u, state.mu,
+                use_sparse, &state.v_l, &state.v_u,
+            );
+            let fb_ic = kkt::factor_with_inertia_correction(
+                &mut kkt, lin_solver, inertia_params,
+            );
+            if fb_ic.is_err() {
+                let (x_rest, success) = restoration.restore(
+                    &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
+                    &state.jac_rows, &state.jac_cols, n, m, options,
+                    &|theta, phi| filter.is_acceptable(theta, phi),
+                    &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
+                    &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
+                    Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
+                    deadline,
+                );
+                if success {
+                    state.x = x_rest;
+                    state.alpha_primal = 0.0;
+                    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+                    update_lbfgs_hessian(lbfgs_state, state);
+                    return DirectionSolveDecision::Continue;
+                }
+                return DirectionSolveDecision::Return(make_result(state, SolveStatus::NumericalError));
+            }
+            let (fb_dw, fb_dc) = fb_ic.unwrap();
+            match kkt::solve_for_direction(&kkt, lin_solver, fb_dw, fb_dc) {
+                Ok(d) => {
+                    let _ = (fb_dw, fb_dc);
+                    *kkt_system_opt = Some(kkt);
+                    d
+                }
+                Err(e) => {
+                    log::warn!("KKT solve failed: {}", e);
+                    let (x_rest, success) = restoration.restore(
+                        &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
+                        &state.jac_rows, &state.jac_cols, n, m, options,
+                        &|theta, phi| filter.is_acceptable(theta, phi),
+                        &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
+                        &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
+                        Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
+                        deadline,
+                    );
+                    if success {
+                        state.x = x_rest;
+                        state.alpha_primal = 0.0;
+                        let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+                        update_lbfgs_hessian(lbfgs_state, state);
+                        return DirectionSolveDecision::Continue;
+                    }
+                    return DirectionSolveDecision::Return(make_result(state, SolveStatus::NumericalError));
+                }
+            }
+        }
+    } else if let Some(sc) = sparse_condensed_system.as_ref() {
+        // Sparse condensed: factor S with banded / sparse solver.
+        let kkt_sc = KktMatrix::Sparse(sc.matrix.clone());
+        let factor_ok = lin_solver.factor(&kkt_sc).is_ok();
+        if factor_ok {
+            match kkt::solve_sparse_condensed(sc, lin_solver) {
+                Ok(d) => d,
+                Err(_) => {
+                    let mut kkt = kkt::assemble_kkt(
+                        n, m,
+                        &state.hess_rows, &state.hess_cols, &state.hess_vals,
+                        &state.jac_rows, &state.jac_cols, &state.jac_vals,
+                        sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
+                        &state.y, &state.z_l, &state.z_u,
+                        &state.x, &state.x_l, &state.x_u, state.mu,
+                        use_sparse, &state.v_l, &state.v_u,
+                    );
+                    let mut fallback_solver = new_fallback_solver(use_sparse);
+                    if let Ok((fb_dw, fb_dc)) = kkt::factor_with_inertia_correction(
+                        &mut kkt, fallback_solver.as_mut(), inertia_params,
+                    ) {
+                        kkt::solve_for_direction(&kkt, fallback_solver.as_mut(), fb_dw, fb_dc)
+                            .unwrap_or_else(|_| gradient_descent_fallback(state)
+                                .unwrap_or_else(|| (vec![0.0; n], vec![0.0; m])))
+                    } else {
+                        gradient_descent_fallback(state)
+                            .unwrap_or_else(|| (vec![0.0; n], vec![0.0; m]))
+                    }
+                }
+            }
+        } else {
+            let mut kkt = kkt::assemble_kkt(
+                n, m,
+                &state.hess_rows, &state.hess_cols, &state.hess_vals,
+                &state.jac_rows, &state.jac_cols, &state.jac_vals,
+                sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
+                &state.y, &state.z_l, &state.z_u,
+                &state.x, &state.x_l, &state.x_u, state.mu,
+                use_sparse, &state.v_l, &state.v_u,
+            );
+            let mut fallback_solver = new_fallback_solver(use_sparse);
+            if let Ok((fb_dw, fb_dc)) = kkt::factor_with_inertia_correction(
+                &mut kkt, fallback_solver.as_mut(), inertia_params,
+            ) {
+                kkt::solve_for_direction(&kkt, fallback_solver.as_mut(), fb_dw, fb_dc)
+                    .unwrap_or_else(|_| gradient_descent_fallback(state)
+                        .unwrap_or_else(|| (vec![0.0; n], vec![0.0; m])))
+            } else {
+                gradient_descent_fallback(state)
+                    .unwrap_or_else(|| (vec![0.0; n], vec![0.0; m]))
+            }
+        }
+    } else {
+        // Full augmented KKT with optional Mehrotra PC.
+        let saved_rhs = if options.mehrotra_pc {
+            kkt_system_opt.as_ref().map(|k| k.rhs.clone())
+        } else {
+            None
+        };
+        let mut mehrotra_applied = false;
+
+        if options.mehrotra_pc {
+            let has_bounds = (0..n).any(|i| state.x_l[i].is_finite() || state.x_u[i].is_finite());
+            if has_bounds {
+                let pc_result: Option<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, f64)> = {
+                    let kkt = kkt_system_opt.as_ref().unwrap();
+                    let rhs_aff = kkt::affine_predictor_rhs(
+                        &kkt.rhs, &state.x, &state.x_l, &state.x_u, state.mu,
+                    );
+                    if let Ok((dx_aff, _)) = kkt::solve_with_custom_rhs_refined(
+                        &kkt.matrix, kkt.n, kkt.dim, lin_solver, &rhs_aff,
+                    ) {
+                        let (dz_l_aff, dz_u_aff) = kkt::recover_dz(
+                            &state.x, &state.x_l, &state.x_u,
+                            &state.z_l, &state.z_u, &dx_aff, 0.0,
+                        );
+                        let tau_aff = 1.0 - 1e-3;
+                        let aff_zl = filter::fraction_to_boundary(&state.z_l, &dz_l_aff, tau_aff);
+                        let aff_zu = filter::fraction_to_boundary(&state.z_u, &dz_u_aff, tau_aff);
+                        let mut alpha_aff = aff_zl.min(aff_zu).min(1.0);
+                        for i in 0..n {
+                            if state.x_l[i].is_finite() && dx_aff[i] < 0.0 {
+                                let s = (state.x[i] - state.x_l[i]).max(1e-20);
+                                alpha_aff = alpha_aff.min(tau_aff * s / (-dx_aff[i]));
+                            }
+                            if state.x_u[i].is_finite() && dx_aff[i] > 0.0 {
+                                let s = (state.x_u[i] - state.x[i]).max(1e-20);
+                                alpha_aff = alpha_aff.min(tau_aff * s / dx_aff[i]);
+                            }
+                        }
+                        alpha_aff = alpha_aff.clamp(0.0, 1.0);
+                        let mut mu_aff_sum = 0.0_f64;
+                        let mut nb: usize = 0;
+                        for i in 0..n {
+                            if state.x_l[i].is_finite() {
+                                let s = (state.x[i] + alpha_aff * dx_aff[i]
+                                    - state.x_l[i]).max(1e-20);
+                                let z = (state.z_l[i] + alpha_aff * dz_l_aff[i]).max(1e-20);
+                                mu_aff_sum += s * z;
+                                nb += 1;
+                            }
+                            if state.x_u[i].is_finite() {
+                                let s = (state.x_u[i] - state.x[i]
+                                    - alpha_aff * dx_aff[i]).max(1e-20);
+                                let z = (state.z_u[i] + alpha_aff * dz_u_aff[i]).max(1e-20);
+                                mu_aff_sum += s * z;
+                                nb += 1;
+                            }
+                        }
+                        if nb > 0 {
+                            let mu_aff = mu_aff_sum / nb as f64;
+                            let sigma_mehr = (mu_aff / state.mu).powi(3).clamp(0.0, 1.0);
+                            *last_mehrotra_sigma = Some(sigma_mehr);
+                            let mu_pc = (sigma_mehr * state.mu).max(options.mu_min);
+                            log::debug!(
+                                "Mehrotra PC iter {}: σ={:.4} α_aff={:.4} μ: {:.2e}→{:.2e}",
+                                iteration, sigma_mehr, alpha_aff, state.mu, mu_pc
+                            );
+                            let new_rhs = kkt::rebuild_rhs_with_mu(
+                                &kkt.rhs, &state.x, &state.x_l, &state.x_u,
+                                state.mu, mu_pc,
+                            );
+                            Some((new_rhs, dx_aff, dz_l_aff, dz_u_aff, mu_pc))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                };
+
+                if let Some((new_rhs, dx_aff_v, dz_l_aff_v, dz_u_aff_v, mu_pc_used)) = pc_result {
+                    kkt_system_opt.as_mut().unwrap().rhs = new_rhs;
+                    mehrotra_applied = true;
+                    mehrotra_aff = Some((dx_aff_v, dz_l_aff_v, dz_u_aff_v, mu_pc_used));
+                }
+            }
+        }
+
+        // Ipopt-style quality escalation.
+        let mut dir_result = kkt::solve_for_direction(
+            kkt_system_opt.as_ref().unwrap(), lin_solver, ic_delta_w, ic_delta_c,
+        );
+        if matches!(dir_result, Err(crate::linear_solver::SolverError::PretendSingular)) {
+            if let Some(kkt_system) = kkt_system_opt.as_mut() {
+                let mut ps_resolved = false;
+
+                if !ps_resolved {
+                    if !inertia_params.use_scaling && kkt_system.scale_factors.is_none() {
+                        inertia_params.use_scaling = true;
+                        let scale = kkt::ruiz_equilibrate(&mut kkt_system.matrix, &mut kkt_system.rhs);
+                        kkt_system.scale_factors = Some(scale);
+                        if lin_solver.factor(&kkt_system.matrix).is_ok() {
+                            dir_result = kkt::solve_for_direction(kkt_system, lin_solver, ic_delta_w, ic_delta_c);
+                            ps_resolved = !matches!(dir_result, Err(crate::linear_solver::SolverError::PretendSingular));
+                        }
+                    }
+                    if !ps_resolved && lin_solver.increase_quality() {
+                        if lin_solver.factor(&kkt_system.matrix).is_ok() {
+                            dir_result = kkt::solve_for_direction(kkt_system, lin_solver, ic_delta_w, ic_delta_c);
+                            ps_resolved = !matches!(dir_result, Err(crate::linear_solver::SolverError::PretendSingular));
+                        }
+                    }
+                }
+
+                if !ps_resolved && m > 0 && ic_delta_c == 0.0 {
+                    let dc = inertia_params.delta_c_base;
+                    let mut perturbed = kkt_system.matrix.clone();
+                    perturbed.add_diagonal_range(n, n + m, -dc);
+                    if lin_solver.factor(&perturbed).is_ok() {
+                        kkt_system.matrix = perturbed;
+                        ic_delta_c = dc;
+                        dir_result = kkt::solve_for_direction(kkt_system, lin_solver, ic_delta_w, ic_delta_c);
+                        ps_resolved = !matches!(dir_result, Err(crate::linear_solver::SolverError::PretendSingular));
+                    }
+                }
+                if !ps_resolved && matches!(dir_result, Err(crate::linear_solver::SolverError::PretendSingular)) {
+                    let dw = if ic_delta_w == 0.0 { inertia_params.delta_w_init } else { ic_delta_w * inertia_params.delta_w_growth };
+                    let dc = if m > 0 && ic_delta_c == 0.0 { inertia_params.delta_c_base } else { ic_delta_c };
+                    let mut perturbed = kkt_system.matrix.clone();
+                    perturbed.add_diagonal_range(0, n, dw);
+                    if m > 0 && dc > ic_delta_c {
+                        perturbed.add_diagonal_range(n, n + m, -(dc - ic_delta_c));
+                    }
+                    if lin_solver.factor(&perturbed).is_ok() {
+                        kkt_system.matrix = perturbed;
+                        ic_delta_w = dw;
+                        ic_delta_c = dc;
+                        inertia_params.delta_w_last = dw;
+                        dir_result = kkt::solve_for_direction(kkt_system, lin_solver, ic_delta_w, ic_delta_c);
+                    }
+                }
+                if !inertia_params.use_scaling {
+                    inertia_params.use_scaling = true;
+                }
+            }
+        }
+        let (mut dx_dir, mut dy_dir) = match dir_result {
+            Ok(d) => d,
+            Err(e) => {
+                log::warn!("KKT solve failed: {}", e);
+                if let Some(fallback) = gradient_descent_fallback(state) {
+                    fallback
+                } else {
+                    let (x_rest, success) = restoration.restore(
+                        &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
+                        &state.jac_rows, &state.jac_cols, n, m, options,
+                        &|theta, phi| filter.is_acceptable(theta, phi),
+                        &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
+                        &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
+                        Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
+                        deadline,
+                    );
+                    if success {
+                        state.x = x_rest;
+                        state.alpha_primal = 0.0;
+                        let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+                        update_lbfgs_hessian(lbfgs_state, state);
+                        return DirectionSolveDecision::Continue;
+                    }
+                    return DirectionSolveDecision::Return(make_result(state, SolveStatus::NumericalError));
+                }
+            }
+        };
+
+        // Mehrotra PC deflection revert.
+        if mehrotra_applied {
+            if let Some(orig_rhs) = saved_rhs.as_ref() {
+                if let Some(kkt) = kkt_system_opt.as_ref() {
+                    if let Ok((dx_orig, dy_orig)) = kkt::solve_with_custom_rhs_refined(
+                        &kkt.matrix, kkt.n, kkt.dim, lin_solver, orig_rhs,
+                    ) {
+                        let norm_orig: f64 = dx_orig.iter().map(|v| v * v).sum::<f64>().sqrt();
+                        let norm_pc: f64 = dx_dir.iter().map(|v| v * v).sum::<f64>().sqrt();
+                        if norm_orig > 1e-30 && norm_pc > 1e-30 {
+                            let dot: f64 = dx_orig.iter().zip(dx_dir.iter()).map(|(a, b)| a * b).sum::<f64>();
+                            let cos_angle = dot / (norm_orig * norm_pc);
+                            if cos_angle < 0.7 {
+                                log::debug!(
+                                    "Mehrotra PC deflection too large (cos={:.3}), reverting",
+                                    cos_angle
+                                );
+                                dx_dir = dx_orig;
+                                dy_dir = dy_orig;
+                                kkt_system_opt.as_mut().unwrap().rhs = orig_rhs.clone();
+                                mehrotra_aff = None;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        (dx_dir, dy_dir)
+    };
+
+    DirectionSolveDecision::Proceed {
+        dx,
+        dy,
+        cond_solver_for_soc,
+        mehrotra_aff,
+    }
+}
+
 /// First-iteration bandwidth detection for the sparse condensed Schur
 /// complement. On `iteration == 0` with `use_sparse_condensed`, measure
 /// the bandwidth of S and either:
@@ -5819,7 +6221,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             );
         }
 
-        let (mut ic_delta_w, mut ic_delta_c) = match factor_kkt_with_recovery(
+        let (ic_delta_w, ic_delta_c) = match factor_kkt_with_recovery(
             &mut state,
             problem,
             options,
@@ -5844,404 +6246,49 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             FactorDecision::Return(result) => return result,
         };
 
-        // Solve for search direction
+        // Solve for search direction via the three-way KKT dispatch.
         let t_dir = Instant::now();
-        let mut cond_solver_for_soc: Option<DenseLdl> = None;
-        // Mehrotra affine-predictor vectors saved so the dz recovery below can
-        // include the cross-term. Only set when the corrector actually fires on
-        // the full-KKT else-branch; the condensed branch bypasses Mehrotra.
-        let mut mehrotra_aff: Option<(Vec<f64>, Vec<f64>, Vec<f64>, f64)> = None;
-        let (dx, dy) = if let Some(ref cond) = condensed_system {
-            // Try condensed solve first (faster for m >> n)
-            let mut cond_solver = DenseLdl::new();
-            let t_cond_bk = Instant::now();
-            let cond_ok = cond_solver.bunch_kaufman_factor(&cond.matrix).is_ok();
-            if options.print_level >= 5 {
-                rip_log!("ripopt: Dense condensed BK factor n={}: {:.3}s (ok={})",
-                    n, t_cond_bk.elapsed().as_secs_f64(), cond_ok);
+        let (dx, dy);
+        let mut cond_solver_for_soc: Option<DenseLdl>;
+        let mehrotra_aff: Option<(Vec<f64>, Vec<f64>, Vec<f64>, f64)>;
+        match solve_for_search_direction(
+            &mut state,
+            problem,
+            options,
+            iteration,
+            n,
+            m,
+            use_sparse,
+            &condensed_system,
+            &sparse_condensed_system,
+            &mut kkt_system_opt,
+            lin_solver.as_mut(),
+            &sigma,
+            &mut inertia_params,
+            ic_delta_w,
+            ic_delta_c,
+            &filter,
+            &mut restoration,
+            &mut lbfgs_state,
+            lbfgs_mode,
+            linear_constraints.as_deref(),
+            &mut last_mehrotra_sigma,
+            deadline,
+        ) {
+            DirectionSolveDecision::Proceed {
+                dx: dx_val,
+                dy: dy_val,
+                cond_solver_for_soc: cs,
+                mehrotra_aff: ma,
+            } => {
+                dx = dx_val;
+                dy = dy_val;
+                cond_solver_for_soc = cs;
+                mehrotra_aff = ma;
             }
-            let cond_result = if cond_ok {
-                kkt::solve_condensed(cond, &mut cond_solver).ok()
-            } else {
-                None
-            };
-
-            if let Some(d) = cond_result {
-                cond_solver_for_soc = Some(cond_solver);
-                d
-            } else {
-                // Condensed failed — build full KKT on demand
-                let mut kkt = kkt::assemble_kkt(
-                    n, m,
-                    &state.hess_rows, &state.hess_cols, &state.hess_vals,
-                    &state.jac_rows, &state.jac_cols, &state.jac_vals,
-                    &sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
-                    &state.y, &state.z_l, &state.z_u,
-                    &state.x, &state.x_l, &state.x_u, state.mu,
-                    use_sparse, &state.v_l, &state.v_u,
-                );
-                let fb_ic = kkt::factor_with_inertia_correction(
-                    &mut kkt, lin_solver.as_mut(), &mut inertia_params,
-                );
-                if fb_ic.is_err() {
-                    let (x_rest, success) = restoration.restore(
-                        &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
-                        &state.jac_rows, &state.jac_cols, n, m, options,
-                        &|theta, phi| filter.is_acceptable(theta, phi),
-                        &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
-                        &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
-                        Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
-                        deadline,
-                    );
-                    if success {
-                        state.x = x_rest;
-                        state.alpha_primal = 0.0;
-                        let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        update_lbfgs_hessian(&mut lbfgs_state, &mut state);
-                        continue;
-                    }
-                    return make_result(&state, SolveStatus::NumericalError);
-                }
-                let (fb_dw, fb_dc) = fb_ic.unwrap();
-                match kkt::solve_for_direction(&kkt, lin_solver.as_mut(), fb_dw, fb_dc) {
-                    Ok(d) => {
-                        let _ = (fb_dw, fb_dc); // used by main path's solve_for_direction
-                        kkt_system_opt = Some(kkt);
-                        d
-                    },
-                    Err(e) => {
-                        log::warn!("KKT solve failed: {}", e);
-                        let (x_rest, success) = restoration.restore(
-                            &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
-                            &state.jac_rows, &state.jac_cols, n, m, options,
-                            &|theta, phi| filter.is_acceptable(theta, phi),
-                            &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
-                            &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
-                            Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
-                            deadline,
-                        );
-                        if success {
-                            state.x = x_rest;
-                            state.alpha_primal = 0.0;
-                            let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        update_lbfgs_hessian(&mut lbfgs_state, &mut state);
-                            continue;
-                        }
-                        return make_result(&state, SolveStatus::NumericalError);
-                    }
-                }
-            }
-        } else if let Some(ref sc) = sparse_condensed_system {
-            // Sparse condensed path: factor S = H + Σ + J^T·D_c^{-1}·J with banded/sparse solver
-            let kkt_sc = KktMatrix::Sparse(sc.matrix.clone());
-            let factor_ok = lin_solver.factor(&kkt_sc).is_ok();
-            if factor_ok {
-                match kkt::solve_sparse_condensed(sc, lin_solver.as_mut()) {
-                    Ok(d) => d,
-                    Err(_) => {
-                        // Fall back to full KKT
-                        let mut kkt = kkt::assemble_kkt(
-                            n, m,
-                            &state.hess_rows, &state.hess_cols, &state.hess_vals,
-                            &state.jac_rows, &state.jac_cols, &state.jac_vals,
-                            &sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
-                            &state.y, &state.z_l, &state.z_u,
-                            &state.x, &state.x_l, &state.x_u, state.mu,
-                            use_sparse, &state.v_l, &state.v_u,
-                        );
-                        let mut fallback_solver = new_fallback_solver(use_sparse);
-                        if let Ok((fb_dw, fb_dc)) = kkt::factor_with_inertia_correction(
-                            &mut kkt, fallback_solver.as_mut(), &mut inertia_params,
-                        ) {
-                            kkt::solve_for_direction(&kkt, fallback_solver.as_mut(), fb_dw, fb_dc)
-                                .unwrap_or_else(|_| gradient_descent_fallback(&state)
-                                    .unwrap_or_else(|| (vec![0.0; n], vec![0.0; m])))
-                        } else {
-                            gradient_descent_fallback(&state)
-                                .unwrap_or_else(|| (vec![0.0; n], vec![0.0; m]))
-                        }
-                    }
-                }
-            } else {
-                // Factor failed — try full KKT
-                let mut kkt = kkt::assemble_kkt(
-                    n, m,
-                    &state.hess_rows, &state.hess_cols, &state.hess_vals,
-                    &state.jac_rows, &state.jac_cols, &state.jac_vals,
-                    &sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
-                    &state.y, &state.z_l, &state.z_u,
-                    &state.x, &state.x_l, &state.x_u, state.mu,
-                    use_sparse, &state.v_l, &state.v_u,
-                );
-                let mut fallback_solver = new_fallback_solver(use_sparse);
-                if let Ok((fb_dw, fb_dc)) = kkt::factor_with_inertia_correction(
-                    &mut kkt, fallback_solver.as_mut(), &mut inertia_params,
-                ) {
-                    kkt::solve_for_direction(&kkt, fallback_solver.as_mut(), fb_dw, fb_dc)
-                        .unwrap_or_else(|_| gradient_descent_fallback(&state)
-                            .unwrap_or_else(|| (vec![0.0; n], vec![0.0; m])))
-                } else {
-                    gradient_descent_fallback(&state)
-                        .unwrap_or_else(|| (vec![0.0; n], vec![0.0; m]))
-                }
-            }
-        } else {
-            // Save original RHS for Mehrotra PC deflection check
-            let saved_rhs = if options.mehrotra_pc {
-                kkt_system_opt.as_ref().map(|k| k.rhs.clone())
-            } else {
-                None
-            };
-            let mut mehrotra_applied = false;
-
-            // Mehrotra predictor-corrector (PC): probe the affine-scaling direction to
-            // estimate a better barrier parameter μ before solving the main step.
-            //
-            // Algorithm:
-            //   1. Solve affine predictor (μ=0 in RHS) — same factored matrix, new RHS.
-            //   2. Compute max step α_aff for the predictor using fraction-to-boundary.
-            //   3. Compute μ_aff = average complementarity after the affine step.
-            //   4. Set σ = (μ_aff / μ)³  (centering parameter).
-            //   5. Update KKT RHS to use μ_new = σ·μ (≤ μ → more aggressive decrease).
-            //   6. Solve the main corrector with the improved RHS.
-            //
-            // Cost: one extra triangular solve (no re-factorization).
-            // Reference: Mehrotra (1992, SIAM J. Optim.); Nocedal/Wächter (2006).
-            if options.mehrotra_pc {
-                let has_bounds = (0..n).any(|i| state.x_l[i].is_finite() || state.x_u[i].is_finite());
-                if has_bounds {
-                    // Scope the immutable borrow so it ends before the mutable update below.
-                    // pc_result carries both the corrector RHS and the affine vectors
-                    // we need later for a Mehrotra-aware dz recovery.
-                    let pc_result: Option<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, f64)> = {
-                        let kkt = kkt_system_opt.as_ref().unwrap();
-                        let rhs_aff = kkt::affine_predictor_rhs(
-                            &kkt.rhs, &state.x, &state.x_l, &state.x_u, state.mu,
-                        );
-                        if let Ok((dx_aff, _)) = kkt::solve_with_custom_rhs_refined(
-                            &kkt.matrix, kkt.n, kkt.dim, lin_solver.as_mut(), &rhs_aff,
-                        ) {
-                            // Complementarity steps for the affine predictor (μ=0)
-                            let (dz_l_aff, dz_u_aff) = kkt::recover_dz(
-                                &state.x, &state.x_l, &state.x_u,
-                                &state.z_l, &state.z_u, &dx_aff, 0.0,
-                            );
-                            // Compute α_aff = max step along affine direction
-                            let tau_aff = 1.0 - 1e-3;
-                            let aff_zl = filter::fraction_to_boundary(&state.z_l, &dz_l_aff, tau_aff);
-                            let aff_zu = filter::fraction_to_boundary(&state.z_u, &dz_u_aff, tau_aff);
-                            let mut alpha_aff = aff_zl.min(aff_zu).min(1.0);
-                            for i in 0..n {
-                                if state.x_l[i].is_finite() && dx_aff[i] < 0.0 {
-                                    let s = (state.x[i] - state.x_l[i]).max(1e-20);
-                                    alpha_aff = alpha_aff.min(tau_aff * s / (-dx_aff[i]));
-                                }
-                                if state.x_u[i].is_finite() && dx_aff[i] > 0.0 {
-                                    let s = (state.x_u[i] - state.x[i]).max(1e-20);
-                                    alpha_aff = alpha_aff.min(tau_aff * s / dx_aff[i]);
-                                }
-                            }
-                            alpha_aff = alpha_aff.clamp(0.0, 1.0);
-                            // Compute μ_aff = average complementarity after affine step
-                            let mut mu_aff_sum = 0.0_f64;
-                            let mut nb: usize = 0;
-                            for i in 0..n {
-                                if state.x_l[i].is_finite() {
-                                    let s = (state.x[i] + alpha_aff * dx_aff[i]
-                                        - state.x_l[i]).max(1e-20);
-                                    let z = (state.z_l[i] + alpha_aff * dz_l_aff[i]).max(1e-20);
-                                    mu_aff_sum += s * z;
-                                    nb += 1;
-                                }
-                                if state.x_u[i].is_finite() {
-                                    let s = (state.x_u[i] - state.x[i]
-                                        - alpha_aff * dx_aff[i]).max(1e-20);
-                                    let z = (state.z_u[i] + alpha_aff * dz_u_aff[i]).max(1e-20);
-                                    mu_aff_sum += s * z;
-                                    nb += 1;
-                                }
-                            }
-                            if nb > 0 {
-                                let mu_aff = mu_aff_sum / nb as f64;
-                                let sigma = (mu_aff / state.mu).powi(3).clamp(0.0, 1.0);
-                                // Store sigma for the cross-iteration mu update
-                                last_mehrotra_sigma = Some(sigma);
-                                let mu_pc = (sigma * state.mu).max(options.mu_min);
-                                // Always apply the Mehrotra corrector when the
-                                // affine probe succeeded. Ipopt's PDSearchDirCalc has
-                                // no skip gate (IpPDSearchDirCalc.cpp:81 gates only
-                                // on `mehrotra_algorithm_`); the earlier gate here
-                                // (mu_pc < state.mu*0.95 && sigma>=0.05 && iter>=2)
-                                // prevented the corrector from firing often enough
-                                // for its cross-term to matter on issue #5. Removing
-                                // it is fix #3 of the trajectory-alignment bundle.
-                                log::debug!(
-                                    "Mehrotra PC iter {}: σ={:.4} α_aff={:.4} μ: {:.2e}→{:.2e}",
-                                    iteration, sigma, alpha_aff, state.mu, mu_pc
-                                );
-                                // Ipopt filter-LS mode uses r_x = grad_L - mu·Σ·e
-                                // (plain rebuild with mu_new) and does NOT add the
-                                // second-order cross-term dx_aff·dz_aff/s. Ipopt's
-                                // mehrotra_algorithm flag (which adds the cross-term)
-                                // is a *separate* mode that also sets
-                                // accept_every_trial_step=yes, corrector_type=none;
-                                // it is incompatible with the filter line search.
-                                // Mixing them caused period-2 limit cycles on HS071
-                                // (cross-term persistently offsets z by O(||d_aff||^2)).
-                                // See IpPDSearchDirCalc.cpp:81-110 and
-                                // IpIpoptAlg.cpp:138-182.
-                                let new_rhs = kkt::rebuild_rhs_with_mu(
-                                    &kkt.rhs, &state.x, &state.x_l, &state.x_u,
-                                    state.mu, mu_pc,
-                                );
-                                Some((new_rhs, dx_aff, dz_l_aff, dz_u_aff, mu_pc))
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    }; // immutable borrow of kkt_system_opt ends here
-
-                    // Apply the improved RHS to the KKT system
-                    if let Some((new_rhs, dx_aff_v, dz_l_aff_v, dz_u_aff_v, mu_pc_used)) = pc_result {
-                        kkt_system_opt.as_mut().unwrap().rhs = new_rhs;
-                        mehrotra_applied = true;
-                        mehrotra_aff = Some((dx_aff_v, dz_l_aff_v, dz_u_aff_v, mu_pc_used));
-                    }
-                }
-            }
-
-            // Solve with Ipopt-style quality escalation and pretend-singular retry.
-            // Chain (matching Ipopt's PDFullSpaceSolver):
-            //   1. solve + iterative refinement
-            //   2. if poor quality: IncreaseQuality (scaling, then pivot escalation) → re-factor → re-solve
-            //   3. if still poor: PerturbForSingularity (delta_c, then delta_w) → re-factor → re-solve
-            //   4. accept whatever we have
-            let mut dir_result = kkt::solve_for_direction(kkt_system_opt.as_ref().unwrap(), lin_solver.as_mut(), ic_delta_w, ic_delta_c);
-            if matches!(dir_result, Err(crate::linear_solver::SolverError::PretendSingular)) {
-                if let Some(ref mut kkt_system) = kkt_system_opt {
-                    let mut ps_resolved = false;
-
-                    // Step 0 (Ipopt's IncreaseQuality): try improving factorization
-                    // quality WITHOUT perturbation. Activates scaling first, then
-                    // raises pivot tolerance — matching Ipopt's TSymLinearSolver chain.
-                    if !ps_resolved {
-                        // First: activate Ruiz scaling if not already on
-                        if !inertia_params.use_scaling && kkt_system.scale_factors.is_none() {
-                            inertia_params.use_scaling = true;
-                            let scale = kkt::ruiz_equilibrate(&mut kkt_system.matrix, &mut kkt_system.rhs);
-                            kkt_system.scale_factors = Some(scale);
-                            if lin_solver.factor(&kkt_system.matrix).is_ok() {
-                                dir_result = kkt::solve_for_direction(kkt_system, lin_solver.as_mut(), ic_delta_w, ic_delta_c);
-                                ps_resolved = !matches!(dir_result, Err(crate::linear_solver::SolverError::PretendSingular));
-                            }
-                        }
-                        // Second: raise pivot tolerance (if scaling alone wasn't enough)
-                        if !ps_resolved && lin_solver.increase_quality() {
-                            if lin_solver.factor(&kkt_system.matrix).is_ok() {
-                                dir_result = kkt::solve_for_direction(kkt_system, lin_solver.as_mut(), ic_delta_w, ic_delta_c);
-                                ps_resolved = !matches!(dir_result, Err(crate::linear_solver::SolverError::PretendSingular));
-                            }
-                        }
-                    }
-
-                    // Step 1: try delta_c only (constraint perturbation) if constrained
-                    if !ps_resolved && m > 0 && ic_delta_c == 0.0 {
-                        let dc = inertia_params.delta_c_base;
-                        let mut perturbed = kkt_system.matrix.clone();
-                        perturbed.add_diagonal_range(n, n + m, -dc);
-                        if lin_solver.factor(&perturbed).is_ok() {
-                            kkt_system.matrix = perturbed;
-                            ic_delta_c = dc;
-                            dir_result = kkt::solve_for_direction(kkt_system, lin_solver.as_mut(), ic_delta_w, ic_delta_c);
-                            ps_resolved = !matches!(dir_result, Err(crate::linear_solver::SolverError::PretendSingular));
-                        }
-                    }
-                    // Step 2: if delta_c didn't help, try delta_w (Hessian perturbation)
-                    if !ps_resolved && matches!(dir_result, Err(crate::linear_solver::SolverError::PretendSingular)) {
-                        let dw = if ic_delta_w == 0.0 { inertia_params.delta_w_init } else { ic_delta_w * inertia_params.delta_w_growth };
-                        let dc = if m > 0 && ic_delta_c == 0.0 { inertia_params.delta_c_base } else { ic_delta_c };
-                        let mut perturbed = kkt_system.matrix.clone();
-                        perturbed.add_diagonal_range(0, n, dw);
-                        if m > 0 && dc > ic_delta_c {
-                            perturbed.add_diagonal_range(n, n + m, -(dc - ic_delta_c));
-                        }
-                        if lin_solver.factor(&perturbed).is_ok() {
-                            kkt_system.matrix = perturbed;
-                            ic_delta_w = dw;
-                            ic_delta_c = dc;
-                            inertia_params.delta_w_last = dw;
-                            dir_result = kkt::solve_for_direction(kkt_system, lin_solver.as_mut(), ic_delta_w, ic_delta_c);
-                        }
-                    }
-                    // Activate scaling for future iterations
-                    if !inertia_params.use_scaling {
-                        inertia_params.use_scaling = true;
-                    }
-                }
-            }
-            let (mut dx_dir, mut dy_dir) = match dir_result {
-                Ok(d) => d,
-                Err(e) => {
-                    log::warn!("KKT solve failed: {}", e);
-                    // Try gradient descent fallback before restoration
-                    if let Some(fallback) = gradient_descent_fallback(&state) {
-                        fallback
-                    } else {
-                        let (x_rest, success) = restoration.restore(
-                            &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
-                            &state.jac_rows, &state.jac_cols, n, m, options,
-                            &|theta, phi| filter.is_acceptable(theta, phi),
-                            &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
-                            &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
-                            Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
-                            deadline,
-                        );
-                        if success {
-                            state.x = x_rest;
-                            state.alpha_primal = 0.0;
-                            let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        update_lbfgs_hessian(&mut lbfgs_state, &mut state);
-                            continue;
-                        }
-                        return make_result(&state, SolveStatus::NumericalError);
-                    }
-                }
-            };
-
-            // Mehrotra PC deflection check: if the PC direction deflects > 30% from
-            // the original (non-PC) direction, revert to the original direction.
-            if mehrotra_applied {
-                if let Some(ref orig_rhs) = saved_rhs {
-                    if let Some(ref kkt) = kkt_system_opt {
-                        if let Ok((dx_orig, dy_orig)) = kkt::solve_with_custom_rhs_refined(&kkt.matrix, kkt.n, kkt.dim, lin_solver.as_mut(), orig_rhs) {
-                            let norm_orig: f64 = dx_orig.iter().map(|v| v * v).sum::<f64>().sqrt();
-                            let norm_pc: f64 = dx_dir.iter().map(|v| v * v).sum::<f64>().sqrt();
-                            if norm_orig > 1e-30 && norm_pc > 1e-30 {
-                                let dot: f64 = dx_orig.iter().zip(dx_dir.iter()).map(|(a, b)| a * b).sum::<f64>();
-                                let cos_angle = dot / (norm_orig * norm_pc);
-                                if cos_angle < 0.7 {
-                                    log::debug!(
-                                        "Mehrotra PC deflection too large (cos={:.3}), reverting",
-                                        cos_angle
-                                    );
-                                    dx_dir = dx_orig;
-                                    dy_dir = dy_orig;
-                                    // Restore original RHS for Gondzio MCC
-                                    kkt_system_opt.as_mut().unwrap().rhs = orig_rhs.clone();
-                                    // The corrector was reverted — clear the affine
-                                    // cache so dz is recovered by the plain formula.
-                                    mehrotra_aff = None;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            (dx_dir, dy_dir)
-        };
+            DirectionSolveDecision::Continue => continue,
+            DirectionSolveDecision::Return(r) => return r,
+        }
 
         timings.direction_solve += t_dir.elapsed();
 
