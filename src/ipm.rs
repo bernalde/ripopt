@@ -2089,6 +2089,49 @@ fn dump_kkt_matrix(
     }
 }
 
+/// Check wall-clock and early-stall time limits at the top of each iteration.
+///
+/// Returns `Some(SolveResult)` to terminate the loop if either:
+/// - `max_wall_time` has been exceeded → `MaxIterations`
+/// - `early_stall_timeout` was hit during the first 5 iterations
+///   (scaled by problem size) → `NumericalError`
+///
+/// Wall-clock is polled every iteration during the first 10, then every 10
+/// thereafter to keep overhead negligible on long runs.
+///
+/// Extracted from `solve_ipm` as part of the v0.8 main-loop decomposition
+/// (pre-work step 2). Pure guard function.
+fn check_time_limits(
+    state: &SolverState,
+    iteration: usize,
+    start_time: Instant,
+    early_timeout: f64,
+    options: &SolverOptions,
+) -> Option<SolveResult> {
+    // Check wall-clock time limit (every iteration in early phase, every 10 after)
+    if (iteration < 10 || iteration % 10 == 0) && options.max_wall_time > 0.0 {
+        if start_time.elapsed().as_secs_f64() >= options.max_wall_time {
+            return Some(make_result(state, SolveStatus::MaxIterations));
+        }
+    }
+
+    // Early stall detection: bail out if stuck in early iterations.
+    // `early_timeout` is pre-scaled by problem size in the caller (see
+    // scaling formula in solve_ipm).
+    if iteration < 5 && options.early_stall_timeout > 0.0 {
+        if start_time.elapsed().as_secs_f64() > early_timeout {
+            if options.print_level >= 3 {
+                rip_log!(
+                    "ripopt: Early stall at iteration {} ({:.1}s elapsed), terminating",
+                    iteration, start_time.elapsed().as_secs_f64()
+                );
+            }
+            return Some(make_result(state, SolveStatus::NumericalError));
+        }
+    }
+    None
+}
+
 /// Emit one row of the per-iteration TSV trace (for the
 /// direction-diff harness with Ipopt's IntermediateCallback).
 ///
@@ -2748,27 +2791,12 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     for iteration in 0..options.max_iter {
         state.iter = iteration;
 
-        // Check wall-clock time limit (every iteration in early phase, every 10 after)
-        if (iteration < 10 || iteration % 10 == 0) && options.max_wall_time > 0.0 {
-            if start_time.elapsed().as_secs_f64() >= options.max_wall_time {
-                return make_result(&state, SolveStatus::MaxIterations);
-            }
-        }
-
-        // Early stall detection: bail out if stuck in early iterations.
-        // Scale timeout by problem size: medium-scale problems (n+m > 1000) can
-        // legitimately spend 30-60s on restoration or line search in early iterations.
+        // Early-stall timeout scaled by problem size: medium-scale problems
+        // (n+m > 1000) can legitimately spend 30-60s on restoration or line
+        // search during early iterations.
         let early_timeout = options.early_stall_timeout * ((n + m) as f64 / 200.0).max(1.0);
-        if iteration < 5 && options.early_stall_timeout > 0.0 {
-            if start_time.elapsed().as_secs_f64() > early_timeout {
-                if options.print_level >= 3 {
-                    rip_log!(
-                        "ripopt: Early stall at iteration {} ({:.1}s elapsed), terminating",
-                        iteration, start_time.elapsed().as_secs_f64()
-                    );
-                }
-                return make_result(&state, SolveStatus::NumericalError);
-            }
+        if let Some(result) = check_time_limits(&state, iteration, start_time, early_timeout, options) {
+            return result;
         }
 
         // --- Dual stagnation detection (runs every iteration, including restoration) ---
