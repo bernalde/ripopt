@@ -608,6 +608,12 @@ mod tests {
         }
     }
 
+    fn idaes_functions_dylib() -> Option<std::path::PathBuf> {
+        let home = std::env::var_os("HOME")?;
+        let p = std::path::PathBuf::from(home).join(".idaes/bin/functions.dylib");
+        if p.exists() { Some(p) } else { None }
+    }
+
     fn idaes_params_dir() -> Option<String> {
         let home = std::env::var_os("HOME")?;
         let p = std::path::PathBuf::from(home).join(
@@ -728,5 +734,70 @@ mod tests {
         for (i, h) in hes.iter().enumerate() {
             assert!(h.is_finite(), "hes[{i}] = {h} not finite");
         }
+    }
+
+    /// cbrt from IDAES functions.dylib is type=0 (no strings), nargs=1
+    /// (exact positive arity) — a code path the Helmholtz fixture never
+    /// exercises. Verify value, derivative, and second derivative match
+    /// the closed form at x = 8: cbrt(8) = 2, d/dx = 1/12, d2/dx2 = -1/144.
+    #[test]
+    fn eval_cbrt_matches_closed_form() {
+        let Some(path) = idaes_functions_dylib() else {
+            eprintln!("skipping: IDAES functions.dylib not present");
+            return;
+        };
+        let lib = ExternalLibrary::load(&path).expect("load");
+        let rf = lib.get("cbrt").expect("cbrt registered");
+        assert_eq!(rf.ty, 0, "cbrt should be FUNCADD_REAL_VALUED (type=0)");
+        assert_eq!(rf.nargs, 1, "cbrt should have exact arity 1");
+
+        let args = [ExternalArg::Real(8.0)];
+        let res = lib.eval("cbrt", &args, true, true).expect("eval");
+        let derivs = res.derivs.expect("derivs requested");
+        let hes = res.hessian.expect("hessian requested");
+        assert_eq!(derivs.len(), 1);
+        assert_eq!(hes.len(), 1, "nr=1 -> packed Hessian length 1");
+
+        // cbrt(8) = 2
+        assert!((res.value - 2.0).abs() < 1e-12, "value {}", res.value);
+        // d/dx cbrt(x) = 1/(3 x^(2/3)); at x=8, that's 1/12
+        assert!((derivs[0] - 1.0 / 12.0).abs() < 1e-12, "deriv {}", derivs[0]);
+        // d2/dx2 cbrt(x) = -2/(9 x^(5/3)); at x=8, that's -2/288 = -1/144
+        assert!((hes[0] + 1.0 / 144.0).abs() < 1e-12, "hes {}", hes[0]);
+    }
+
+    /// Exact positive arity is enforced: cbrt expects nargs=1, so calling
+    /// with 0 or 2 reals must error cleanly.
+    #[test]
+    fn eval_cbrt_arity_mismatch_errors() {
+        let Some(path) = idaes_functions_dylib() else {
+            eprintln!("skipping: IDAES functions.dylib not present");
+            return;
+        };
+        let lib = ExternalLibrary::load(&path).expect("load");
+        let too_few: [ExternalArg; 0] = [];
+        assert!(lib.eval("cbrt", &too_few, false, false).is_err());
+        let too_many = [ExternalArg::Real(1.0), ExternalArg::Real(2.0)];
+        assert!(lib.eval("cbrt", &too_many, false, false).is_err());
+    }
+
+    /// cbrt is type=0 — no string args allowed. Passing a string must be
+    /// rejected by our eval, not forwarded to the library.
+    #[test]
+    fn eval_cbrt_rejects_string_arg() {
+        let Some(path) = idaes_functions_dylib() else {
+            eprintln!("skipping: IDAES functions.dylib not present");
+            return;
+        };
+        let lib = ExternalLibrary::load(&path).expect("load");
+        let args = [ExternalArg::Str("nope")];
+        let err = lib
+            .eval("cbrt", &args, false, false)
+            .err()
+            .expect("string arg to type=0 function must error");
+        assert!(
+            err.to_lowercase().contains("string"),
+            "error should mention strings, got: {err}"
+        );
     }
 }
