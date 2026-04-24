@@ -2283,6 +2283,127 @@ fn update_dual_variables(
     mu_ks
 }
 
+/// Watchdog control-flow decision returned after update.
+enum WatchdogDecision {
+    Proceed,
+    Continue,
+}
+
+/// Maintain the watchdog state after an accepted step.
+///
+/// - Track consecutive shortened steps
+///   (`alpha_primal < 0.99 * alpha_primal_max`).
+/// - Activate the watchdog and snapshot state when the shortened-step
+///   counter hits `watchdog_shortened_iter_trigger`.
+/// - If the watchdog is active, check for sufficient progress versus
+///   the saved point; on success deactivate, on exhaustion
+///   (`watchdog_trial_iter_max`) revert to the saved state and
+///   request `Continue`.
+///
+/// Reference: Chamberlain et al. (1982); Ipopt's
+/// `IpBacktrackingLineSearch::DoBacktrackingLineSearch` watchdog.
+fn update_watchdog<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    options: &SolverOptions,
+    iteration: usize,
+    alpha_primal_max: f64,
+    filter: &mut Filter,
+    lbfgs_state: &mut Option<LbfgsIpmState>,
+    consecutive_shortened: &mut usize,
+    watchdog_active: &mut bool,
+    watchdog_trial_count: &mut usize,
+    watchdog_saved: &mut Option<WatchdogSavedState>,
+    linear_constraints: Option<&[bool]>,
+    lbfgs_mode: bool,
+) -> WatchdogDecision {
+    if state.alpha_primal < alpha_primal_max * 0.99 {
+        *consecutive_shortened += 1;
+    } else {
+        *consecutive_shortened = 0;
+    }
+
+    if !*watchdog_active
+        && *consecutive_shortened >= options.watchdog_shortened_iter_trigger
+    {
+        state.diagnostics.watchdog_activations += 1;
+        *watchdog_active = true;
+        *watchdog_trial_count = 0;
+        let wd_theta = state.constraint_violation();
+        let wd_phi = state.barrier_objective(options);
+        *watchdog_saved = Some(WatchdogSavedState {
+            x: state.x.clone(),
+            y: state.y.clone(),
+            z_l: state.z_l.clone(),
+            z_u: state.z_u.clone(),
+            v_l: state.v_l.clone(),
+            v_u: state.v_u.clone(),
+            mu: state.mu,
+            obj: state.obj,
+            g: state.g.clone(),
+            grad_f: state.grad_f.clone(),
+            filter_entries: filter.save_entries(),
+            theta: wd_theta,
+            phi: wd_phi,
+        });
+        *consecutive_shortened = 0;
+        log::debug!(
+            "Watchdog activated at iteration {} (theta={:.2e}, phi={:.2e})",
+            iteration, wd_theta, wd_phi
+        );
+    }
+
+    if *watchdog_active {
+        *watchdog_trial_count += 1;
+        if let Some(ref saved) = watchdog_saved {
+            let theta_now = state.constraint_violation();
+            let phi_now = state.barrier_objective(options);
+            let made_progress = filter.is_acceptable(theta_now, phi_now)
+                && (theta_now < (1.0 - 1e-5) * saved.theta
+                    || phi_now < saved.phi - 1e-5 * saved.theta);
+
+            if made_progress {
+                log::debug!(
+                    "Watchdog succeeded at trial {} (theta: {:.2e} -> {:.2e})",
+                    *watchdog_trial_count, saved.theta, theta_now
+                );
+                *watchdog_active = false;
+                *watchdog_trial_count = 0;
+                *watchdog_saved = None;
+            } else if *watchdog_trial_count >= options.watchdog_trial_iter_max {
+                log::debug!(
+                    "Watchdog reverting after {} trials",
+                    *watchdog_trial_count
+                );
+                let theta_now = state.constraint_violation();
+                let phi_now = state.barrier_objective(options);
+                filter.restore_entries(saved.filter_entries.clone());
+                filter.add(theta_now, phi_now);
+
+                state.x = saved.x.clone();
+                state.y = saved.y.clone();
+                state.z_l = saved.z_l.clone();
+                state.z_u = saved.z_u.clone();
+                state.v_l = saved.v_l.clone();
+                state.v_u = saved.v_u.clone();
+                state.mu = saved.mu;
+                state.obj = saved.obj;
+                state.g = saved.g.clone();
+                state.grad_f = saved.grad_f.clone();
+                let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+                update_lbfgs_hessian(lbfgs_state, state);
+
+                *watchdog_active = false;
+                *watchdog_trial_count = 0;
+                *watchdog_saved = None;
+                return WatchdogDecision::Continue;
+            }
+        }
+    }
+
+    WatchdogDecision::Proceed
+}
+
 /// Outcome of the post-step re-evaluation with α-halving recovery.
 enum PostStepEvalDecision {
     Proceed,
@@ -5974,94 +6095,23 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         // Step was accepted — reset consecutive restoration failure counter
         mu_state.consecutive_restoration_failures = 0;
 
-        // Watchdog: track consecutive shortened steps
-        if state.alpha_primal < alpha_primal_max * 0.99 {
-            consecutive_shortened += 1;
-        } else {
-            consecutive_shortened = 0;
-        }
-
-        // Watchdog activation: save state when too many shortened steps
-        if !watchdog_active
-            && consecutive_shortened >= options.watchdog_shortened_iter_trigger
-        {
-            state.diagnostics.watchdog_activations += 1;
-            watchdog_active = true;
-            watchdog_trial_count = 0;
-            let wd_theta = state.constraint_violation();
-            let wd_phi = state.barrier_objective(options);
-            watchdog_saved = Some(WatchdogSavedState {
-                x: state.x.clone(),
-                y: state.y.clone(),
-                z_l: state.z_l.clone(),
-                z_u: state.z_u.clone(),
-                v_l: state.v_l.clone(),
-                v_u: state.v_u.clone(),
-                mu: state.mu,
-                obj: state.obj,
-                g: state.g.clone(),
-                grad_f: state.grad_f.clone(),
-                filter_entries: filter.save_entries(),
-                theta: wd_theta,
-                phi: wd_phi,
-            });
-            consecutive_shortened = 0;
-            log::debug!(
-                "Watchdog activated at iteration {} (theta={:.2e}, phi={:.2e})",
-                iteration, wd_theta, wd_phi
-            );
-        }
-
-        // Watchdog progress check
-        if watchdog_active {
-            watchdog_trial_count += 1;
-            if let Some(ref saved) = watchdog_saved {
-                let theta_now = state.constraint_violation();
-                let phi_now = state.barrier_objective(options);
-                // Check if current point is filter-acceptable from saved state
-                let made_progress = filter.is_acceptable(theta_now, phi_now)
-                    && (theta_now < (1.0 - 1e-5) * saved.theta
-                        || phi_now < saved.phi - 1e-5 * saved.theta);
-
-                if made_progress {
-                    log::debug!(
-                        "Watchdog succeeded at trial {} (theta: {:.2e} -> {:.2e})",
-                        watchdog_trial_count, saved.theta, theta_now
-                    );
-                    watchdog_active = false;
-                    watchdog_trial_count = 0;
-                    watchdog_saved = None;
-                } else if watchdog_trial_count >= options.watchdog_trial_iter_max {
-                    // Revert to saved state
-                    log::debug!(
-                        "Watchdog reverting after {} trials",
-                        watchdog_trial_count
-                    );
-                    // Add explored region to filter before reverting
-                    let theta_now = state.constraint_violation();
-                    let phi_now = state.barrier_objective(options);
-                    filter.restore_entries(saved.filter_entries.clone());
-                    filter.add(theta_now, phi_now);
-
-                    state.x = saved.x.clone();
-                    state.y = saved.y.clone();
-                    state.z_l = saved.z_l.clone();
-                    state.z_u = saved.z_u.clone();
-                    state.v_l = saved.v_l.clone();
-                    state.v_u = saved.v_u.clone();
-                    state.mu = saved.mu;
-                    state.obj = saved.obj;
-                    state.g = saved.g.clone();
-                    state.grad_f = saved.grad_f.clone();
-                    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        update_lbfgs_hessian(&mut lbfgs_state, &mut state);
-
-                    watchdog_active = false;
-                    watchdog_trial_count = 0;
-                    watchdog_saved = None;
-                    continue;
-                }
-            }
+        match update_watchdog(
+            &mut state,
+            problem,
+            options,
+            iteration,
+            alpha_primal_max,
+            &mut filter,
+            &mut lbfgs_state,
+            &mut consecutive_shortened,
+            &mut watchdog_active,
+            &mut watchdog_trial_count,
+            &mut watchdog_saved,
+            linear_constraints.as_deref(),
+            lbfgs_mode,
+        ) {
+            WatchdogDecision::Proceed => {}
+            WatchdogDecision::Continue => continue,
         }
 
         timings.line_search += t_ls.elapsed();
