@@ -2089,6 +2089,265 @@ fn dump_kkt_matrix(
     }
 }
 
+/// State threaded through the convergence-check promotion attempts.
+///
+/// Groups the loop-spanning history + one-shot promotion flags so the
+/// `check_convergence_and_handle_promotions` helper doesn't need a 20-param
+/// signature. All fields live in `solve_ipm`'s stack frame; this struct is
+/// only a bundle of mutable references.
+struct ConvergenceWorkspace<'a> {
+    du_history: &'a mut Vec<f64>,
+    iterate_history: &'a mut Vec<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>)>,
+    tried_iterate_averaging: &'a mut bool,
+    tried_active_set: &'a mut bool,
+    tried_compl_polish: &'a mut bool,
+}
+
+/// Check convergence status and, on Acceptable, try three promotion
+/// strategies in order: iterate averaging (oscillation smoothing), active-set
+/// reduced solve, and complementarity polishing via multiplier snap. Each
+/// promotion attempt is one-shot (guarded by its `tried_*` flag). Any
+/// successful promotion returns `Some(SolveResult { Optimal })`.
+///
+/// Returns:
+/// - `Some(SolveResult)` when the solver should terminate (Converged,
+///   Acceptable, promoted Optimal, or Diverging/Unbounded).
+/// - `None` when iteration should continue (NotConverged).
+///
+/// Ipopt parallel: `IpIpoptAlg::Optimize` → `IpConvCheck::CheckConvergence`
+/// plus the near-tolerance polishing heuristics (`RecalcIpoptData`,
+/// multiplier snap), which live inline in Ipopt as well.
+///
+/// Extracted from `solve_ipm` as part of the v0.8 main-loop decomposition
+/// (pre-work step 2).
+#[allow(clippy::too_many_arguments)]
+fn check_convergence_and_handle_promotions<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    options: &SolverOptions,
+    primal_inf_max: f64,
+    dual_inf: f64,
+    dual_inf_unscaled: f64,
+    compl_inf: f64,
+    multiplier_sum: f64,
+    multiplier_count: usize,
+    ws: &mut ConvergenceWorkspace,
+    timings: &PhaseTimings,
+    iteration: usize,
+    ipm_start: Instant,
+    linear_constraints: Option<&[bool]>,
+    lbfgs_mode: bool,
+) -> Option<SolveResult> {
+    const AVG_WINDOW: usize = 6;
+    let n = state.n;
+    let m = state.m;
+
+    let conv_info = ConvergenceInfo {
+        primal_inf: primal_inf_max,
+        dual_inf,
+        dual_inf_unscaled,
+        compl_inf,
+        mu: state.mu,
+        objective: state.obj,
+        multiplier_sum,
+        multiplier_count,
+    };
+
+    // Track iterate history for oscillation detection (Strategy 1)
+    ws.du_history.push(dual_inf);
+    ws.iterate_history.push((
+        state.x.clone(), state.y.clone(), state.z_l.clone(), state.z_u.clone(),
+    ));
+    if ws.du_history.len() > AVG_WINDOW {
+        ws.du_history.remove(0);
+        ws.iterate_history.remove(0);
+    }
+
+    match check_convergence(&conv_info, options, state.consecutive_acceptable) {
+        ConvergenceStatus::Converged => {
+            if options.print_level >= 5 {
+                timings.print_summary(iteration + 1, ipm_start.elapsed());
+            }
+            Some(make_result(state, SolveStatus::Optimal))
+        }
+        ConvergenceStatus::Acceptable => {
+            // Strategy 1: Try iterate averaging before declaring Acceptable
+            if !*ws.tried_iterate_averaging && ws.du_history.len() == AVG_WINDOW {
+                // Check for oscillation: count sign changes in du differences
+                let mut sign_changes = 0;
+                for w in 1..ws.du_history.len() - 1 {
+                    let d1 = ws.du_history[w] - ws.du_history[w - 1];
+                    let d2 = ws.du_history[w + 1] - ws.du_history[w];
+                    if d1 * d2 < 0.0 {
+                        sign_changes += 1;
+                    }
+                }
+                if sign_changes >= AVG_WINDOW / 2 {
+                    *ws.tried_iterate_averaging = true;
+                    // Average the iterates
+                    let len = ws.iterate_history.len() as f64;
+                    let mut avg_x = vec![0.0; n];
+                    let mut avg_y = vec![0.0; m];
+                    let mut avg_zl = vec![0.0; n];
+                    let mut avg_zu = vec![0.0; n];
+                    for (hx, hy, hzl, hzu) in ws.iterate_history.iter() {
+                        for i in 0..n { avg_x[i] += hx[i] / len; }
+                        for i in 0..m { avg_y[i] += hy[i] / len; }
+                        for i in 0..n { avg_zl[i] += hzl[i] / len; }
+                        for i in 0..n { avg_zu[i] += hzu[i] / len; }
+                    }
+                    // Clamp averaged point to bounds and ensure z >= 0
+                    for i in 0..n {
+                        avg_x[i] = avg_x[i].clamp(
+                            if state.x_l[i].is_finite() { state.x_l[i] + 1e-15 } else { f64::NEG_INFINITY },
+                            if state.x_u[i].is_finite() { state.x_u[i] - 1e-15 } else { f64::INFINITY },
+                        );
+                        avg_zl[i] = avg_zl[i].max(0.0);
+                        avg_zu[i] = avg_zu[i].max(0.0);
+                    }
+                    // Evaluate convergence at averaged point
+                    let saved_x = state.x.clone();
+                    let saved_y = state.y.clone();
+                    let saved_zl = state.z_l.clone();
+                    let saved_zu = state.z_u.clone();
+                    state.x.copy_from_slice(&avg_x);
+                    state.y.copy_from_slice(&avg_y);
+                    state.z_l.copy_from_slice(&avg_zl);
+                    state.z_u.copy_from_slice(&avg_zu);
+                    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+                    let avg_pr = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
+                    let avg_du = convergence::dual_infeasibility(
+                        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+                        &avg_y, &avg_zl, &avg_zu, n,
+                    );
+                    let avg_compl = convergence::complementarity_error(
+                        &avg_x, &state.x_l, &state.x_u, &avg_zl, &avg_zu, 0.0,
+                    );
+                    let avg_conv = ConvergenceInfo {
+                        primal_inf: avg_pr, dual_inf: avg_du,
+                        dual_inf_unscaled: avg_du,
+                        compl_inf: avg_compl,
+                        mu: state.mu, objective: state.obj,
+                        multiplier_sum: avg_y.iter().map(|v| v.abs()).sum::<f64>()
+                            + avg_zl.iter().map(|v| v.abs()).sum::<f64>()
+                            + avg_zu.iter().map(|v| v.abs()).sum::<f64>(),
+                        multiplier_count: m + 2 * n,
+                    };
+                    if let ConvergenceStatus::Converged = check_convergence(&avg_conv, options, 0) {
+                        if options.print_level >= 3 {
+                            rip_log!("ripopt: Iterate averaging promoted near-tolerance -> Optimal (du={:.2e})", avg_du);
+                        }
+                        return Some(make_result(state, SolveStatus::Optimal));
+                    }
+                    // Restore original state if averaging didn't help
+                    state.x.copy_from_slice(&saved_x);
+                    state.y.copy_from_slice(&saved_y);
+                    state.z_l.copy_from_slice(&saved_zl);
+                    state.z_u.copy_from_slice(&saved_zu);
+                    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+                }
+            }
+
+            // Strategy 3: Try active set identification + reduced solve
+            if !*ws.tried_active_set {
+                *ws.tried_active_set = true;
+                if let Some(result) = try_active_set_solve(state, problem, options, linear_constraints, lbfgs_mode) {
+                    if options.print_level >= 3 {
+                        rip_log!("ripopt: Active set solve promoted Acceptable -> Optimal");
+                    }
+                    return Some(result);
+                }
+            }
+
+            // Strategy 4: Complementarity polishing via multiplier snap
+            // When complementarity is the bottleneck (primal/dual already good enough),
+            // snap bound multipliers to reduce complementarity, then recheck convergence.
+            if !*ws.tried_compl_polish {
+                let compl_inf_now = conv_info.compl_inf;
+                let s_d_now = {
+                    let s_max: f64 = 100.0;
+                    let s_d_max: f64 = 1e4;
+                    if conv_info.multiplier_count > 0 {
+                        ((s_max.max(conv_info.multiplier_sum / conv_info.multiplier_count as f64)) / s_max).min(s_d_max)
+                    } else { 1.0 }
+                };
+                let compl_tol_scaled = options.tol * s_d_now;
+                if compl_inf_now > compl_tol_scaled
+                    && conv_info.primal_inf <= 100.0 * options.tol
+                    && conv_info.dual_inf <= 100.0 * options.tol * s_d_now
+                {
+                    *ws.tried_compl_polish = true;
+                    // For variables near bounds, snap multipliers to reduce complementarity:
+                    // If x_i ≈ x_l_i (gap < tol), keep z_l_i from stationarity (z_opt)
+                    // If x_i is interior (gap > tol), set z_l_i = 0
+                    let saved_zl = state.z_l.clone();
+                    let saved_zu = state.z_u.clone();
+                    let gap_tol = 1e-6;
+                    for i in 0..n {
+                        let gap_l = if state.x_l[i].is_finite() { state.x[i] - state.x_l[i] } else { f64::INFINITY };
+                        let gap_u = if state.x_u[i].is_finite() { state.x_u[i] - state.x[i] } else { f64::INFINITY };
+                        // If clearly interior to lower bound, zero out z_l
+                        if gap_l > gap_tol {
+                            state.z_l[i] = 0.0;
+                        }
+                        // If clearly interior to upper bound, zero out z_u
+                        if gap_u > gap_tol {
+                            state.z_u[i] = 0.0;
+                        }
+                    }
+                    // Recompute convergence with snapped multipliers
+                    let snap_du = convergence::dual_infeasibility(
+                        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+                        &state.y, &state.z_l, &state.z_u, n,
+                    );
+                    let snap_compl = convergence::complementarity_error(
+                        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
+                    );
+                    let snap_mult_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
+                        + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
+                        + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
+                    let snap_conv = ConvergenceInfo {
+                        primal_inf: conv_info.primal_inf,
+                        dual_inf: snap_du,
+                        dual_inf_unscaled: snap_du,
+                        compl_inf: snap_compl,
+                        mu: state.mu,
+                        objective: state.obj,
+                        multiplier_sum: snap_mult_sum,
+                        multiplier_count: m + 2 * n,
+                    };
+                    if let ConvergenceStatus::Converged = check_convergence(&snap_conv, options, 0) {
+                        if options.print_level >= 3 {
+                            rip_log!(
+                                "ripopt: Complementarity snap promoted near-tolerance -> Optimal (compl {:.2e} -> {:.2e}, du {:.2e})",
+                                compl_inf_now, snap_compl, snap_du
+                            );
+                        }
+                        return Some(make_result(state, SolveStatus::Optimal));
+                    }
+                    // Snap didn't work — restore multipliers
+                    state.z_l.copy_from_slice(&saved_zl);
+                    state.z_u.copy_from_slice(&saved_zu);
+                }
+            }
+
+            if options.print_level >= 5 {
+                timings.print_summary(iteration + 1, ipm_start.elapsed());
+            }
+            // Promoted to SolveStatus::Acceptable (matches Ipopt's
+            // Solved_To_Acceptable_Level). Previously this fell through
+            // to NumericalError, which caused problems that met Ipopt's
+            // default acceptable-level tolerances to show as unsolved in
+            // benchmarks. Benchmark reporter counts Acceptable as solved.
+            Some(make_result(state, SolveStatus::Acceptable))
+        }
+        ConvergenceStatus::Diverging => {
+            Some(make_result(state, SolveStatus::Unbounded))
+        }
+        ConvergenceStatus::NotConverged => None,
+    }
+}
+
 /// Check wall-clock and early-stall time limits at the top of each iteration.
 ///
 /// Returns `Some(SolveResult)` to terminate the loop if either:
@@ -2960,215 +3219,38 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             return result;
         }
 
-        // Compute multiplier scaling for convergence check
+        // Compute multiplier scaling (also used by the consecutive-acceptable
+        // tracker further below, so kept here rather than inside the helper).
         let multiplier_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
             + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
             + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
         let multiplier_count = m + 2 * n;
 
-        // Check convergence. Use max-norm primal_inf (per-constraint satisfaction)
-        // and iterative-z dual_inf (honest Lagrangian residual, Ipopt-style).
-        let conv_info = ConvergenceInfo {
-            primal_inf: primal_inf_max,
+        let mut conv_ws = ConvergenceWorkspace {
+            du_history: &mut du_history,
+            iterate_history: &mut iterate_history,
+            tried_iterate_averaging: &mut tried_iterate_averaging,
+            tried_active_set: &mut tried_active_set,
+            tried_compl_polish: &mut _tried_compl_polish,
+        };
+        if let Some(result) = check_convergence_and_handle_promotions(
+            &mut state,
+            problem,
+            options,
+            primal_inf_max,
             dual_inf,
             dual_inf_unscaled,
             compl_inf,
-            mu: state.mu,
-            objective: state.obj,
             multiplier_sum,
             multiplier_count,
-        };
-
-        // Track iterate history for oscillation detection (Strategy 1)
-        du_history.push(dual_inf);
-        iterate_history.push((state.x.clone(), state.y.clone(), state.z_l.clone(), state.z_u.clone()));
-        if du_history.len() > AVG_WINDOW {
-            du_history.remove(0);
-            iterate_history.remove(0);
-        }
-
-        match check_convergence(&conv_info, options, state.consecutive_acceptable) {
-            ConvergenceStatus::Converged => {
-                if options.print_level >= 5 {
-                    timings.print_summary(iteration + 1, ipm_start.elapsed());
-                }
-                return make_result(&state, SolveStatus::Optimal);
-            }
-            ConvergenceStatus::Acceptable => {
-                // Strategy 1: Try iterate averaging before declaring Acceptable
-                if !tried_iterate_averaging && du_history.len() == AVG_WINDOW {
-                    // Check for oscillation: count sign changes in du differences
-                    let mut sign_changes = 0;
-                    for w in 1..du_history.len() - 1 {
-                        let d1 = du_history[w] - du_history[w - 1];
-                        let d2 = du_history[w + 1] - du_history[w];
-                        if d1 * d2 < 0.0 {
-                            sign_changes += 1;
-                        }
-                    }
-                    if sign_changes >= AVG_WINDOW / 2 {
-                        _ = std::mem::replace(&mut tried_iterate_averaging, true);
-                        // Average the iterates
-                        let len = iterate_history.len() as f64;
-                        let mut avg_x = vec![0.0; n];
-                        let mut avg_y = vec![0.0; m];
-                        let mut avg_zl = vec![0.0; n];
-                        let mut avg_zu = vec![0.0; n];
-                        for (hx, hy, hzl, hzu) in &iterate_history {
-                            for i in 0..n { avg_x[i] += hx[i] / len; }
-                            for i in 0..m { avg_y[i] += hy[i] / len; }
-                            for i in 0..n { avg_zl[i] += hzl[i] / len; }
-                            for i in 0..n { avg_zu[i] += hzu[i] / len; }
-                        }
-                        // Clamp averaged point to bounds and ensure z >= 0
-                        for i in 0..n {
-                            avg_x[i] = avg_x[i].clamp(
-                                if state.x_l[i].is_finite() { state.x_l[i] + 1e-15 } else { f64::NEG_INFINITY },
-                                if state.x_u[i].is_finite() { state.x_u[i] - 1e-15 } else { f64::INFINITY },
-                            );
-                            avg_zl[i] = avg_zl[i].max(0.0);
-                            avg_zu[i] = avg_zu[i].max(0.0);
-                        }
-                        // Evaluate convergence at averaged point
-                        let saved_x = state.x.clone();
-                        let saved_y = state.y.clone();
-                        let saved_zl = state.z_l.clone();
-                        let saved_zu = state.z_u.clone();
-                        state.x.copy_from_slice(&avg_x);
-                        state.y.copy_from_slice(&avg_y);
-                        state.z_l.copy_from_slice(&avg_zl);
-                        state.z_u.copy_from_slice(&avg_zu);
-                        let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-                        let avg_pr = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
-                        let avg_du = convergence::dual_infeasibility(
-                            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-                            &avg_y, &avg_zl, &avg_zu, n,
-                        );
-                        let avg_compl = convergence::complementarity_error(
-                            &avg_x, &state.x_l, &state.x_u, &avg_zl, &avg_zu, 0.0,
-                        );
-                        let avg_conv = ConvergenceInfo {
-                            primal_inf: avg_pr, dual_inf: avg_du,
-                            dual_inf_unscaled: avg_du,
-                            compl_inf: avg_compl,
-                            mu: state.mu, objective: state.obj,
-                            multiplier_sum: avg_y.iter().map(|v| v.abs()).sum::<f64>()
-                                + avg_zl.iter().map(|v| v.abs()).sum::<f64>()
-                                + avg_zu.iter().map(|v| v.abs()).sum::<f64>(),
-                            multiplier_count: m + 2 * n,
-                        };
-                        if let ConvergenceStatus::Converged = check_convergence(&avg_conv, options, 0) {
-                            if options.print_level >= 3 {
-                                rip_log!("ripopt: Iterate averaging promoted near-tolerance -> Optimal (du={:.2e})", avg_du);
-                            }
-                            return make_result(&state, SolveStatus::Optimal);
-                        }
-                        // Restore original state if averaging didn't help
-                        state.x.copy_from_slice(&saved_x);
-                        state.y.copy_from_slice(&saved_y);
-                        state.z_l.copy_from_slice(&saved_zl);
-                        state.z_u.copy_from_slice(&saved_zu);
-                        let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-                    }
-                }
-
-                // Strategy 3: Try active set identification + reduced solve
-                if !tried_active_set {
-                    _ = std::mem::replace(&mut tried_active_set, true);
-                    if let Some(result) = try_active_set_solve(&mut state, problem, options, linear_constraints.as_deref(), lbfgs_mode) {
-                        if options.print_level >= 3 {
-                            rip_log!("ripopt: Active set solve promoted Acceptable -> Optimal");
-                        }
-                        return result;
-                    }
-                }
-
-                // Strategy 4: Complementarity polishing via multiplier snap
-                // When complementarity is the bottleneck (primal/dual already good enough),
-                // snap bound multipliers to reduce complementarity, then recheck convergence.
-                if !_tried_compl_polish {
-                    let compl_inf_now = conv_info.compl_inf;
-                    let s_d_now = {
-                        let s_max: f64 = 100.0;
-                        let s_d_max: f64 = 1e4;
-                        if conv_info.multiplier_count > 0 {
-                            ((s_max.max(conv_info.multiplier_sum / conv_info.multiplier_count as f64)) / s_max).min(s_d_max)
-                        } else { 1.0 }
-                    };
-                    let compl_tol_scaled = options.tol * s_d_now;
-                    if compl_inf_now > compl_tol_scaled
-                        && conv_info.primal_inf <= 100.0 * options.tol
-                        && conv_info.dual_inf <= 100.0 * options.tol * s_d_now
-                    {
-                        _tried_compl_polish = true;
-                        // For variables near bounds, snap multipliers to reduce complementarity:
-                        // If x_i ≈ x_l_i (gap < tol), keep z_l_i from stationarity (z_opt)
-                        // If x_i is interior (gap > tol), set z_l_i = 0
-                        let saved_zl = state.z_l.clone();
-                        let saved_zu = state.z_u.clone();
-                        let gap_tol = 1e-6;
-                        for i in 0..n {
-                            let gap_l = if state.x_l[i].is_finite() { state.x[i] - state.x_l[i] } else { f64::INFINITY };
-                            let gap_u = if state.x_u[i].is_finite() { state.x_u[i] - state.x[i] } else { f64::INFINITY };
-                            // If clearly interior to lower bound, zero out z_l
-                            if gap_l > gap_tol {
-                                state.z_l[i] = 0.0;
-                            }
-                            // If clearly interior to upper bound, zero out z_u
-                            if gap_u > gap_tol {
-                                state.z_u[i] = 0.0;
-                            }
-                        }
-                        // Recompute convergence with snapped multipliers
-                        let snap_du = convergence::dual_infeasibility(
-                            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-                            &state.y, &state.z_l, &state.z_u, n,
-                        );
-                        let snap_compl = convergence::complementarity_error(
-                            &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
-                        );
-                        let snap_mult_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
-                            + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
-                            + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
-                        let snap_conv = ConvergenceInfo {
-                            primal_inf: conv_info.primal_inf,
-                            dual_inf: snap_du,
-                            dual_inf_unscaled: snap_du,
-                            compl_inf: snap_compl,
-                            mu: state.mu,
-                            objective: state.obj,
-                            multiplier_sum: snap_mult_sum,
-                            multiplier_count: m + 2 * n,
-                        };
-                        if let ConvergenceStatus::Converged = check_convergence(&snap_conv, options, 0) {
-                            if options.print_level >= 3 {
-                                rip_log!(
-                                    "ripopt: Complementarity snap promoted near-tolerance -> Optimal (compl {:.2e} -> {:.2e}, du {:.2e})",
-                                    compl_inf_now, snap_compl, snap_du
-                                );
-                            }
-                            return make_result(&state, SolveStatus::Optimal);
-                        }
-                        // Snap didn't work — restore multipliers
-                        state.z_l.copy_from_slice(&saved_zl);
-                        state.z_u.copy_from_slice(&saved_zu);
-                    }
-                }
-
-                if options.print_level >= 5 {
-                    timings.print_summary(iteration + 1, ipm_start.elapsed());
-                }
-                // Promoted to SolveStatus::Acceptable (matches Ipopt's
-                // Solved_To_Acceptable_Level). Previously this fell through
-                // to NumericalError, which caused problems that met Ipopt's
-                // default acceptable-level tolerances to show as unsolved in
-                // benchmarks. Benchmark reporter counts Acceptable as solved.
-                return make_result(&state, SolveStatus::Acceptable);
-            }
-            ConvergenceStatus::Diverging => {
-                return make_result(&state, SolveStatus::Unbounded);
-            }
-            ConvergenceStatus::NotConverged => {}
+            &mut conv_ws,
+            &timings,
+            iteration,
+            ipm_start,
+            linear_constraints.as_deref(),
+            lbfgs_mode,
+        ) {
+            return result;
         }
 
         // Track consecutive acceptable iterations (using same criteria as check_convergence)
