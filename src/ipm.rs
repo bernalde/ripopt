@@ -2805,6 +2805,69 @@ fn update_watchdog<P: NlpProblem>(
     WatchdogDecision::Proceed
 }
 
+/// First-iteration bandwidth detection for the sparse condensed Schur
+/// complement. On `iteration == 0` with `use_sparse_condensed`, measure
+/// the bandwidth of S and either:
+///   - `bw > n/2`: abandon sparse condensed, rebuild the full augmented
+///     KKT via `kkt::assemble_kkt`, and keep the sparse solver;
+///   - `bw*bw <= n`: swap in a `BandedLdl` solver;
+///   - otherwise: keep the current sparse solver.
+///
+/// The dense-condensed path has no bandwidth concept, so this is a
+/// no-op on that path.
+#[allow(clippy::too_many_arguments)]
+fn adjust_sparse_condensed_bandwidth<P: NlpProblem>(
+    state: &SolverState,
+    _problem: &P,
+    options: &SolverOptions,
+    n: usize,
+    m: usize,
+    use_sparse: bool,
+    use_sparse_condensed: bool,
+    sigma: &[f64],
+    sparse_condensed_system: &mut Option<kkt::SparseCondensedKktSystem>,
+    kkt_system_opt: &mut Option<kkt::KktSystem>,
+    lin_solver: &mut Box<dyn LinearSolver>,
+    disable_sparse_condensed: &mut bool,
+) {
+    if !use_sparse_condensed {
+        return;
+    }
+    let sc_bw = sparse_condensed_system.as_ref().map(|sc| {
+        BandedLdl::compute_bandwidth(&sc.matrix.triplet_rows, &sc.matrix.triplet_cols)
+    });
+    let Some(bw) = sc_bw else { return };
+
+    if bw > n / 2 {
+        // Condensed Schur complement is essentially dense — switch to full
+        // augmented KKT with the sparse solver (rmumps/AMD/ND handles this).
+        if options.print_level >= 3 {
+            rip_log!(
+                "ripopt: Sparse condensed S has bandwidth {} for n={}, switching to dense condensed KKT",
+                bw, n
+            );
+        }
+        *disable_sparse_condensed = true;
+        *sparse_condensed_system = None;
+        *kkt_system_opt = Some(kkt::assemble_kkt(
+            n, m,
+            &state.hess_rows, &state.hess_cols, &state.hess_vals,
+            &state.jac_rows, &state.jac_cols, &state.jac_vals,
+            sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
+            &state.y, &state.z_l, &state.z_u,
+            &state.x, &state.x_l, &state.x_u, state.mu,
+            use_sparse, &state.v_l, &state.v_u,
+        ));
+    } else if bw * bw <= n {
+        if options.print_level >= 5 {
+            rip_log!("ripopt: Sparse condensed S has bandwidth {} for n={}, using banded solver", bw, n);
+        }
+        *lin_solver = Box::new(BandedLdl::new());
+    } else if options.print_level >= 5 {
+        rip_log!("ripopt: Sparse condensed S has bandwidth {} for n={}, using sparse solver", bw, n);
+    }
+}
+
 /// Post-step "acceptable" tracking. Mirrors the pre-step acceptable check
 /// (see `track_consecutive_acceptable`) but is evaluated at the freshly
 /// accepted iterate — catches cases where the step just taken pushes
@@ -5737,53 +5800,23 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         } = assemble_kkt_systems(&state, n, m, use_sparse, disable_sparse_condensed);
         timings.kkt_assembly += t_kkt.elapsed();
 
-        // On first iteration with sparse condensed, detect bandwidth for the condensed system.
-        // If the condensed Schur complement is essentially dense (bandwidth > n/2),
-        // abandon it and switch to the full augmented KKT system which MUMPS can
-        // reorder efficiently.
-        if iteration == 0 && use_sparse_condensed {
-            // Detect bandwidth and decide whether to keep sparse condensed or switch to full augmented.
-            let sc_bw = sparse_condensed_system.as_ref().map(|sc| {
-                BandedLdl::compute_bandwidth(&sc.matrix.triplet_rows, &sc.matrix.triplet_cols)
-            });
-            if let Some(bw) = sc_bw {
-                if bw > n / 2 {
-                    // Condensed Schur complement is essentially dense.
-                    // Switch to dense condensed KKT (n×n) instead of sparse augmented
-                    // ((n+m)×(n+m)) — the dense condensed system is always smaller.
-                    // For PDE problems with scrambled variable ordering, rmumps on
-                    // the augmented system has catastrophic fill-in.
-                    if options.print_level >= 3 {
-                        rip_log!(
-                            "ripopt: Sparse condensed S has bandwidth {} for n={}, switching to dense condensed KKT",
-                            bw, n
-                        );
-                    }
-                    disable_sparse_condensed = true;
-                    sparse_condensed_system = None;
-                    // Switch to full augmented KKT with sparse solver.
-                    // rmumps with AMD/ND ordering should handle this efficiently.
-                    kkt_system_opt = Some(kkt::assemble_kkt(
-                        n, m,
-                        &state.hess_rows, &state.hess_cols, &state.hess_vals,
-                        &state.jac_rows, &state.jac_cols, &state.jac_vals,
-                        &sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
-                        &state.y, &state.z_l, &state.z_u,
-                        &state.x, &state.x_l, &state.x_u, state.mu,
-                        use_sparse, &state.v_l, &state.v_u,
-                    ));
-                    // DO NOT use dense condensed — BK on n=2542 takes ~6s per factor.
-                    // The sparse solver on the augmented system should be fast with
-                    // proper ordering. If rmumps is slow, the fix belongs in rmumps.
-                } else if bw * bw <= n {
-                    if options.print_level >= 5 {
-                        rip_log!("ripopt: Sparse condensed S has bandwidth {} for n={}, using banded solver", bw, n);
-                    }
-                    lin_solver = Box::new(BandedLdl::new());
-                } else if options.print_level >= 5 {
-                    rip_log!("ripopt: Sparse condensed S has bandwidth {} for n={}, using sparse solver", bw, n);
-                }
-            }
+        // On first iteration with sparse condensed, detect bandwidth and pick
+        // the right downstream solver (full augmented / banded / sparse).
+        if iteration == 0 {
+            adjust_sparse_condensed_bandwidth(
+                &state,
+                problem,
+                options,
+                n,
+                m,
+                use_sparse,
+                use_sparse_condensed,
+                &sigma,
+                &mut sparse_condensed_system,
+                &mut kkt_system_opt,
+                &mut lin_solver,
+                &mut disable_sparse_condensed,
+            );
         }
 
         let (mut ic_delta_w, mut ic_delta_c) = match factor_kkt_with_recovery(
