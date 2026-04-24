@@ -2630,6 +2630,53 @@ fn update_dual_variables(
 /// condensed (this helper only runs on the full-augmented path).
 ///
 /// Reference: Gondzio (1994, Comput. Optim. Appl.); Gondzio (2007).
+/// Build the Gondzio multiple-centrality-corrections (MCC)
+/// corrector RHS for the augmented KKT system. For each bound,
+/// projects the trial complementarity `c = z·s` at the current
+/// step `alpha_mcc` onto the centrality interval
+/// `[beta_min·μ_target, beta_max·μ_target]`; only complementarities
+/// outside this band contribute, with sign chosen so adding the
+/// correction step pulls `c` back inside.
+///
+/// Returns the RHS vector (zero outside the bound rows) and a
+/// boolean indicating whether at least one bound contributed —
+/// when no bound contributes, the caller short-circuits the loop.
+fn build_mcc_corrector_rhs(
+    state: &SolverState,
+    kkt_dim: usize,
+    alpha_mcc: f64,
+    mu_target: f64,
+    beta_min: f64,
+    beta_max: f64,
+    n: usize,
+) -> (Vec<f64>, bool) {
+    let mut rhs_mcc = vec![0.0_f64; kkt_dim];
+    let mut needs_correction = false;
+    for i in 0..n {
+        if state.x_l[i].is_finite() {
+            let s_t = (state.x[i] + alpha_mcc * state.dx[i]
+                - state.x_l[i]).max(1e-20);
+            let z_t = (state.z_l[i] + alpha_mcc * state.dz_l[i]).max(1e-20);
+            let c = z_t * s_t;
+            if c < beta_min * mu_target || c > beta_max * mu_target {
+                rhs_mcc[i] += (mu_target - c) / s_t;
+                needs_correction = true;
+            }
+        }
+        if state.x_u[i].is_finite() {
+            let s_t = (state.x_u[i] - state.x[i]
+                - alpha_mcc * state.dx[i]).max(1e-20);
+            let z_t = (state.z_u[i] + alpha_mcc * state.dz_u[i]).max(1e-20);
+            let c = z_t * s_t;
+            if c < beta_min * mu_target || c > beta_max * mu_target {
+                rhs_mcc[i] -= (mu_target - c) / s_t;
+                needs_correction = true;
+            }
+        }
+    }
+    (rhs_mcc, needs_correction)
+}
+
 /// Maximum step size α such that the iterate stays within
 /// `tau_mcc` × distance-to-boundary of the bounds for both the
 /// primal variables (lower and upper) and the bound multipliers.
@@ -2694,32 +2741,9 @@ fn apply_gondzio_mcc(
     let dx_norm_orig: f64 = state.dx.iter().map(|v| v * v).sum::<f64>().sqrt();
 
     for _mcc_iter in 0..options.gondzio_mcc_max {
-        let mut rhs_mcc = vec![0.0_f64; kkt.dim];
-        let mut needs_correction = false;
-
-        for i in 0..n {
-            if state.x_l[i].is_finite() {
-                let s_t = (state.x[i] + alpha_mcc * state.dx[i]
-                    - state.x_l[i]).max(1e-20);
-                let z_t = (state.z_l[i] + alpha_mcc * state.dz_l[i]).max(1e-20);
-                let c = z_t * s_t;
-                if c < beta_min * mu_target || c > beta_max * mu_target {
-                    rhs_mcc[i] += (mu_target - c) / s_t;
-                    needs_correction = true;
-                }
-            }
-            if state.x_u[i].is_finite() {
-                let s_t = (state.x_u[i] - state.x[i]
-                    - alpha_mcc * state.dx[i]).max(1e-20);
-                let z_t = (state.z_u[i] + alpha_mcc * state.dz_u[i]).max(1e-20);
-                let c = z_t * s_t;
-                if c < beta_min * mu_target || c > beta_max * mu_target {
-                    rhs_mcc[i] -= (mu_target - c) / s_t;
-                    needs_correction = true;
-                }
-            }
-        }
-
+        let (rhs_mcc, needs_correction) = build_mcc_corrector_rhs(
+            state, kkt.dim, alpha_mcc, mu_target, beta_min, beta_max, n,
+        );
         if !needs_correction {
             break;
         }
