@@ -2205,6 +2205,260 @@ fn assemble_kkt_systems(
     }
 }
 
+/// Outcome of one factorization attempt with inertia correction.
+///
+/// `Continue` and `Return` correspond to the main loop's `continue`
+/// and early-return paths after a recovery branch. `Proceed` passes
+/// the regularization magnitudes `(delta_w, delta_c)` back to the
+/// caller for use during iterative refinement.
+enum FactorDecision {
+    Proceed { ic_delta_w: f64, ic_delta_c: f64 },
+    Continue,
+    Return(SolveResult),
+}
+
+/// Factor the augmented KKT system with inertia correction, handling
+/// the recovery cascade on failure.
+///
+/// No-op when `kkt_system_opt` is `None` (condensed paths do their own
+/// factorization downstream). On success returns the inertia-correction
+/// `(delta_w, delta_c)` for use in iterative refinement.
+///
+/// Recovery cascade on factorization failure:
+/// 1. Early-iteration (< 5) perturbation sweep across scales 1e-4..1e-1
+///    with post-perturbation re-factorization; success → `Continue`.
+/// 2. Gradient-descent fallback with Armijo backtracking; success → `Continue`.
+/// 3. Restoration phase; success → `Continue`.
+/// 4. Late-iteration perturbation sweep (no re-factorization); success → `Continue`.
+/// 5. All exhausted → `Return(NumericalError)`.
+///
+/// Extracted from `solve_ipm` as part of the v0.8 main-loop
+/// decomposition.
+fn factor_kkt_with_recovery<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    options: &SolverOptions,
+    iteration: usize,
+    n: usize,
+    m: usize,
+    use_sparse: bool,
+    kkt_system_opt: &mut Option<kkt::KktSystem>,
+    lin_solver: &mut dyn LinearSolver,
+    inertia_params: &mut InertiaCorrectionParams,
+    lbfgs_state: &mut Option<LbfgsIpmState>,
+    filter: &mut Filter,
+    restoration: &mut RestorationPhase,
+    timings: &mut PhaseTimings,
+    prev_ic_delta_w: &mut f64,
+    linear_constraints: Option<&[bool]>,
+    lbfgs_mode: bool,
+    deadline: Option<Instant>,
+) -> FactorDecision {
+    let mut ic_delta_w = 0.0f64;
+    let mut ic_delta_c = 0.0f64;
+    let Some(kkt_system) = kkt_system_opt.as_mut() else {
+        return FactorDecision::Proceed { ic_delta_w, ic_delta_c };
+    };
+
+    let t_fact = Instant::now();
+    if options.print_level >= 5 {
+        let dim = match &kkt_system.matrix {
+            KktMatrix::Dense(d) => d.n,
+            KktMatrix::Sparse(s) => s.n,
+        };
+        let nnz = match &kkt_system.matrix {
+            KktMatrix::Dense(d) => d.n * (d.n + 1) / 2,
+            KktMatrix::Sparse(s) => s.triplet_rows.len(),
+        };
+        rip_log!("ripopt: Factoring KKT dim={} nnz={}...", dim, nnz);
+    }
+    let inertia_result =
+        kkt::factor_with_inertia_correction(kkt_system, lin_solver, inertia_params);
+    if options.print_level >= 5 {
+        rip_log!("ripopt: KKT factorization took {:.3}s (ok={})",
+            t_fact.elapsed().as_secs_f64(), inertia_result.is_ok());
+    }
+    timings.factorization += t_fact.elapsed();
+
+    if let Ok((dw, dc)) = &inertia_result {
+        ic_delta_w = *dw;
+        ic_delta_c = *dc;
+        *prev_ic_delta_w = *dw;
+    }
+
+    if let Some(ref dump_dir) = options.kkt_dump_dir {
+        if inertia_result.is_ok() {
+            dump_kkt_matrix(
+                dump_dir,
+                &options.kkt_dump_name,
+                iteration,
+                kkt_system,
+                Some((n, m, 0)),
+                ic_delta_w,
+                ic_delta_c,
+            );
+        }
+    }
+
+    let Err(e) = inertia_result else {
+        return FactorDecision::Proceed { ic_delta_w, ic_delta_c };
+    };
+    log::warn!("KKT factorization failed: {}", e);
+
+    // Early-iteration perturbation: degenerate starting point recovery.
+    if iteration < 5 {
+        let mut early_recovered = false;
+        for &perturb_scale in &[1e-4, 1e-3, 1e-2, 5e-2, 1e-1] {
+            let x_saved = state.x.clone();
+            for i in 0..n {
+                let mag = state.x[i].abs().max(1.0);
+                let sign = if (i * 7 + iteration * 13 + (perturb_scale * 1e4) as usize * 3) % 3 == 0 {
+                    -1.0
+                } else {
+                    1.0
+                };
+                state.x[i] += sign * perturb_scale * mag;
+                if state.x_l[i].is_finite() {
+                    state.x[i] = state.x[i].max(state.x_l[i] + 1e-14);
+                }
+                if state.x_u[i].is_finite() {
+                    state.x[i] = state.x[i].min(state.x_u[i] - 1e-14);
+                }
+            }
+            for i in 0..n {
+                if state.x_l[i].is_finite() {
+                    let slack = (state.x[i] - state.x_l[i]).max(1e-20);
+                    state.z_l[i] = state.mu / slack;
+                }
+                if state.x_u[i].is_finite() {
+                    let slack = (state.x_u[i] - state.x[i]).max(1e-20);
+                    state.z_u[i] = state.mu / slack;
+                }
+            }
+            let pert_eval_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+            update_lbfgs_hessian(lbfgs_state, state);
+            if pert_eval_ok && !state.obj.is_nan() && !state.obj.is_infinite()
+                && !state.grad_f.iter().any(|v| v.is_nan() || v.is_infinite())
+            {
+                let sigma_p = kkt::compute_sigma(
+                    &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u,
+                );
+                let mut kkt_p = kkt::assemble_kkt(
+                    n, m, &state.hess_rows, &state.hess_cols, &state.hess_vals,
+                    &state.jac_rows, &state.jac_cols, &state.jac_vals, &sigma_p,
+                    &state.grad_f, &state.g, &state.g_l, &state.g_u,
+                    &state.y, &state.z_l, &state.z_u,
+                    &state.x, &state.x_l, &state.x_u, state.mu,
+                    use_sparse, &state.v_l, &state.v_u,
+                );
+                if kkt::factor_with_inertia_correction(
+                    &mut kkt_p, lin_solver, inertia_params,
+                ).is_ok() {
+                    log::debug!(
+                        "Early perturbation (scale={:.0e}) recovered factorization at iter {}",
+                        perturb_scale, iteration
+                    );
+                    filter.reset();
+                    let theta_p = state.constraint_violation();
+                    filter.set_theta_min_from_initial(theta_p);
+                    early_recovered = true;
+                    break;
+                }
+            }
+            state.x.copy_from_slice(&x_saved);
+        }
+        if early_recovered {
+            return FactorDecision::Continue;
+        }
+    }
+
+    // Gradient descent fallback with Armijo backtracking.
+    if let Some(fallback) = gradient_descent_fallback(state) {
+        state.dx = fallback.0;
+        state.dy = fallback.1;
+        state.dz_l = vec![0.0; n];
+        state.dz_u = vec![0.0; n];
+
+        let mut alpha_fb = 1.0;
+        let obj_current = state.obj;
+        let mut fb_accepted = false;
+        for _ in 0..20 {
+            let mut x_trial = vec![0.0; n];
+            for i in 0..n {
+                x_trial[i] = state.x[i] + alpha_fb * state.dx[i];
+                if state.x_l[i].is_finite() {
+                    x_trial[i] = x_trial[i].max(state.x_l[i] + 1e-14);
+                }
+                if state.x_u[i].is_finite() {
+                    x_trial[i] = x_trial[i].min(state.x_u[i] - 1e-14);
+                }
+            }
+            let mut obj_trial = f64::INFINITY;
+            let obj_ok = problem.objective(&x_trial, true, &mut obj_trial);
+            if obj_ok && obj_trial.is_finite() && obj_trial < obj_current {
+                state.x = x_trial;
+                state.obj = obj_trial;
+                state.alpha_primal = alpha_fb;
+                fb_accepted = true;
+                break;
+            }
+            alpha_fb *= 0.5;
+        }
+        if fb_accepted {
+            let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+            update_lbfgs_hessian(lbfgs_state, state);
+            return FactorDecision::Continue;
+        }
+    }
+
+    // Restoration phase.
+    let (x_rest, success) = restoration.restore(
+        &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
+        &state.jac_rows, &state.jac_cols, n, m, options,
+        &|theta, phi| filter.is_acceptable(theta, phi),
+        &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
+        &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
+        Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
+        deadline,
+    );
+    if success {
+        state.x = x_rest;
+        state.alpha_primal = 0.0;
+        let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+        update_lbfgs_hessian(lbfgs_state, state);
+        return FactorDecision::Continue;
+    }
+
+    // Last resort: perturb x and retry.
+    let mut recovered_from_perturb = false;
+    for &perturb_scale in &[1e-3, 1e-2, 1e-1] {
+        for i in 0..n {
+            let mag = state.x[i].abs().max(1.0);
+            let sign = if (i * 7 + iteration * 13) % 3 == 0 { -1.0 } else { 1.0 };
+            state.x[i] += sign * perturb_scale * mag;
+            if state.x_l[i].is_finite() {
+                state.x[i] = state.x[i].max(state.x_l[i] + 1e-14);
+            }
+            if state.x_u[i].is_finite() {
+                state.x[i] = state.x[i].min(state.x_u[i] - 1e-14);
+            }
+        }
+        let pert2_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+        update_lbfgs_hessian(lbfgs_state, state);
+        if pert2_ok && !state.obj.is_nan() && !state.obj.is_infinite() {
+            recovered_from_perturb = true;
+            break;
+        }
+    }
+    if recovered_from_perturb {
+        filter.reset();
+        let theta_new = state.constraint_violation();
+        filter.set_theta_min_from_initial(theta_new);
+        return FactorDecision::Continue;
+    }
+    FactorDecision::Return(make_result(state, SolveStatus::NumericalError))
+}
+
 /// Update the barrier parameter μ (interior-point centering parameter) once
 /// per iteration after the step has been accepted.
 ///
@@ -4360,214 +4614,30 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             }
         }
 
-        // Factor with inertia correction (only for non-condensed path)
-        // Track regularization values for iterative refinement against original system
-        let mut ic_delta_w = 0.0f64;
-        let mut ic_delta_c = 0.0f64;
-        if let Some(ref mut kkt_system) = kkt_system_opt {
-        let t_fact = Instant::now();
-        if options.print_level >= 5 {
-            let dim = match &kkt_system.matrix {
-                KktMatrix::Dense(d) => d.n,
-                KktMatrix::Sparse(s) => s.n,
-            };
-            let nnz = match &kkt_system.matrix {
-                KktMatrix::Dense(d) => d.n * (d.n + 1) / 2,
-                KktMatrix::Sparse(s) => s.triplet_rows.len(),
-            };
-            rip_log!("ripopt: Factoring KKT dim={} nnz={}...", dim, nnz);
-        }
-        let inertia_result =
-            kkt::factor_with_inertia_correction(kkt_system, lin_solver.as_mut(), &mut inertia_params);
-        if options.print_level >= 5 {
-            rip_log!("ripopt: KKT factorization took {:.3}s (ok={})",
-                t_fact.elapsed().as_secs_f64(), inertia_result.is_ok());
-        }
-        timings.factorization += t_fact.elapsed();
-
-        match &inertia_result {
-            Ok((dw, dc)) => { ic_delta_w = *dw; ic_delta_c = *dc; prev_ic_delta_w = *dw; }
-            _ => {}
-        }
-
-        // KKT matrix dump for external solver benchmarking (e.g. FERAL).
-        // Only fires when options.kkt_dump_dir is Some and factorization succeeded.
-        if let Some(ref dump_dir) = options.kkt_dump_dir {
-            if inertia_result.is_ok() {
-                dump_kkt_matrix(
-                    dump_dir,
-                    &options.kkt_dump_name,
-                    iteration,
-                    kkt_system,
-                    Some((n, m, 0)),
-                    ic_delta_w,
-                    ic_delta_c,
-                );
-            }
-        }
-
-        if let Err(e) = inertia_result {
-            log::warn!("KKT factorization failed: {}", e);
-
-            // Early-iteration perturbation: if factorization fails in the first 5
-            // iterations, the starting point is likely degenerate (singular Jacobian).
-            // Try more aggressive perturbation scales before other recovery methods.
-            if iteration < 5 {
-                let mut early_recovered = false;
-                for &perturb_scale in &[1e-4, 1e-3, 1e-2, 5e-2, 1e-1] {
-                    let x_saved = state.x.clone();
-                    for i in 0..n {
-                        let mag = state.x[i].abs().max(1.0);
-                        // Deterministic pseudo-random sign based on index and attempt
-                        let sign = if (i * 7 + iteration * 13 + (perturb_scale * 1e4) as usize * 3) % 3 == 0 {
-                            -1.0
-                        } else {
-                            1.0
-                        };
-                        state.x[i] += sign * perturb_scale * mag;
-                        if state.x_l[i].is_finite() {
-                            state.x[i] = state.x[i].max(state.x_l[i] + 1e-14);
-                        }
-                        if state.x_u[i].is_finite() {
-                            state.x[i] = state.x[i].min(state.x_u[i] - 1e-14);
-                        }
-                    }
-                    // Re-initialize bound multipliers after perturbation
-                    for i in 0..n {
-                        if state.x_l[i].is_finite() {
-                            let slack = (state.x[i] - state.x_l[i]).max(1e-20);
-                            state.z_l[i] = state.mu / slack;
-                        }
-                        if state.x_u[i].is_finite() {
-                            let slack = (state.x_u[i] - state.x[i]).max(1e-20);
-                            state.z_u[i] = state.mu / slack;
-                        }
-                    }
-                    let pert_eval_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        update_lbfgs_hessian(&mut lbfgs_state, &mut state);
-                    if pert_eval_ok && !state.obj.is_nan() && !state.obj.is_infinite()
-                        && !state.grad_f.iter().any(|v| v.is_nan() || v.is_infinite())
-                    {
-                        // Re-try factorization at perturbed point
-                        let sigma_p = kkt::compute_sigma(
-                            &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u,
-                        );
-                        let mut kkt_p = kkt::assemble_kkt(
-                            n, m, &state.hess_rows, &state.hess_cols, &state.hess_vals,
-                            &state.jac_rows, &state.jac_cols, &state.jac_vals, &sigma_p,
-                            &state.grad_f, &state.g, &state.g_l, &state.g_u,
-                            &state.y, &state.z_l, &state.z_u,
-                            &state.x, &state.x_l, &state.x_u, state.mu,
-                            use_sparse, &state.v_l, &state.v_u,
-                        );
-                        if kkt::factor_with_inertia_correction(
-                            &mut kkt_p, lin_solver.as_mut(), &mut inertia_params,
-                        ).is_ok() {
-                            log::debug!(
-                                "Early perturbation (scale={:.0e}) recovered factorization at iter {}",
-                                perturb_scale, iteration
-                            );
-                            filter.reset();
-                            let theta_p = state.constraint_violation();
-                            filter.set_theta_min_from_initial(theta_p);
-                            early_recovered = true;
-                            break;
-                        }
-                    }
-                    // Restore if this perturbation didn't help
-                    state.x.copy_from_slice(&x_saved);
-                }
-                if early_recovered {
-                    continue;
-                }
-            }
-
-            // Try gradient descent fallback
-            if let Some(fallback) = gradient_descent_fallback(&state) {
-                state.dx = fallback.0;
-                state.dy = fallback.1;
-                state.dz_l = vec![0.0; n];
-                state.dz_u = vec![0.0; n];
-
-                // Simple Armijo backtracking with the gradient step
-                let mut alpha_fb = 1.0;
-                let obj_current = state.obj;
-                let mut fb_accepted = false;
-                for _ in 0..20 {
-                    let mut x_trial = vec![0.0; n];
-                    for i in 0..n {
-                        x_trial[i] = state.x[i] + alpha_fb * state.dx[i];
-                        if state.x_l[i].is_finite() {
-                            x_trial[i] = x_trial[i].max(state.x_l[i] + 1e-14);
-                        }
-                        if state.x_u[i].is_finite() {
-                            x_trial[i] = x_trial[i].min(state.x_u[i] - 1e-14);
-                        }
-                    }
-                    let mut obj_trial = f64::INFINITY;
-                    let obj_ok = problem.objective(&x_trial, true, &mut obj_trial);
-                    if obj_ok && obj_trial.is_finite() && obj_trial < obj_current {
-                        state.x = x_trial;
-                        state.obj = obj_trial;
-                        state.alpha_primal = alpha_fb;
-                        fb_accepted = true;
-                        break;
-                    }
-                    alpha_fb *= 0.5;
-                }
-                if fb_accepted {
-                    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        update_lbfgs_hessian(&mut lbfgs_state, &mut state);
-                    continue;
-                }
-            }
-            // Try restoration instead of giving up
-            let (x_rest, success) = restoration.restore(
-                &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
-                &state.jac_rows, &state.jac_cols, n, m, options,
-                &|theta, phi| filter.is_acceptable(theta, phi),
-                &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
-                &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
-                Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
-                deadline,
-            );
-            if success {
-                state.x = x_rest;
-                state.alpha_primal = 0.0;
-                let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        update_lbfgs_hessian(&mut lbfgs_state, &mut state);
-                continue;
-            }
-            // Last resort: perturb x and retry factorization
-            let mut recovered_from_perturb = false;
-            for &perturb_scale in &[1e-3, 1e-2, 1e-1] {
-                for i in 0..n {
-                    let mag = state.x[i].abs().max(1.0);
-                    let sign = if (i * 7 + iteration * 13) % 3 == 0 { -1.0 } else { 1.0 };
-                    state.x[i] += sign * perturb_scale * mag;
-                    if state.x_l[i].is_finite() {
-                        state.x[i] = state.x[i].max(state.x_l[i] + 1e-14);
-                    }
-                    if state.x_u[i].is_finite() {
-                        state.x[i] = state.x[i].min(state.x_u[i] - 1e-14);
-                    }
-                }
-                let pert2_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        update_lbfgs_hessian(&mut lbfgs_state, &mut state);
-                if pert2_ok && !state.obj.is_nan() && !state.obj.is_infinite() {
-                    recovered_from_perturb = true;
-                    break;
-                }
-            }
-            if recovered_from_perturb {
-                filter.reset();
-                let theta_new = state.constraint_violation();
-                filter.set_theta_min_from_initial(theta_new);
-                continue;
-            }
-            return make_result(&state, SolveStatus::NumericalError);
-        }
-        } // end: if let Some(ref mut kkt_system) = kkt_system_opt
+        let (mut ic_delta_w, mut ic_delta_c) = match factor_kkt_with_recovery(
+            &mut state,
+            problem,
+            options,
+            iteration,
+            n,
+            m,
+            use_sparse,
+            &mut kkt_system_opt,
+            lin_solver.as_mut(),
+            &mut inertia_params,
+            &mut lbfgs_state,
+            &mut filter,
+            &mut restoration,
+            &mut timings,
+            &mut prev_ic_delta_w,
+            linear_constraints.as_deref(),
+            lbfgs_mode,
+            deadline,
+        ) {
+            FactorDecision::Proceed { ic_delta_w, ic_delta_c } => (ic_delta_w, ic_delta_c),
+            FactorDecision::Continue => continue,
+            FactorDecision::Return(result) => return result,
+        };
 
         // Solve for search direction
         let t_dir = Instant::now();
