@@ -2630,6 +2630,35 @@ fn update_dual_variables(
 /// condensed (this helper only runs on the full-augmented path).
 ///
 /// Reference: Gondzio (1994, Comput. Optim. Appl.); Gondzio (2007).
+/// Maximum step size α such that the iterate stays within
+/// `tau_mcc` × distance-to-boundary of the bounds for both the
+/// primal variables (lower and upper) and the bound multipliers.
+/// Used twice inside the Gondzio MCC loop: once on the original
+/// Newton direction and once on each candidate corrected direction.
+fn compute_mcc_alpha_max(
+    state: &SolverState,
+    dx: &[f64],
+    dz_l: &[f64],
+    dz_u: &[f64],
+    tau_mcc: f64,
+    n: usize,
+) -> f64 {
+    let mcc_zl = filter::fraction_to_boundary(&state.z_l, dz_l, tau_mcc);
+    let mcc_zu = filter::fraction_to_boundary(&state.z_u, dz_u, tau_mcc);
+    let mut alpha = mcc_zl.min(mcc_zu).min(1.0);
+    for i in 0..n {
+        if state.x_l[i].is_finite() && dx[i] < 0.0 {
+            let s = state.x[i] - state.x_l[i];
+            alpha = alpha.min(tau_mcc * s / (-dx[i]));
+        }
+        if state.x_u[i].is_finite() && dx[i] > 0.0 {
+            let s = state.x_u[i] - state.x[i];
+            alpha = alpha.min(tau_mcc * s / dx[i]);
+        }
+    }
+    alpha.clamp(0.0, 1.0)
+}
+
 fn apply_gondzio_mcc(
     state: &mut SolverState,
     options: &SolverOptions,
@@ -2654,20 +2683,9 @@ fn apply_gondzio_mcc(
     } else {
         (1.0 - state.mu).max(options.tau_min)
     };
-    let mcc_zl = filter::fraction_to_boundary(&state.z_l, &state.dz_l, tau_mcc);
-    let mcc_zu = filter::fraction_to_boundary(&state.z_u, &state.dz_u, tau_mcc);
-    let mut alpha_mcc = mcc_zl.min(mcc_zu).min(1.0);
-    for i in 0..n {
-        if state.x_l[i].is_finite() && state.dx[i] < 0.0 {
-            let s = state.x[i] - state.x_l[i];
-            alpha_mcc = alpha_mcc.min(tau_mcc * s / (-state.dx[i]));
-        }
-        if state.x_u[i].is_finite() && state.dx[i] > 0.0 {
-            let s = state.x_u[i] - state.x[i];
-            alpha_mcc = alpha_mcc.min(tau_mcc * s / state.dx[i]);
-        }
-    }
-    alpha_mcc = alpha_mcc.clamp(0.0, 1.0);
+    let mut alpha_mcc = compute_mcc_alpha_max(
+        state, &state.dx, &state.dz_l, &state.dz_u, tau_mcc, n,
+    );
 
     let mu_target = state.mu;
     let beta_min = 0.01_f64;
@@ -2755,20 +2773,9 @@ fn apply_gondzio_mcc(
                     }
                 }
 
-                let new_zl = filter::fraction_to_boundary(&state.z_l, &dz_l_c, tau_mcc);
-                let new_zu = filter::fraction_to_boundary(&state.z_u, &dz_u_c, tau_mcc);
-                let mut alpha_new = new_zl.min(new_zu).min(1.0);
-                for i in 0..n {
-                    if state.x_l[i].is_finite() && dx_c[i] < 0.0 {
-                        let s = state.x[i] - state.x_l[i];
-                        alpha_new = alpha_new.min(tau_mcc * s / (-dx_c[i]));
-                    }
-                    if state.x_u[i].is_finite() && dx_c[i] > 0.0 {
-                        let s = state.x_u[i] - state.x[i];
-                        alpha_new = alpha_new.min(tau_mcc * s / dx_c[i]);
-                    }
-                }
-                alpha_new = alpha_new.clamp(0.0, 1.0);
+                let alpha_new = compute_mcc_alpha_max(
+                    state, &dx_c, &dz_l_c, &dz_u_c, tau_mcc, n,
+                );
 
                 if alpha_new >= 0.9 * alpha_mcc {
                     state.dx = dx_c;
