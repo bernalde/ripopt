@@ -1758,44 +1758,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         None
     };
 
-    // Conservative IPM retry: revert v0.4.0 algorithmic changes (Gondzio MCC,
-    // Mehrotra PC, stall detection) to recover the pre-regression trajectory.
-    // This is the most reliable recovery for problems sensitive to Newton direction
-    // changes (TRO3X3, STRATEC, MGH10LS, ACOPR30).
-    let n_problem = problem.num_variables();
-    if n_problem <= 200
-        && !matches!(result.status, SolveStatus::Optimal)
-    {
-        if let Some(mut opts) = prepare_fallback_opts(options, &solve_start) {
-            opts.gondzio_mcc_max = 0;
-            opts.mehrotra_pc = false;
-            opts.stall_iter_limit = 0;
-            opts.proactive_infeasibility_detection = true;
-            // Full iteration budget for small problems (ACOPR30 needed 1047, MGH10LS ~1800)
-            opts.max_iter = options.max_iter;
-            // Give most of remaining time — this is the best recovery strategy
-            if options.max_wall_time > 0.0 {
-                let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
-                opts.max_wall_time = remaining * 0.7;
-            }
-            if options.print_level >= 5 {
-                rip_log!("ripopt: Trying conservative IPM retry (no Gondzio/Mehrotra, no stall detection)");
-            }
-            let candidate = solve_ipm(problem, &opts);
-            if is_strictly_better(&result, &candidate) {
-                if options.print_level >= 5 {
-                    rip_log!(
-                        "ripopt: Conservative retry succeeded ({:?}, obj={:.6e})",
-                        candidate.status, candidate.objective
-                    );
-                }
-                result = candidate;
-                result.diagnostics.fallback_used = Some("conservative_ipm".into());
-            } else if options.print_level >= 5 {
-                rip_log!("ripopt: Conservative retry did not improve ({:?})", candidate.status);
-            }
-        }
-    }
+    try_conservative_ipm_retry(&mut result, problem, options, solve_start);
 
     // Dispatch based on diagnosis — try targeted strategies rather than
     // a fixed sequence of every possible fallback.
@@ -1892,6 +1855,52 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
     result.diagnostics.wall_time_secs = solve_start.elapsed().as_secs_f64();
     result
+}
+
+/// Conservative IPM retry: revert v0.4.0 algorithmic changes (Gondzio MCC,
+/// Mehrotra PC, stall detection) to recover the pre-regression trajectory.
+/// This is the most reliable recovery for problems sensitive to Newton
+/// direction changes (TRO3X3, STRATEC, MGH10LS, ACOPR30). Only fires for
+/// `n ≤ 200` and a non-Optimal current result; consumes 70% of the
+/// remaining wall-time budget when one is set.
+fn try_conservative_ipm_retry<P: NlpProblem>(
+    result: &mut SolveResult,
+    problem: &P,
+    options: &SolverOptions,
+    solve_start: Instant,
+) {
+    let n_problem = problem.num_variables();
+    if n_problem > 200 || matches!(result.status, SolveStatus::Optimal) {
+        return;
+    }
+    let Some(mut opts) = prepare_fallback_opts(options, &solve_start) else {
+        return;
+    };
+    opts.gondzio_mcc_max = 0;
+    opts.mehrotra_pc = false;
+    opts.stall_iter_limit = 0;
+    opts.proactive_infeasibility_detection = true;
+    opts.max_iter = options.max_iter;
+    if options.max_wall_time > 0.0 {
+        let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
+        opts.max_wall_time = remaining * 0.7;
+    }
+    if options.print_level >= 5 {
+        rip_log!("ripopt: Trying conservative IPM retry (no Gondzio/Mehrotra, no stall detection)");
+    }
+    let candidate = solve_ipm(problem, &opts);
+    if is_strictly_better(result, &candidate) {
+        if options.print_level >= 5 {
+            rip_log!(
+                "ripopt: Conservative retry succeeded ({:?}, obj={:.6e})",
+                candidate.status, candidate.objective
+            );
+        }
+        *result = candidate;
+        result.diagnostics.fallback_used = Some("conservative_ipm".into());
+    } else if options.print_level >= 5 {
+        rip_log!("ripopt: Conservative retry did not improve ({:?})", candidate.status);
+    }
 }
 
 /// Promote a stalled result (NumericalError/MaxIterations/Acceptable) to
