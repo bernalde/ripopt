@@ -2689,6 +2689,63 @@ fn reset_slack_multipliers(state: &mut SolverState, mu_ks: f64) {
     }
 }
 
+/// Ipopt's TrySoftRestoStep: before invoking the expensive GN restoration,
+/// try the current search direction with `alpha = min(alpha_primal_max, alpha_dual_max)`
+/// and accept it if the constraint violation drops by at least `1e-4` relative
+/// and the trial passes the filter. Returns `true` if the step was taken.
+fn attempt_soft_restoration<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    filter: &mut Filter,
+    alpha_primal_max: f64,
+    alpha_dual_max: f64,
+    theta_current: f64,
+    phi_current: f64,
+) -> bool {
+    let n = state.n;
+    let m = state.m;
+    let soft_alpha = alpha_primal_max.min(alpha_dual_max);
+    let mut x_soft = vec![0.0; n];
+    for i in 0..n {
+        x_soft[i] = state.x[i] + soft_alpha * state.dx[i];
+        if state.x_l[i].is_finite() {
+            x_soft[i] = x_soft[i].max(state.x_l[i] + 1e-14);
+        }
+        if state.x_u[i].is_finite() {
+            x_soft[i] = x_soft[i].min(state.x_u[i] - 1e-14);
+        }
+    }
+    let mut obj_soft = 0.0;
+    let obj_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        problem.objective(&x_soft, true, &mut obj_soft)
+    }));
+    if !matches!(obj_result, Ok(true)) {
+        return false;
+    }
+    let mut g_soft = vec![0.0; m];
+    if !problem.constraints(&x_soft, false, &mut g_soft) {
+        return false;
+    }
+    let theta_soft = convergence::primal_infeasibility(&g_soft, &state.g_l, &state.g_u);
+    if theta_soft < (1.0 - 1e-4) * theta_current
+        && filter.is_acceptable(theta_soft, obj_soft)
+    {
+        log::debug!(
+            "Soft restoration accepted: theta {:.2e} -> {:.2e}",
+            theta_current,
+            theta_soft
+        );
+        state.x = x_soft;
+        state.obj = obj_soft;
+        state.g = g_soft;
+        state.alpha_primal = soft_alpha;
+        filter.add(theta_current, phi_current);
+        true
+    } else {
+        false
+    }
+}
+
 /// Record the current iterate as the best-feasible point seen so far
 /// if it satisfies `constr_viol_tol` and strictly improves `best_obj`.
 /// Used as the fallback iterate returned at `max_iter` exit.
@@ -5868,44 +5925,15 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
 
         if !step_accepted {
-            // Soft restoration (Ipopt's TrySoftRestoStep): before expensive GN restoration,
-            // try the current search direction with alpha = min(alpha_primal_max, alpha_dual_max)
-            // for all variables. Accept if the primal-dual error decreases.
-            {
-                let soft_alpha = alpha_primal_max.min(alpha_dual_max);
-                let mut x_soft = vec![0.0; n];
-                for i in 0..n {
-                    x_soft[i] = state.x[i] + soft_alpha * state.dx[i];
-                    if state.x_l[i].is_finite() {
-                        x_soft[i] = x_soft[i].max(state.x_l[i] + 1e-14);
-                    }
-                    if state.x_u[i].is_finite() {
-                        x_soft[i] = x_soft[i].min(state.x_u[i] - 1e-14);
-                    }
-                }
-                let mut obj_soft = 0.0;
-                let obj_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    problem.objective(&x_soft, true, &mut obj_soft)
-                }));
-                if matches!(obj_result, Ok(true)) {
-                    let mut g_soft = vec![0.0; m];
-                    if problem.constraints(&x_soft, false, &mut g_soft) {
-                        let theta_soft = convergence::primal_infeasibility(&g_soft, &state.g_l, &state.g_u);
-                        // Accept if constraint violation decreased
-                        if theta_soft < (1.0 - 1e-4) * theta_current
-                            && filter.is_acceptable(theta_soft, obj_soft)
-                        {
-                            log::debug!("Soft restoration accepted: theta {:.2e} -> {:.2e}", theta_current, theta_soft);
-                            state.x = x_soft;
-                            state.obj = obj_soft;
-                            state.g = g_soft;
-                            state.alpha_primal = soft_alpha;
-                            filter.add(theta_current, phi_current);
-                            step_accepted = true;
-                        }
-                    }
-                }
-            }
+            step_accepted = attempt_soft_restoration(
+                &mut state,
+                problem,
+                &mut filter,
+                alpha_primal_max,
+                alpha_dual_max,
+                theta_current,
+                phi_current,
+            );
         }
 
         if !step_accepted {
