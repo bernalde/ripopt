@@ -2805,6 +2805,80 @@ fn update_watchdog<P: NlpProblem>(
     WatchdogDecision::Proceed
 }
 
+/// Post-step "acceptable" tracking. Mirrors the pre-step acceptable check
+/// (see `track_consecutive_acceptable`) but is evaluated at the freshly
+/// accepted iterate — catches cases where the step just taken pushes
+/// the state into the acceptable region but the pre-step check at the
+/// top of the loop missed it.
+///
+/// Increments `state.consecutive_acceptable` iff the accepted iterate
+/// passes both the scaled (`options.tol`) and unscaled
+/// (`constr_viol_tol` / `dual_inf_tol` / `compl_inf_tol`) Ipopt
+/// acceptable thresholds. Never resets the counter here; pre-step
+/// handling owns resets.
+fn track_post_step_acceptable(state: &mut SolverState, options: &SolverOptions) {
+    let n = state.n;
+    let m = state.m;
+    let post_primal = state.constraint_violation();
+    let (post_zl_opt, post_zu_opt) = {
+        let mut gj = state.grad_f.clone();
+        for (idx, (&row, &col)) in
+            state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
+        {
+            gj[col] += state.jac_vals[idx] * state.y[row];
+        }
+        let mut zl = vec![0.0; n];
+        let mut zu = vec![0.0; n];
+        let kc = 1e10;
+        for i in 0..n {
+            if gj[i] > 0.0 && state.x_l[i].is_finite() {
+                let sl = (state.x[i] - state.x_l[i]).max(1e-20);
+                if gj[i] * sl <= kc * state.mu.max(1e-20) {
+                    zl[i] = gj[i];
+                }
+            } else if gj[i] < 0.0 && state.x_u[i].is_finite() {
+                let su = (state.x_u[i] - state.x[i]).max(1e-20);
+                if (-gj[i]) * su <= kc * state.mu.max(1e-20) {
+                    zu[i] = -gj[i];
+                }
+            }
+        }
+        (zl, zu)
+    };
+    let post_du = convergence::dual_infeasibility(
+        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+        &state.y, &post_zl_opt, &post_zu_opt, n,
+    );
+    let post_du_unsc = convergence::dual_infeasibility_scaled(
+        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+        &state.y, &state.z_l, &state.z_u, n,
+    );
+    let post_compl = convergence::complementarity_error(
+        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
+    );
+    let post_compl_opt = convergence::complementarity_error(
+        &state.x, &state.x_l, &state.x_u, &post_zl_opt, &post_zu_opt, 0.0,
+    );
+    let post_compl_best = post_compl.min(post_compl_opt);
+    let post_mult_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
+        + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
+        + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
+    let post_sd = if (m + 2 * n) > 0 {
+        ((100.0f64.max(post_mult_sum / (m + 2 * n) as f64)) / 100.0).min(1e4)
+    } else {
+        1.0
+    };
+    let post_near_scaled = post_primal <= 100.0 * options.tol
+        && post_du <= 100.0 * options.tol * post_sd
+        && post_compl_best <= 100.0 * options.tol * post_sd;
+    let post_near_unscaled = post_primal <= 10.0 * options.constr_viol_tol
+        && post_du_unsc <= 10.0 * options.dual_inf_tol
+        && post_compl_best <= 10.0 * options.compl_inf_tol;
+    if post_near_scaled && post_near_unscaled {
+        state.consecutive_acceptable += 1;
+    }
+}
+
 /// Outcome of the post-LS restoration cascade.
 enum RestorationCascadeDecision {
     Continue,
@@ -6334,70 +6408,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             options,
         );
 
-        // Post-step acceptable convergence tracking.
-        // This catches cases where the step just taken pushes the state into the
-        // acceptable region but the pre-step check at the top of the loop missed it.
-        {
-            let post_primal = state.constraint_violation();
-            let (post_zl_opt, post_zu_opt) = {
-                let mut gj = state.grad_f.clone();
-                for (idx, (&row, &col)) in
-                    state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
-                {
-                    gj[col] += state.jac_vals[idx] * state.y[row];
-                }
-                let mut zl = vec![0.0; n];
-                let mut zu = vec![0.0; n];
-                let kc = 1e10;
-                for i in 0..n {
-                    if gj[i] > 0.0 && state.x_l[i].is_finite() {
-                        let sl = (state.x[i] - state.x_l[i]).max(1e-20);
-                        if gj[i] * sl <= kc * state.mu.max(1e-20) {
-                            zl[i] = gj[i];
-                        }
-                    } else if gj[i] < 0.0 && state.x_u[i].is_finite() {
-                        let su = (state.x_u[i] - state.x[i]).max(1e-20);
-                        if (-gj[i]) * su <= kc * state.mu.max(1e-20) {
-                            zu[i] = -gj[i];
-                        }
-                    }
-                }
-                (zl, zu)
-            };
-            let post_du = convergence::dual_infeasibility(
-                &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-                &state.y, &post_zl_opt, &post_zu_opt, n,
-            );
-            let post_du_unsc = convergence::dual_infeasibility_scaled(
-                &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-                &state.y, &state.z_l, &state.z_u, n,
-            );
-            let post_compl = convergence::complementarity_error(
-                &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
-            );
-            let post_compl_opt = convergence::complementarity_error(
-                &state.x, &state.x_l, &state.x_u, &post_zl_opt, &post_zu_opt, 0.0,
-            );
-            let post_compl_best = post_compl.min(post_compl_opt);
-            let post_mult_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
-                + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
-                + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
-            let post_sd = if (m + 2 * n) > 0 {
-                ((100.0f64.max(post_mult_sum / (m + 2 * n) as f64)) / 100.0).min(1e4)
-            } else {
-                1.0
-            };
-            let post_near_scaled = post_primal <= 100.0 * options.tol
-                && post_du <= 100.0 * options.tol * post_sd
-                && post_compl_best <= 100.0 * options.tol * post_sd;
-            let post_near_unscaled = post_primal <= 10.0 * options.constr_viol_tol
-                && post_du_unsc <= 10.0 * options.dual_inf_tol
-                && post_compl_best <= 10.0 * options.compl_inf_tol;
-            if post_near_scaled && post_near_unscaled {
-                state.consecutive_acceptable += 1;
-            }
-            // Don't reset here — the pre-step check handles resets
-        }
+        track_post_step_acceptable(&mut state, options);
     }
 
     // At max_iter: log convergence diagnostics using iterative z (Ipopt semantics).
