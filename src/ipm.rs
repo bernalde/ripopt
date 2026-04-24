@@ -2739,6 +2739,282 @@ fn compute_optimality_measures(state: &SolverState) -> OptimalityMeasures {
     }
 }
 
+/// Outcome of the overall-progress stall detector.
+enum StallDecision {
+    /// No stall (or not yet activated) — fall through to normal step.
+    Proceed,
+    /// Stall detected and recovered by bumping μ / resetting the filter —
+    /// caller must `continue` the main loop immediately (no Newton step
+    /// this iteration).
+    Continue,
+    /// Stall detected and no recovery possible — caller must return this
+    /// result immediately.
+    Return(SolveResult),
+}
+
+/// Overall-progress stall detector: terminate or recover when neither
+/// primal nor dual infeasibility has improved for many iterations.
+///
+/// Two triggers (see block comment in body): (1) tiny steps for half
+/// the `stall_iter_limit`, (2) no metric improvement for the full
+/// limit. Before declaring `NumericalError`:
+/// - If the current point is near-tolerance, attempt a μ boost or a
+///   forced μ decrease (Fixed mode) and restart the filter.
+/// - Re-evaluate with "optimal duals" recomputed from the current
+///   gradient (covers cases where iterative y/z diverged even though
+///   the primal is near-optimal, e.g. HS116, CONCON).
+/// - Optionally revert to the best-du iterate seen so far.
+///
+/// No direct Ipopt parallel; this is a ripopt-specific safety net for
+/// long-running stalls (see CLAUDE.md: CONCON, HS13, HS116).
+///
+/// Extracted from `solve_ipm` as part of the v0.8 main-loop
+/// decomposition.
+#[allow(clippy::too_many_arguments)]
+fn detect_and_handle_progress_stall<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    options: &SolverOptions,
+    iteration: usize,
+    primal_inf: f64,
+    primal_inf_max: f64,
+    dual_inf: f64,
+    compl_inf: f64,
+    s_d_for_acc: f64,
+    filter: &mut Filter,
+    mu_state: &mut MuState,
+    stall_no_progress_count: &mut usize,
+    stall_best_pr: &mut f64,
+    stall_best_du: &mut f64,
+    best_du_val: f64,
+    best_du_x: &Option<Vec<f64>>,
+    best_du_y: &Option<Vec<f64>>,
+    best_du_zl: &Option<Vec<f64>>,
+    best_du_zu: &Option<Vec<f64>>,
+    linear_constraints: Option<&[bool]>,
+    lbfgs_mode: bool,
+) -> StallDecision {
+    if iteration <= 50 || options.stall_iter_limit == 0 {
+        return StallDecision::Proceed;
+    }
+    let n = state.n;
+    let m = state.m;
+
+    let pr_improved = primal_inf_max < 0.99 * *stall_best_pr;
+    let du_improved = dual_inf < 0.99 * *stall_best_du;
+    if pr_improved {
+        *stall_best_pr = primal_inf_max;
+    }
+    if du_improved {
+        *stall_best_du = dual_inf;
+    }
+    if pr_improved || du_improved {
+        *stall_no_progress_count = 0;
+        return StallDecision::Proceed;
+    }
+    *stall_no_progress_count += 1;
+    let tiny_alpha = state.alpha_primal < 1e-8 && state.alpha_dual < 1e-4;
+    // Terminate after half the limit with truly negligible steps, or the full
+    // limit with no metric improvement regardless of step size.
+    let stall_limit = if tiny_alpha { options.stall_iter_limit / 2 } else { options.stall_iter_limit };
+    if *stall_no_progress_count < stall_limit {
+        return StallDecision::Proceed;
+    }
+
+    // Before declaring NumericalError, check if the current point is
+    // near-tolerance (1000x tol).
+    let stall_near_tol = options.tol * 1000.0;
+    let stall_pr_ok = primal_inf_max <= stall_near_tol.max(10.0 * options.constr_viol_tol);
+    let stall_du_ok = dual_inf <= (stall_near_tol * s_d_for_acc).max(1e-2);
+    let stall_co_ok = compl_inf <= (stall_near_tol * s_d_for_acc).max(1e-2);
+    if stall_pr_ok && stall_du_ok && stall_co_ok {
+        // Near-tolerance stall: try boosting μ if it's very small relative
+        // to primal_inf. Restores KKT regularization when μ has outrun
+        // feasibility.
+        if state.mu < primal_inf_max * 0.01 && primal_inf_max > options.constr_viol_tol {
+            let new_mu = (primal_inf_max * 0.1).max(1e-6);
+            if options.print_level >= 3 {
+                rip_log!(
+                    "ripopt: Near-tolerance stall: boosting mu {:.2e} -> {:.2e} (pr_max={:.2e})",
+                    state.mu, new_mu, primal_inf_max
+                );
+            }
+            state.mu = new_mu;
+            filter.reset();
+            let theta_new = state.constraint_violation();
+            filter.set_theta_min_from_initial(theta_new);
+            *stall_no_progress_count = 0;
+            *stall_best_pr = f64::INFINITY;
+            *stall_best_du = f64::INFINITY;
+            mu_state.mode = MuMode::Fixed;
+            mu_state.first_iter_in_mode = true;
+            return StallDecision::Continue;
+        }
+        // In Fixed (monotone) mode, stalling near tolerance means the
+        // barrier subproblem is solved at the current μ — force a μ
+        // decrease to continue toward the NLP optimum.
+        if !options.mu_strategy_adaptive && state.mu > options.mu_min {
+            let new_mu = (options.mu_linear_decrease_factor * state.mu)
+                .min(state.mu.powf(options.mu_superlinear_decrease_power))
+                .max(options.mu_min);
+            if options.print_level >= 3 {
+                rip_log!(
+                    "ripopt: Fixed mode stall near tolerance (pr={:.2e}, du={:.2e}, co={:.2e}), forcing mu {:.2e} -> {:.2e}",
+                    primal_inf, dual_inf, compl_inf, state.mu, new_mu
+                );
+            }
+            state.mu = new_mu;
+            filter.reset();
+            let theta_new = state.constraint_violation();
+            filter.set_theta_min_from_initial(theta_new);
+            *stall_no_progress_count = 0;
+            *stall_best_pr = f64::INFINITY;
+            *stall_best_du = f64::INFINITY;
+            return StallDecision::Continue;
+        }
+        // Stalled near-tolerance: check Ipopt's Acceptable thresholds
+        // (IpOptErrorConvCheck.cpp defaults).
+        let acc_pr_ok = primal_inf_max <= 1e-2;
+        let acc_du_ok = dual_inf <= 1e10;
+        let acc_co_ok = compl_inf <= 1e-2;
+        let acc_scaled_ok = primal_inf_max <= 1e-6
+            && dual_inf <= 1e-6 * s_d_for_acc
+            && compl_inf <= 1e-6 * s_d_for_acc;
+        if acc_pr_ok && acc_du_ok && acc_co_ok && acc_scaled_ok {
+            if options.print_level >= 3 {
+                rip_log!(
+                    "ripopt: Stalled at acceptable tolerance (pr={:.2e}, du={:.2e}, co={:.2e}), returning Acceptable",
+                    primal_inf, dual_inf, compl_inf
+                );
+            }
+            return StallDecision::Return(make_result(state, SolveStatus::Acceptable));
+        }
+        if options.print_level >= 3 {
+            rip_log!(
+                "ripopt: Stalled but near-tolerance (pr={:.2e}, du={:.2e}, co={:.2e}), returning NumericalError",
+                primal_inf, dual_inf, compl_inf
+            );
+        }
+        return StallDecision::Return(make_result(state, SolveStatus::NumericalError));
+    }
+    // Full two-gate near-tolerance check with optimal dual multipliers.
+    // When duals have diverged but the primal point is near-optimal
+    // (HS116, CONCON), the simple check above fails because it uses the
+    // current (diverged) duals. Recompute optimal duals from the gradient.
+    {
+        let mut gj = state.grad_f.clone();
+        for (idx, (&row, &col)) in
+            state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
+        {
+            gj[col] += state.jac_vals[idx] * state.y[row];
+        }
+        let mut opt_zl = vec![0.0; n];
+        let mut opt_zu = vec![0.0; n];
+        let kc = 1e10;
+        for i in 0..n {
+            if gj[i] > 0.0 && state.x_l[i].is_finite() {
+                let sl = (state.x[i] - state.x_l[i]).max(1e-20);
+                if gj[i] * sl <= kc * state.mu.max(1e-20) {
+                    opt_zl[i] = gj[i];
+                }
+            } else if gj[i] < 0.0 && state.x_u[i].is_finite() {
+                let su = (state.x_u[i] - state.x[i]).max(1e-20);
+                if (-gj[i]) * su <= kc * state.mu.max(1e-20) {
+                    opt_zu[i] = -gj[i];
+                }
+            }
+        }
+        let opt_du = convergence::dual_infeasibility(
+            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+            &state.y, &opt_zl, &opt_zu, n,
+        );
+        let opt_co = convergence::complementarity_error(
+            &state.x, &state.x_l, &state.x_u, &opt_zl, &opt_zu, 0.0,
+        );
+        let opt_co_best = compl_inf.min(opt_co);
+        let fmult: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
+            + opt_zl.iter().map(|v| v.abs()).sum::<f64>()
+            + opt_zu.iter().map(|v| v.abs()).sum::<f64>();
+        let fsd = if (m + 2 * n) > 0 {
+            ((100.0f64.max(fmult / (m + 2 * n) as f64)) / 100.0).min(1e4)
+        } else {
+            1.0
+        };
+        let stall_fdu_tol = (stall_near_tol * fsd).max(1e-2);
+        let stall_fco_tol = (stall_near_tol * fsd).max(1e-2);
+        let stall_fpr_tol = stall_near_tol.max(10.0 * options.constr_viol_tol);
+        let sc = primal_inf_max <= stall_fpr_tol
+            && opt_du <= stall_fdu_tol
+            && opt_co_best <= stall_fco_tol;
+        let du_u = convergence::dual_infeasibility_scaled(
+            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+            &state.y, &state.z_l, &state.z_u, n,
+        );
+        let usc = primal_inf_max <= 10.0 * options.constr_viol_tol
+            && du_u <= 10.0 * options.dual_inf_tol
+            && opt_co_best <= 10.0 * options.compl_inf_tol;
+        if sc && usc {
+            if options.print_level >= 3 {
+                rip_log!(
+                    "ripopt: Stalled but near-tolerance via optimal duals (pr={:.2e}, du_opt={:.2e}, co={:.2e}), returning NumericalError",
+                    primal_inf, opt_du, opt_co_best
+                );
+            }
+            return StallDecision::Return(make_result(state, SolveStatus::NumericalError));
+        }
+    }
+    // Before terminating: if primal is close but μ is very small, boost μ
+    // to restore KKT regularization for dual convergence. Addresses the
+    // "μ outrunning feasibility" pattern.
+    if primal_inf_max < 0.1 && state.mu < primal_inf_max * 0.01 {
+        let new_mu = (primal_inf_max * 0.1).max(1e-6);
+        if options.print_level >= 3 {
+            rip_log!(
+                "ripopt: Stall recovery: boosting mu {:.2e} -> {:.2e} (pr_max={:.2e})",
+                state.mu, new_mu, primal_inf_max
+            );
+        }
+        state.mu = new_mu;
+        filter.reset();
+        let theta_new = state.constraint_violation();
+        filter.set_theta_min_from_initial(theta_new);
+        *stall_no_progress_count = 0;
+        *stall_best_pr = f64::INFINITY;
+        *stall_best_du = f64::INFINITY;
+        mu_state.mode = MuMode::Fixed;
+        mu_state.first_iter_in_mode = true;
+        return StallDecision::Continue;
+    }
+    // Revert to the best-du iterate if it has significantly better dual
+    // feasibility before declaring NumericalError. Post-stall y/z can be
+    // corrupted by inertia-escalated KKT solves (CONCON: iter 48 had
+    // du=7e-16, stall at iter 81 has du=1.03 at the same x).
+    if let (Some(bdx), Some(bdy), Some(bdzl), Some(bdzu)) =
+        (best_du_x, best_du_y, best_du_zl, best_du_zu)
+    {
+        if best_du_val < dual_inf * 0.1 {
+            state.x.copy_from_slice(bdx);
+            state.y.copy_from_slice(bdy);
+            state.z_l.copy_from_slice(bdzl);
+            state.z_u.copy_from_slice(bdzu);
+            let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+            if options.print_level >= 3 {
+                rip_log!(
+                    "ripopt: Reverting to best-du iterate (du: {:.2e} -> {:.2e}) before NumericalError exit",
+                    dual_inf, best_du_val
+                );
+            }
+        }
+    }
+    if options.print_level >= 3 {
+        rip_log!(
+            "ripopt: Stalled for {} iterations without progress (alpha_p={:.2e}, pr={:.2e}, du={:.2e}), terminating",
+            *stall_no_progress_count, state.alpha_primal, primal_inf, dual_inf
+        );
+    }
+    StallDecision::Return(make_result(state, SolveStatus::NumericalError))
+}
+
 /// Track constraint-violation history and optionally short-circuit
 /// with `LocalInfeasibility`.
 ///
@@ -3769,237 +4045,34 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             consecutive_unbounded = 0;
         }
 
-        // Overall progress stall detection: terminate when the solver is stuck
-        // with no improvement in either primal or dual infeasibility.
-        // Two triggers: (1) tiny steps for 15 iterations, (2) no metric improvement
-        // for 30 iterations regardless of step size.
-        // Only activate after 50 iterations to avoid tripping during early phases.
-        if iteration > 50 && options.stall_iter_limit > 0 {
-            let pr_improved = primal_inf_max < 0.99 * stall_best_pr;
-            let du_improved = dual_inf < 0.99 * stall_best_du;
-            if pr_improved {
-                stall_best_pr = primal_inf_max;
-            }
-            if du_improved {
-                stall_best_du = dual_inf;
-            }
-            if pr_improved || du_improved {
-                stall_no_progress_count = 0;
-            } else {
-                stall_no_progress_count += 1;
-                let tiny_alpha = state.alpha_primal < 1e-8 && state.alpha_dual < 1e-4;
-                // Terminate after half the limit with truly negligible steps,
-                // or the full limit with no metric improvement regardless of step size
-                let stall_limit = if tiny_alpha { options.stall_iter_limit / 2 } else { options.stall_iter_limit };
-                if stall_no_progress_count >= stall_limit {
-                    // Before declaring NumericalError, check if the current point
-                    // is near-tolerance (1000x tol). Such points are close but not optimal.
-                    let stall_near_tol = options.tol * 1000.0;
-                    let stall_pr_ok = primal_inf_max <= stall_near_tol.max(10.0 * options.constr_viol_tol);
-                    let stall_du_ok = dual_inf <= (stall_near_tol * s_d_for_acc).max(1e-2);
-                    let stall_co_ok = compl_inf <= (stall_near_tol * s_d_for_acc).max(1e-2);
-                    if stall_pr_ok && stall_du_ok && stall_co_ok {
-                        // Near tolerance stall: try boosting mu if it's very small
-                        // relative to primal_inf. This restores KKT regularization
-                        // when mu has outrun feasibility.
-                        if state.mu < primal_inf_max * 0.01 && primal_inf_max > options.constr_viol_tol {
-                            let new_mu = (primal_inf_max * 0.1).max(1e-6);
-                            if options.print_level >= 3 {
-                                rip_log!(
-                                    "ripopt: Near-tolerance stall: boosting mu {:.2e} -> {:.2e} (pr_max={:.2e})",
-                                    state.mu, new_mu, primal_inf_max
-                                );
-                            }
-                            state.mu = new_mu;
-                            filter.reset();
-                            let theta_new = state.constraint_violation();
-                            filter.set_theta_min_from_initial(theta_new);
-                            stall_no_progress_count = 0;
-                            stall_best_pr = f64::INFINITY;
-                            stall_best_du = f64::INFINITY;
-                            mu_state.mode = MuMode::Fixed;
-                            mu_state.first_iter_in_mode = true;
-                            continue;
-                        }
-                        // In Fixed (monotone) mode, stalling near tolerance means the barrier
-                        // subproblem is solved at the current mu — force a mu decrease to
-                        // continue toward the NLP optimum instead of returning NumericalError.
-                        if !options.mu_strategy_adaptive && state.mu > options.mu_min {
-                            let new_mu = (options.mu_linear_decrease_factor * state.mu)
-                                .min(state.mu.powf(options.mu_superlinear_decrease_power))
-                                .max(options.mu_min);
-                            if options.print_level >= 3 {
-                                rip_log!(
-                                    "ripopt: Fixed mode stall near tolerance (pr={:.2e}, du={:.2e}, co={:.2e}), forcing mu {:.2e} -> {:.2e}",
-                                    primal_inf, dual_inf, compl_inf, state.mu, new_mu
-                                );
-                            }
-                            state.mu = new_mu;
-                            filter.reset();
-                            let theta_new = state.constraint_violation();
-                            filter.set_theta_min_from_initial(theta_new);
-                            stall_no_progress_count = 0;
-                            stall_best_pr = f64::INFINITY;
-                            stall_best_du = f64::INFINITY;
-                            continue;
-                        } else {
-                            // Stalled near-tolerance: check if we meet Ipopt's
-                            // Acceptable thresholds (acceptable_tol=1e-6,
-                            // acceptable_*_tol from IpOptErrorConvCheck.cpp
-                            // defaults). If yes, report Acceptable (Ipopt's
-                            // Solved_To_Acceptable_Level). Otherwise
-                            // NumericalError — we did stall at a non-optimal
-                            // iterate.
-                            let acc_pr_ok = primal_inf_max <= 1e-2;
-                            let acc_du_ok = dual_inf <= 1e10;
-                            let acc_co_ok = compl_inf <= 1e-2;
-                            let acc_scaled_ok = primal_inf_max <= 1e-6
-                                && dual_inf <= 1e-6 * s_d_for_acc
-                                && compl_inf <= 1e-6 * s_d_for_acc;
-                            if acc_pr_ok && acc_du_ok && acc_co_ok && acc_scaled_ok {
-                                if options.print_level >= 3 {
-                                    rip_log!(
-                                        "ripopt: Stalled at acceptable tolerance (pr={:.2e}, du={:.2e}, co={:.2e}), returning Acceptable",
-                                        primal_inf, dual_inf, compl_inf
-                                    );
-                                }
-                                return make_result(&state, SolveStatus::Acceptable);
-                            }
-                            if options.print_level >= 3 {
-                                rip_log!(
-                                    "ripopt: Stalled but near-tolerance (pr={:.2e}, du={:.2e}, co={:.2e}), returning NumericalError",
-                                    primal_inf, dual_inf, compl_inf
-                                );
-                            }
-                            return make_result(&state, SolveStatus::NumericalError);
-                        }
-                    }
-                    // Full two-gate near-tolerance check with optimal dual multipliers.
-                    // When duals have diverged but the primal point is near-optimal
-                    // (e.g., HS116: obj close to optimal, small primal_inf), the simple
-                    // check above fails because it uses the current (diverged) duals.
-                    // Recompute optimal duals from the gradient to get a cleaner picture.
-                    {
-                        let mut gj = state.grad_f.clone();
-                        for (idx, (&row, &col)) in
-                            state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
-                        {
-                            gj[col] += state.jac_vals[idx] * state.y[row];
-                        }
-                        let mut opt_zl = vec![0.0; n];
-                        let mut opt_zu = vec![0.0; n];
-                        let kc = 1e10;
-                        for i in 0..n {
-                            if gj[i] > 0.0 && state.x_l[i].is_finite() {
-                                let sl = (state.x[i] - state.x_l[i]).max(1e-20);
-                                if gj[i] * sl <= kc * state.mu.max(1e-20) {
-                                    opt_zl[i] = gj[i];
-                                }
-                            } else if gj[i] < 0.0 && state.x_u[i].is_finite() {
-                                let su = (state.x_u[i] - state.x[i]).max(1e-20);
-                                if (-gj[i]) * su <= kc * state.mu.max(1e-20) {
-                                    opt_zu[i] = -gj[i];
-                                }
-                            }
-                        }
-                        let opt_du = convergence::dual_infeasibility(
-                            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-                            &state.y, &opt_zl, &opt_zu, n,
-                        );
-                        let opt_co = convergence::complementarity_error(
-                            &state.x, &state.x_l, &state.x_u, &opt_zl, &opt_zu, 0.0,
-                        );
-                        let opt_co_best = compl_inf.min(opt_co);
-                        let fmult: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
-                            + opt_zl.iter().map(|v| v.abs()).sum::<f64>()
-                            + opt_zu.iter().map(|v| v.abs()).sum::<f64>();
-                        let fsd = if (m + 2 * n) > 0 {
-                            ((100.0f64.max(fmult / (m + 2 * n) as f64)) / 100.0).min(1e4)
-                        } else {
-                            1.0
-                        };
-                        let stall_fdu_tol = (stall_near_tol * fsd).max(1e-2);
-                        let stall_fco_tol = (stall_near_tol * fsd).max(1e-2);
-                        let stall_fpr_tol = stall_near_tol.max(10.0 * options.constr_viol_tol);
-                        // Scaled gate with optimal duals (use max-norm for primal)
-                        let sc = primal_inf_max <= stall_fpr_tol
-                            && opt_du <= stall_fdu_tol
-                            && opt_co_best <= stall_fco_tol;
-                        // Unscaled gate with original duals (component-wise scaled)
-                        let du_u = convergence::dual_infeasibility_scaled(
-                            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-                            &state.y, &state.z_l, &state.z_u, n,
-                        );
-                        let usc = primal_inf_max <= 10.0 * options.constr_viol_tol
-                            && du_u <= 10.0 * options.dual_inf_tol
-                            && opt_co_best <= 10.0 * options.compl_inf_tol;
-                        if sc && usc {
-                            if options.print_level >= 3 {
-                                rip_log!(
-                                    "ripopt: Stalled but near-tolerance via optimal duals (pr={:.2e}, du_opt={:.2e}, co={:.2e}), returning NumericalError",
-                                    primal_inf, opt_du, opt_co_best
-                                );
-                            }
-                            return make_result(&state, SolveStatus::NumericalError);
-                        }
-                    }
-                    // Before terminating: if primal is close but mu is very small,
-                    // boost mu to restore KKT regularization for dual convergence.
-                    // This addresses the "mu outrunning feasibility" pattern where
-                    // mu=1e-11 while primal_inf=O(1e-3) causes the Newton system
-                    // to lose the barrier contribution needed to close the dual gap.
-                    if primal_inf_max < 0.1 && state.mu < primal_inf_max * 0.01 {
-                        let new_mu = (primal_inf_max * 0.1).max(1e-6);
-                        if options.print_level >= 3 {
-                            rip_log!(
-                                "ripopt: Stall recovery: boosting mu {:.2e} -> {:.2e} (pr_max={:.2e})",
-                                state.mu, new_mu, primal_inf_max
-                            );
-                        }
-                        state.mu = new_mu;
-                        filter.reset();
-                        let theta_new = state.constraint_violation();
-                        filter.set_theta_min_from_initial(theta_new);
-                        stall_no_progress_count = 0;
-                        stall_best_pr = f64::INFINITY;
-                        stall_best_du = f64::INFINITY;
-                        mu_state.mode = MuMode::Fixed;
-                        mu_state.first_iter_in_mode = true;
-                        continue;
-                    }
-                    // Before terminating, revert to the best-du iterate if it has
-                    // significantly better dual feasibility. Post-stall y/z can get
-                    // corrupted by inertia-escalated KKT solves (dx≈0 but dy moves
-                    // y away from the optimum). Observed on CONCON: iter 48 had
-                    // du=7e-16, stall at iter 81 has du=1.03 at the same x.
-                    if let (Some(ref bdx), Some(ref bdy), Some(ref bdzl), Some(ref bdzu)) =
-                        (&best_du_x, &best_du_y, &best_du_zl, &best_du_zu)
-                    {
-                        if best_du_val < dual_inf * 0.1 {
-                            state.x.copy_from_slice(bdx);
-                            state.y.copy_from_slice(bdy);
-                            state.z_l.copy_from_slice(bdzl);
-                            state.z_u.copy_from_slice(bdzu);
-                            let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-                            if options.print_level >= 3 {
-                                rip_log!(
-                                    "ripopt: Reverting to best-du iterate (du: {:.2e} -> {:.2e}) before NumericalError exit",
-                                    dual_inf, best_du_val
-                                );
-                            }
-                        }
-                    }
-                    if options.print_level >= 3 {
-                        rip_log!(
-                            "ripopt: Stalled for {} iterations without progress (alpha_p={:.2e}, pr={:.2e}, du={:.2e}), terminating",
-                            stall_no_progress_count, state.alpha_primal, primal_inf, dual_inf
-                        );
-                    }
-                    return make_result(&state, SolveStatus::NumericalError);
-                }
-            }
+        // Overall-progress stall detection — see helper doc comment.
+        match detect_and_handle_progress_stall(
+            &mut state,
+            problem,
+            options,
+            iteration,
+            primal_inf,
+            primal_inf_max,
+            dual_inf,
+            compl_inf,
+            s_d_for_acc,
+            &mut filter,
+            &mut mu_state,
+            &mut stall_no_progress_count,
+            &mut stall_best_pr,
+            &mut stall_best_du,
+            best_du_val,
+            &best_du_x,
+            &best_du_y,
+            &best_du_zl,
+            &best_du_zu,
+            linear_constraints.as_deref(),
+            lbfgs_mode,
+        ) {
+            StallDecision::Return(r) => return r,
+            StallDecision::Continue => continue,
+            StallDecision::Proceed => {}
         }
-
         // Primal divergence detection: when pr is growing for several consecutive
         // iterations, force re-entry into restoration rather than continuing with
         // worsening feasibility. This catches the pattern where after NLP restoration,
