@@ -2283,6 +2283,90 @@ fn update_dual_variables(
     mu_ks
 }
 
+/// Outcome of the post-step re-evaluation with α-halving recovery.
+enum PostStepEvalDecision {
+    Proceed,
+    Continue,
+    Return(SolveResult),
+}
+
+/// Re-evaluate the problem at the accepted iterate and, on evaluation
+/// failure, execute the Ipopt-style α-halving → restoration recovery
+/// cascade.
+///
+/// Ipopt's `IpBacktrackingLineSearch.cpp:776-784` treats a post-step
+/// `Eval_Error` as an α backtrack rather than a fatal. Mirror that by
+/// halving α and α_dual (from the accepted point back toward
+/// `x_pre_step`) up to 5 times; if that fails, invoke the restoration
+/// phase; if restoration also fails, return `NumericalError`.
+///
+/// On success (or successful recovery via α-halving or restoration)
+/// returns `Proceed` / `Continue` for the main loop's control flow.
+fn reevaluate_after_step<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    options: &SolverOptions,
+    lbfgs_state: &mut Option<LbfgsIpmState>,
+    filter: &mut Filter,
+    restoration: &mut RestorationPhase,
+    timings: &mut PhaseTimings,
+    x_pre_step: &[f64],
+    linear_constraints: Option<&[bool]>,
+    lbfgs_mode: bool,
+    deadline: Option<Instant>,
+) -> PostStepEvalDecision {
+    let n = state.n;
+    let m = state.m;
+    let t_eval = Instant::now();
+    let eval_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+    if eval_ok {
+        update_lbfgs_hessian(lbfgs_state, state);
+    }
+    timings.problem_eval += t_eval.elapsed();
+
+    if eval_ok {
+        return PostStepEvalDecision::Proceed;
+    }
+
+    // Post-step evaluation failure: α-halving.
+    let mut retry_alpha = state.alpha_primal;
+    let mut retry_alpha_dual = state.alpha_dual;
+    for _ in 0..5 {
+        retry_alpha *= 0.5;
+        retry_alpha_dual *= 0.5;
+        for i in 0..n {
+            state.x[i] = x_pre_step[i] + retry_alpha * state.dx[i];
+        }
+        if state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode) {
+            state.alpha_primal = retry_alpha;
+            state.alpha_dual = retry_alpha_dual;
+            update_lbfgs_hessian(lbfgs_state, state);
+            return PostStepEvalDecision::Continue;
+        }
+    }
+
+    // α halving exhausted: try restoration.
+    let (x_rest, success) = restoration.restore(
+        &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
+        &state.jac_rows, &state.jac_cols, n, m, options,
+        &|theta, phi| filter.is_acceptable(theta, phi),
+        &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
+        &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
+        Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
+        deadline,
+    );
+    if success {
+        state.x = x_rest;
+        state.alpha_primal = 0.0;
+        if state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode) {
+            update_lbfgs_hessian(lbfgs_state, state);
+            return PostStepEvalDecision::Continue;
+        }
+    }
+
+    PostStepEvalDecision::Return(make_result(state, SolveStatus::NumericalError))
+}
+
 /// Reset the slack-constraint multipliers `v_l`, `v_u` from the
 /// barrier equilibrium `v = mu_ks / slack` after the post-step
 /// re-evaluation.
@@ -5990,70 +6074,22 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             &mut dy_sign_change_count,
         );
 
-        // Re-evaluate at new point (evaluate_with_linear checks NaN/Inf on
-        // obj, grad_f, g — matching Ipopt's OrigIpoptNLP Eval_Error semantics)
-        let t_eval = Instant::now();
-        let eval_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        if eval_ok {
-            update_lbfgs_hessian(&mut lbfgs_state, &mut state);
-        }
-        timings.problem_eval += t_eval.elapsed();
-
-        if !eval_ok {
-            // Post-step evaluation failure. Ipopt's Eval_Error catch in
-            // IpBacktrackingLineSearch.cpp:776-784 treats this as an α
-            // backtrack, not a fatal. Mirror that: halve α (and α_dual)
-            // from the accepted point toward the pre-step iterate and
-            // try again. Up to 5 halvings (α → α/32) before falling
-            // through to restoration.
-            let mut recovered = false;
-            let mut retry_alpha = state.alpha_primal;
-            let mut retry_alpha_dual = state.alpha_dual;
-            for _ in 0..5 {
-                retry_alpha *= 0.5;
-                retry_alpha_dual *= 0.5;
-                for i in 0..n {
-                    state.x[i] = x_pre_step[i] + retry_alpha * state.dx[i];
-                }
-                if state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode) {
-                    state.alpha_primal = retry_alpha;
-                    state.alpha_dual = retry_alpha_dual;
-                    update_lbfgs_hessian(&mut lbfgs_state, &mut state);
-                    recovered = true;
-                    break;
-                }
-            }
-            if recovered {
-                continue;
-            }
-            // α halving exhausted. Try restoration before giving up.
-            let (x_rest, success) = restoration.restore(
-                &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
-                &state.jac_rows, &state.jac_cols, n, m, options,
-                &|theta, phi| filter.is_acceptable(theta, phi),
-                &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
-                &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
-                Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
-                deadline,
-            );
-            if success {
-                state.x = x_rest;
-                state.alpha_primal = 0.0;
-                if state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode) {
-                    update_lbfgs_hessian(&mut lbfgs_state, &mut state);
-                    continue;
-                }
-            }
-            // Post-step evaluation failure. Ipopt caches obj_trial/g_trial
-            // from the line-search acceptance test and does not re-evaluate
-            // at an accepted point (IpIpoptAlg.cpp:652 AcceptTrialPoint just
-            // promotes cached trial→curr), so this code path has no Ipopt
-            // counterpart. When the re-evaluation trips the element-wise
-            // NaN/Inf guard added in 42f4015, we can still finish via the
-            // outer fallback chain; return NumericalError (recoverable) not
-            // EvaluationError (hard-fatal label) so the conservative retry
-            // and sibling fallbacks at solve_ipm's caller can engage.
-            return make_result(&state, SolveStatus::NumericalError);
+        match reevaluate_after_step(
+            &mut state,
+            problem,
+            options,
+            &mut lbfgs_state,
+            &mut filter,
+            &mut restoration,
+            &mut timings,
+            &x_pre_step,
+            linear_constraints.as_deref(),
+            lbfgs_mode,
+            deadline,
+        ) {
+            PostStepEvalDecision::Proceed => {}
+            PostStepEvalDecision::Continue => continue,
+            PostStepEvalDecision::Return(result) => return result,
         }
 
         reset_slack_multipliers(&mut state, mu_ks);
