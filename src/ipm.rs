@@ -2283,6 +2283,185 @@ fn update_dual_variables(
     mu_ks
 }
 
+/// Apply Gondzio multiple centrality corrections (MCC).
+///
+/// After the main Newton direction has been computed, perform up to
+/// `options.gondzio_mcc_max` additional centrality corrections using
+/// the SAME factored KKT matrix (one extra backsolve per correction)
+/// to drive complementarity pairs far from μ back toward the central
+/// path.
+///
+/// Guards:
+/// - Reject corrections whose solution magnitude exceeds `1e10`× the
+///   RHS magnitude (null-space blow-ups on rank-deficient systems).
+/// - Dampen corrections that deflect the direction by more than 30°
+///   (basin-switching on nonconvex problems).
+/// - Accept each correction only if it does not shrink α by more
+///   than 10%.
+///
+/// No-op when `options.gondzio_mcc_max == 0` or when the KKT is
+/// condensed (this helper only runs on the full-augmented path).
+///
+/// Reference: Gondzio (1994, Comput. Optim. Appl.); Gondzio (2007).
+fn apply_gondzio_mcc(
+    state: &mut SolverState,
+    options: &SolverOptions,
+    iteration: usize,
+    mu_state: &MuState,
+    primal_inf: f64,
+    dual_inf: f64,
+    compl_inf: f64,
+    kkt_system_opt: &Option<kkt::KktSystem>,
+    lin_solver: &mut dyn LinearSolver,
+) {
+    if options.gondzio_mcc_max == 0 {
+        return;
+    }
+    let Some(kkt) = kkt_system_opt.as_ref() else { return };
+    let n = state.n;
+    let m = state.m;
+
+    let tau_mcc = if mu_state.mode == MuMode::Free {
+        let nlp_error = primal_inf + dual_inf + compl_inf;
+        (1.0 - nlp_error).max(options.tau_min)
+    } else {
+        (1.0 - state.mu).max(options.tau_min)
+    };
+    let mcc_zl = filter::fraction_to_boundary(&state.z_l, &state.dz_l, tau_mcc);
+    let mcc_zu = filter::fraction_to_boundary(&state.z_u, &state.dz_u, tau_mcc);
+    let mut alpha_mcc = mcc_zl.min(mcc_zu).min(1.0);
+    for i in 0..n {
+        if state.x_l[i].is_finite() && state.dx[i] < 0.0 {
+            let s = state.x[i] - state.x_l[i];
+            alpha_mcc = alpha_mcc.min(tau_mcc * s / (-state.dx[i]));
+        }
+        if state.x_u[i].is_finite() && state.dx[i] > 0.0 {
+            let s = state.x_u[i] - state.x[i];
+            alpha_mcc = alpha_mcc.min(tau_mcc * s / state.dx[i]);
+        }
+    }
+    alpha_mcc = alpha_mcc.clamp(0.0, 1.0);
+
+    let mu_target = state.mu;
+    let beta_min = 0.01_f64;
+    let beta_max = 100.0_f64;
+
+    let dx_norm_orig: f64 = state.dx.iter().map(|v| v * v).sum::<f64>().sqrt();
+
+    for _mcc_iter in 0..options.gondzio_mcc_max {
+        let mut rhs_mcc = vec![0.0_f64; kkt.dim];
+        let mut needs_correction = false;
+
+        for i in 0..n {
+            if state.x_l[i].is_finite() {
+                let s_t = (state.x[i] + alpha_mcc * state.dx[i]
+                    - state.x_l[i]).max(1e-20);
+                let z_t = (state.z_l[i] + alpha_mcc * state.dz_l[i]).max(1e-20);
+                let c = z_t * s_t;
+                if c < beta_min * mu_target || c > beta_max * mu_target {
+                    rhs_mcc[i] += (mu_target - c) / s_t;
+                    needs_correction = true;
+                }
+            }
+            if state.x_u[i].is_finite() {
+                let s_t = (state.x_u[i] - state.x[i]
+                    - alpha_mcc * state.dx[i]).max(1e-20);
+                let z_t = (state.z_u[i] + alpha_mcc * state.dz_u[i]).max(1e-20);
+                let c = z_t * s_t;
+                if c < beta_min * mu_target || c > beta_max * mu_target {
+                    rhs_mcc[i] -= (mu_target - c) / s_t;
+                    needs_correction = true;
+                }
+            }
+        }
+
+        if !needs_correction {
+            break;
+        }
+
+        match kkt::solve_with_custom_rhs_refined(&kkt.matrix, kkt.n, kkt.dim, lin_solver, &rhs_mcc) {
+            Ok((ddx, ddy)) => {
+                let nrm_rhs: f64 = rhs_mcc.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+                let nrm_sol: f64 = ddx.iter().chain(ddy.iter()).map(|v| v.abs()).fold(0.0_f64, f64::max);
+                if nrm_sol > 1e10 * nrm_rhs.max(1.0) {
+                    log::debug!(
+                        "Gondzio MCC iter {}: ||sol||={:.2e}, ||rhs||={:.2e} — rejecting",
+                        iteration, nrm_sol, nrm_rhs,
+                    );
+                    break;
+                }
+                // Bound-multiplier corrections from the Newton step (no centering).
+                let mut ddz_l = vec![0.0_f64; n];
+                let mut ddz_u = vec![0.0_f64; n];
+                for i in 0..n {
+                    if state.x_l[i].is_finite() {
+                        let s_l = (state.x[i] - state.x_l[i]).max(1e-20);
+                        ddz_l[i] = -(state.z_l[i] / s_l) * ddx[i];
+                    }
+                    if state.x_u[i].is_finite() {
+                        let s_u = (state.x_u[i] - state.x[i]).max(1e-20);
+                        ddz_u[i] = (state.z_u[i] / s_u) * ddx[i];
+                    }
+                }
+
+                let mut dx_c: Vec<f64> = state.dx.iter().zip(ddx.iter()).map(|(a, b)| a + b).collect();
+                let mut dy_c: Vec<f64> = state.dy.iter().zip(ddy.iter()).map(|(a, b)| a + b).collect();
+                let mut dz_l_c: Vec<f64> = state.dz_l.iter().zip(ddz_l.iter()).map(|(a, b)| a + b).collect();
+                let mut dz_u_c: Vec<f64> = state.dz_u.iter().zip(ddz_u.iter()).map(|(a, b)| a + b).collect();
+
+                if dx_norm_orig > 1e-30 {
+                    let dx_c_norm: f64 = dx_c.iter().map(|v| v * v).sum::<f64>().sqrt();
+                    if dx_c_norm > 1e-30 {
+                        let dot: f64 = state.dx.iter().zip(dx_c.iter()).map(|(a, b)| a * b).sum::<f64>();
+                        let cos_angle = dot / (dx_norm_orig * dx_c_norm);
+                        if cos_angle < 0.7 {
+                            let alpha_damp = 0.3;
+                            for i in 0..n { dx_c[i] = (1.0 - alpha_damp) * state.dx[i] + alpha_damp * dx_c[i]; }
+                            for i in 0..m { dy_c[i] = (1.0 - alpha_damp) * state.dy[i] + alpha_damp * dy_c[i]; }
+                            for i in 0..n { dz_l_c[i] = (1.0 - alpha_damp) * state.dz_l[i] + alpha_damp * dz_l_c[i]; }
+                            for i in 0..n { dz_u_c[i] = (1.0 - alpha_damp) * state.dz_u[i] + alpha_damp * dz_u_c[i]; }
+                            log::debug!(
+                                "Gondzio MCC iter {}: dampened correction (cos={:.3})",
+                                iteration, cos_angle
+                            );
+                        }
+                    }
+                }
+
+                let new_zl = filter::fraction_to_boundary(&state.z_l, &dz_l_c, tau_mcc);
+                let new_zu = filter::fraction_to_boundary(&state.z_u, &dz_u_c, tau_mcc);
+                let mut alpha_new = new_zl.min(new_zu).min(1.0);
+                for i in 0..n {
+                    if state.x_l[i].is_finite() && dx_c[i] < 0.0 {
+                        let s = state.x[i] - state.x_l[i];
+                        alpha_new = alpha_new.min(tau_mcc * s / (-dx_c[i]));
+                    }
+                    if state.x_u[i].is_finite() && dx_c[i] > 0.0 {
+                        let s = state.x_u[i] - state.x[i];
+                        alpha_new = alpha_new.min(tau_mcc * s / dx_c[i]);
+                    }
+                }
+                alpha_new = alpha_new.clamp(0.0, 1.0);
+
+                if alpha_new >= 0.9 * alpha_mcc {
+                    state.dx = dx_c;
+                    state.dy = dy_c;
+                    state.dz_l = dz_l_c;
+                    state.dz_u = dz_u_c;
+                    alpha_mcc = alpha_new;
+                    log::debug!(
+                        "Gondzio MCC iter {}: correction accepted, α_mcc={:.4}",
+                        iteration, alpha_mcc
+                    );
+                } else {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+}
+
 /// Watchdog control-flow decision returned after update.
 enum WatchdogDecision {
     Proceed,
@@ -5465,181 +5644,17 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         state.dz_l = dz_l;
         state.dz_u = dz_u;
 
-        // Gondzio multiple centrality corrections (MCC).
-        //
-        // After computing the main search direction (possibly Mehrotra-corrected),
-        // perform up to `gondzio_mcc_max` additional centrality corrections.
-        // Each correction uses the SAME factored KKT matrix (one extra backsolve each)
-        // to drive complementarity pairs that are far from μ back toward the central path.
-        //
-        // Acceptance criterion: the correction is accepted only if it does not reduce
-        // the maximum step length by more than 10%.
-        //
-        // Reference: Gondzio (1994, Comput. Optim. Appl.); Gondzio (2007).
-        if options.gondzio_mcc_max > 0 {
-            if let Some(ref kkt) = kkt_system_opt {
-                // Compute a preliminary max step for the current direction
-                let tau_mcc = if mu_state.mode == MuMode::Free {
-                    let nlp_error = primal_inf + dual_inf + compl_inf;
-                    (1.0 - nlp_error).max(options.tau_min)
-                } else {
-                    (1.0 - state.mu).max(options.tau_min)
-                };
-                let mcc_zl = filter::fraction_to_boundary(&state.z_l, &state.dz_l, tau_mcc);
-                let mcc_zu = filter::fraction_to_boundary(&state.z_u, &state.dz_u, tau_mcc);
-                let mut alpha_mcc = mcc_zl.min(mcc_zu).min(1.0);
-                for i in 0..n {
-                    if state.x_l[i].is_finite() && state.dx[i] < 0.0 {
-                        let s = state.x[i] - state.x_l[i];
-                        alpha_mcc = alpha_mcc.min(tau_mcc * s / (-state.dx[i]));
-                    }
-                    if state.x_u[i].is_finite() && state.dx[i] > 0.0 {
-                        let s = state.x_u[i] - state.x[i];
-                        alpha_mcc = alpha_mcc.min(tau_mcc * s / state.dx[i]);
-                    }
-                }
-                alpha_mcc = alpha_mcc.clamp(0.0, 1.0);
-
-                let mu_target = state.mu;
-                let beta_min = 0.01_f64;  // centrality lower bound: z·s ≥ β_min·μ
-                let beta_max = 100.0_f64; // centrality upper bound: z·s ≤ β_max·μ
-
-                // Save original direction norm for deflection check
-                let dx_norm_orig: f64 = state.dx.iter().map(|v| v * v).sum::<f64>().sqrt();
-
-                for _mcc_iter in 0..options.gondzio_mcc_max {
-                    // Build centrality correction RHS: target z·s → μ for outliers
-                    let mut rhs_mcc = vec![0.0_f64; kkt.dim];
-                    let mut needs_correction = false;
-
-                    for i in 0..n {
-                        if state.x_l[i].is_finite() {
-                            let s_t = (state.x[i] + alpha_mcc * state.dx[i]
-                                - state.x_l[i]).max(1e-20);
-                            let z_t = (state.z_l[i] + alpha_mcc * state.dz_l[i]).max(1e-20);
-                            let c = z_t * s_t;
-                            if c < beta_min * mu_target || c > beta_max * mu_target {
-                                rhs_mcc[i] += (mu_target - c) / s_t;
-                                needs_correction = true;
-                            }
-                        }
-                        if state.x_u[i].is_finite() {
-                            let s_t = (state.x_u[i] - state.x[i]
-                                - alpha_mcc * state.dx[i]).max(1e-20);
-                            let z_t = (state.z_u[i] + alpha_mcc * state.dz_u[i]).max(1e-20);
-                            let c = z_t * s_t;
-                            if c < beta_min * mu_target || c > beta_max * mu_target {
-                                rhs_mcc[i] -= (mu_target - c) / s_t;
-                                needs_correction = true;
-                            }
-                        }
-                    }
-
-                    if !needs_correction {
-                        break;
-                    }
-
-                    // Solve for the centrality correction direction
-                    match kkt::solve_with_custom_rhs_refined(&kkt.matrix, kkt.n, kkt.dim, lin_solver.as_mut(), &rhs_mcc) {
-                        Ok((ddx, ddy)) => {
-                            // Reject absurd corrections — same rank-deficiency
-                            // pathology as solve_for_direction's magnitude guard,
-                            // but solve_with_custom_rhs has no such check. A
-                            // null-space correction blows up dx, drives α→0, and
-                            // stalls the main IPM (case30_ieee).
-                            let nrm_rhs: f64 = rhs_mcc.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
-                            let nrm_sol: f64 = ddx.iter().chain(ddy.iter()).map(|v| v.abs()).fold(0.0_f64, f64::max);
-                            if nrm_sol > 1e10 * nrm_rhs.max(1.0) {
-                                log::debug!(
-                                    "Gondzio MCC iter {}: ||sol||={:.2e}, ||rhs||={:.2e} — rejecting",
-                                    iteration, nrm_sol, nrm_rhs,
-                                );
-                                break;
-                            }
-                            // Compute bound-multiplier corrections from the Newton step:
-                            //   S_l · ddz_l + Z_l · ddx = 0  (no centering in correction)
-                            //   ddz_l[i] = -(z_l[i] / s_l[i]) * ddx[i]
-                            //   ddz_u[i] =  (z_u[i] / s_u[i]) * ddx[i]
-                            // NOTE: do NOT use recover_dz(mu=0) here — that adds the
-                            // affine centering term (-z_l[i]) which would drive z_l to zero.
-                            let mut ddz_l = vec![0.0_f64; n];
-                            let mut ddz_u = vec![0.0_f64; n];
-                            for i in 0..n {
-                                if state.x_l[i].is_finite() {
-                                    let s_l = (state.x[i] - state.x_l[i]).max(1e-20);
-                                    ddz_l[i] = -(state.z_l[i] / s_l) * ddx[i];
-                                }
-                                if state.x_u[i].is_finite() {
-                                    let s_u = (state.x_u[i] - state.x[i]).max(1e-20);
-                                    ddz_u[i] = (state.z_u[i] / s_u) * ddx[i];
-                                }
-                            }
-
-                            // Tentatively update direction
-                            let mut dx_c: Vec<f64> = state.dx.iter().zip(ddx.iter()).map(|(a, b)| a + b).collect();
-                            let mut dy_c: Vec<f64> = state.dy.iter().zip(ddy.iter()).map(|(a, b)| a + b).collect();
-                            let mut dz_l_c: Vec<f64> = state.dz_l.iter().zip(ddz_l.iter()).map(|(a, b)| a + b).collect();
-                            let mut dz_u_c: Vec<f64> = state.dz_u.iter().zip(ddz_u.iter()).map(|(a, b)| a + b).collect();
-
-                            // Deflection check: if correction deflects direction > 30%,
-                            // dampen to prevent basin-switching on nonconvex problems
-                            if dx_norm_orig > 1e-30 {
-                                let dx_c_norm: f64 = dx_c.iter().map(|v| v * v).sum::<f64>().sqrt();
-                                if dx_c_norm > 1e-30 {
-                                    let dot: f64 = state.dx.iter().zip(dx_c.iter()).map(|(a, b)| a * b).sum::<f64>();
-                                    let cos_angle = dot / (dx_norm_orig * dx_c_norm);
-                                    if cos_angle < 0.7 {
-                                        let alpha_damp = 0.3;
-                                        for i in 0..n { dx_c[i] = (1.0 - alpha_damp) * state.dx[i] + alpha_damp * dx_c[i]; }
-                                        for i in 0..m { dy_c[i] = (1.0 - alpha_damp) * state.dy[i] + alpha_damp * dy_c[i]; }
-                                        for i in 0..n { dz_l_c[i] = (1.0 - alpha_damp) * state.dz_l[i] + alpha_damp * dz_l_c[i]; }
-                                        for i in 0..n { dz_u_c[i] = (1.0 - alpha_damp) * state.dz_u[i] + alpha_damp * dz_u_c[i]; }
-                                        log::debug!(
-                                            "Gondzio MCC iter {}: dampened correction (cos={:.3})",
-                                            iteration, cos_angle
-                                        );
-                                    }
-                                }
-                            }
-
-                            // Compute new alpha for the corrected direction
-                            let new_zl = filter::fraction_to_boundary(&state.z_l, &dz_l_c, tau_mcc);
-                            let new_zu = filter::fraction_to_boundary(&state.z_u, &dz_u_c, tau_mcc);
-                            let mut alpha_new = new_zl.min(new_zu).min(1.0);
-                            for i in 0..n {
-                                if state.x_l[i].is_finite() && dx_c[i] < 0.0 {
-                                    let s = state.x[i] - state.x_l[i];
-                                    alpha_new = alpha_new.min(tau_mcc * s / (-dx_c[i]));
-                                }
-                                if state.x_u[i].is_finite() && dx_c[i] > 0.0 {
-                                    let s = state.x_u[i] - state.x[i];
-                                    alpha_new = alpha_new.min(tau_mcc * s / dx_c[i]);
-                                }
-                            }
-                            alpha_new = alpha_new.clamp(0.0, 1.0);
-
-                            // Accept only if the correction doesn't shrink alpha by >10%
-                            if alpha_new >= 0.9 * alpha_mcc {
-                                // dx_c needs explicit type annotation for vec addition
-                                let _ = &mut dx_c; // silence unused_mut warning
-                                state.dx = dx_c;
-                                state.dy = dy_c;
-                                state.dz_l = dz_l_c;
-                                state.dz_u = dz_u_c;
-                                alpha_mcc = alpha_new;
-                                log::debug!(
-                                    "Gondzio MCC iter {}: correction accepted, α_mcc={:.4}",
-                                    iteration, alpha_mcc
-                                );
-                            } else {
-                                break;
-                            }
-                        }
-                        Err(_) => break,
-                    }
-                }
-            }
-        }
+        apply_gondzio_mcc(
+            &mut state,
+            options,
+            iteration,
+            &mu_state,
+            primal_inf,
+            dual_inf,
+            compl_inf,
+            &kkt_system_opt,
+            lin_solver.as_mut(),
+        );
 
         let (tau, alpha_primal_max, alpha_dual_max) = compute_alpha_max(
             &state, options, &mu_state, primal_inf, dual_inf, compl_inf,
