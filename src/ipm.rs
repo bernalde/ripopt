@@ -2089,6 +2089,97 @@ fn dump_kkt_matrix(
     }
 }
 
+/// Emit one row of the per-iteration TSV trace (for the
+/// direction-diff harness with Ipopt's IntermediateCallback).
+///
+/// Gated on `trace::is_enabled()` (RIP_TRACE_TSV env var). No-op in
+/// production runs. Also resets the per-iteration scratch values
+/// (`last_alpha_primal_max`, `last_tau_used`, `last_soc_accepted`)
+/// so the next iteration starts clean.
+///
+/// Extracted from `solve_ipm` as part of the v0.8 main-loop
+/// decomposition (pre-work step 2). Pure side-effect function.
+#[allow(clippy::too_many_arguments)]
+fn emit_trace_row_if_enabled(
+    state: &SolverState,
+    iteration: usize,
+    primal_inf: f64,
+    dual_inf: f64,
+    compl_inf: f64,
+    ls_steps: usize,
+    inertia_params: &InertiaCorrectionParams,
+    last_mehrotra_sigma: Option<f64>,
+    last_alpha_primal_max: &mut Option<f64>,
+    last_tau_used: &mut Option<f64>,
+    last_soc_accepted: &mut bool,
+) {
+    if !trace::is_enabled() {
+        return;
+    }
+    let n = state.n;
+    let dx_inf = state.dx.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+    let dzl_inf = state.dz_l.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+    let dzu_inf = state.dz_u.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+    // log10(max Σ_i / min Σ_i) where Σ_i = z_l_i/s_l_i + z_u_i/s_u_i.
+    // High values (~10+) signal ill-conditioning of the condensed KKT at
+    // low μ and are an α=1/low-μ direction-quality suspect.
+    let (sigma_min, sigma_max_val) = {
+        let mut mn = f64::INFINITY;
+        let mut mx = 0.0_f64;
+        for i in 0..n {
+            let mut s_i = 0.0_f64;
+            if state.x_l[i].is_finite() {
+                let s = (state.x[i] - state.x_l[i]).max(1e-20);
+                s_i += state.z_l[i] / s;
+            }
+            if state.x_u[i].is_finite() {
+                let s = (state.x_u[i] - state.x[i]).max(1e-20);
+                s_i += state.z_u[i] / s;
+            }
+            if s_i > 0.0 {
+                mn = mn.min(s_i);
+                mx = mx.max(s_i);
+            }
+        }
+        (mn, mx)
+    };
+    let sigma_cond = if sigma_min.is_finite() && sigma_min > 0.0 && sigma_max_val > 0.0 {
+        (sigma_max_val / sigma_min).log10()
+    } else {
+        f64::NAN
+    };
+    trace::emit(&trace::TraceRow {
+        iter: iteration,
+        obj: state.obj / state.obj_scaling,
+        inf_pr: primal_inf,
+        inf_du: dual_inf,
+        compl: compl_inf,
+        mu: state.mu,
+        alpha_pr: state.alpha_primal,
+        alpha_du: state.alpha_dual,
+        alpha_aff_p: f64::NAN,
+        alpha_aff_d: f64::NAN,
+        mu_aff: f64::NAN,
+        sigma: last_mehrotra_sigma.unwrap_or(f64::NAN),
+        mu_pc: f64::NAN,
+        delta_w: inertia_params.delta_w_last,
+        delta_c: 0.0,
+        dx_inf,
+        dzl_inf,
+        dzu_inf,
+        mcc_iters: 0,
+        ls: ls_steps as u32,
+        accepted: true,
+        alpha_primal_max: last_alpha_primal_max.unwrap_or(f64::NAN),
+        tau_used: last_tau_used.unwrap_or(f64::NAN),
+        sigma_cond,
+        soc_accepted: *last_soc_accepted,
+    });
+    *last_alpha_primal_max = None;
+    *last_tau_used = None;
+    *last_soc_accepted = false;
+}
+
 /// Populate the per-iteration IterateSnapshot and invoke the user
 /// intermediate callback.
 ///
@@ -2815,74 +2906,19 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             options,
         );
 
-        // TSV trace for the direction-diff harness (env RIP_TRACE_TSV).
-        // Emits iter-level intermediates for side-by-side comparison with
-        // an equivalent Ipopt IntermediateCallback trace. Gated on the
-        // env var being set — the reductions below (dx_inf, σ_cond) are
-        // O(n) and shouldn't run on every iteration of a benchmark.
-        if trace::is_enabled() {
-            let dx_inf = state.dx.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
-            let dzl_inf = state.dz_l.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
-            let dzu_inf = state.dz_u.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
-            // log10(max Σ_i / min Σ_i) where Σ_i = z_l_i/s_l_i + z_u_i/s_u_i.
-            // High values (~10+) signal ill-conditioning of the condensed KKT at
-            // low μ and are an α=1/low-μ direction-quality suspect.
-            let (sigma_min, sigma_max_val) = {
-                let mut mn = f64::INFINITY;
-                let mut mx = 0.0_f64;
-                for i in 0..n {
-                    let mut s_i = 0.0_f64;
-                    if state.x_l[i].is_finite() {
-                        let s = (state.x[i] - state.x_l[i]).max(1e-20);
-                        s_i += state.z_l[i] / s;
-                    }
-                    if state.x_u[i].is_finite() {
-                        let s = (state.x_u[i] - state.x[i]).max(1e-20);
-                        s_i += state.z_u[i] / s;
-                    }
-                    if s_i > 0.0 {
-                        mn = mn.min(s_i);
-                        mx = mx.max(s_i);
-                    }
-                }
-                (mn, mx)
-            };
-            let sigma_cond = if sigma_min.is_finite() && sigma_min > 0.0 && sigma_max_val > 0.0 {
-                (sigma_max_val / sigma_min).log10()
-            } else {
-                f64::NAN
-            };
-            trace::emit(&trace::TraceRow {
-                iter: iteration,
-                obj: state.obj / state.obj_scaling,
-                inf_pr: primal_inf,
-                inf_du: dual_inf,
-                compl: compl_inf,
-                mu: state.mu,
-                alpha_pr: state.alpha_primal,
-                alpha_du: state.alpha_dual,
-                alpha_aff_p: f64::NAN,
-                alpha_aff_d: f64::NAN,
-                mu_aff: f64::NAN,
-                sigma: last_mehrotra_sigma.unwrap_or(f64::NAN),
-                mu_pc: f64::NAN,
-                delta_w: inertia_params.delta_w_last,
-                delta_c: 0.0,
-                dx_inf,
-                dzl_inf,
-                dzu_inf,
-                mcc_iters: 0,
-                ls: ls_steps as u32,
-                accepted: true,
-                alpha_primal_max: last_alpha_primal_max.unwrap_or(f64::NAN),
-                tau_used: last_tau_used.unwrap_or(f64::NAN),
-                sigma_cond,
-                soc_accepted: last_soc_accepted,
-            });
-            last_alpha_primal_max = None;
-            last_tau_used = None;
-            last_soc_accepted = false;
-        }
+        emit_trace_row_if_enabled(
+            &state,
+            iteration,
+            primal_inf,
+            dual_inf,
+            compl_inf,
+            ls_steps,
+            &inertia_params,
+            last_mehrotra_sigma,
+            &mut last_alpha_primal_max,
+            &mut last_tau_used,
+            &mut last_soc_accepted,
+        );
 
         if let Some(result) = populate_snapshot_and_invoke_callback(
             &state,
