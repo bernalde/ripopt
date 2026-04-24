@@ -2283,6 +2283,44 @@ fn update_dual_variables(
     mu_ks
 }
 
+/// Reset the slack-constraint multipliers `v_l`, `v_u` from the
+/// barrier equilibrium `v = mu_ks / slack` after the post-step
+/// re-evaluation.
+///
+/// A simple reset rather than a Newton update — the dv direction is
+/// approximate (we carry no explicit slacks) and applying FTB on `v`
+/// can restrict `alpha_d` too much. Only active slacks (`v > 0`) are
+/// touched.
+fn reset_slack_multipliers(state: &mut SolverState, mu_ks: f64) {
+    let m = state.m;
+    for i in 0..m {
+        if state.v_l[i] > 0.0 && state.g_l[i].is_finite() {
+            let slack = (state.g[i] - state.g_l[i]).max(1e-20);
+            state.v_l[i] = mu_ks / slack;
+        }
+        if state.v_u[i] > 0.0 && state.g_u[i].is_finite() {
+            let slack = (state.g_u[i] - state.g[i]).max(1e-20);
+            state.v_u[i] = mu_ks / slack;
+        }
+    }
+}
+
+/// Record the current iterate as the best-feasible point seen so far
+/// if it satisfies `constr_viol_tol` and strictly improves `best_obj`.
+/// Used as the fallback iterate returned at `max_iter` exit.
+fn track_best_feasible(
+    state: &SolverState,
+    options: &SolverOptions,
+    best_obj: &mut f64,
+    best_x: &mut Option<Vec<f64>>,
+) {
+    let theta_now = state.constraint_violation();
+    if theta_now < options.constr_viol_tol && state.obj < *best_obj {
+        *best_obj = state.obj;
+        *best_x = Some(state.x.clone());
+    }
+}
+
 /// Fraction-to-boundary step limits for primal and dual.
 ///
 /// `tau` = `max(1 - NLP_error, tau_min)` in Free mode or
@@ -6018,28 +6056,8 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             return make_result(&state, SolveStatus::NumericalError);
         }
 
-        // Reset v_l, v_u from barrier equilibrium v = mu_ks / slack.
-        // Simple reset rather than Newton update (our dv is approximate since we
-        // lack explicit slacks, and FTB on v can restrict alpha_d too much).
-        for i in 0..m {
-            if state.v_l[i] > 0.0 && state.g_l[i].is_finite() {
-                let slack = (state.g[i] - state.g_l[i]).max(1e-20);
-                state.v_l[i] = mu_ks / slack;
-            }
-            if state.v_u[i] > 0.0 && state.g_u[i].is_finite() {
-                let slack = (state.g_u[i] - state.g[i]).max(1e-20);
-                state.v_u[i] = mu_ks / slack;
-            }
-        }
-
-        // Track best feasible point for max_iter exit
-        {
-            let theta_now = state.constraint_violation();
-            if theta_now < options.constr_viol_tol && state.obj < best_obj {
-                best_obj = state.obj;
-                best_x = Some(state.x.clone());
-            }
-        }
+        reset_slack_multipliers(&mut state, mu_ks);
+        track_best_feasible(&state, options, &mut best_obj, &mut best_x);
 
         // --- Barrier parameter update (free/fixed mode) ---
         update_barrier_parameter(
