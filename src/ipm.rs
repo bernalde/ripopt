@@ -1224,6 +1224,56 @@ fn prepare_fallback_opts(options: &SolverOptions, solve_start: &Instant) -> Opti
     Some(opts)
 }
 
+/// Run preprocessing (fixed-variable and redundant-constraint elimination)
+/// and, if it reduces the problem, recursively `solve` the smaller problem
+/// then unmap the solution. Returns `Some(result)` only when the
+/// preprocessed solve reaches `Optimal`; otherwise returns `None` so the
+/// caller falls through to the unpreprocessed path.
+///
+/// The preprocessed solve is capped at 50% of the remaining wall-time budget
+/// so the unpreprocessed retry has time left when preprocessing leads the
+/// solver into a bad basin (e.g. ganges.gms).
+fn try_preprocessed_solve<P: NlpProblem>(
+    problem: &P,
+    options: &SolverOptions,
+    solve_start: Instant,
+) -> Option<SolveResult> {
+    if !options.enable_preprocessing {
+        return None;
+    }
+    let prep = crate::preprocessing::PreprocessedProblem::new(problem as &dyn NlpProblem, options.bound_push);
+    if !prep.did_reduce() {
+        return None;
+    }
+    if options.print_level >= 5 {
+        rip_log!(
+            "ripopt: Preprocessing reduced problem: {} fixed vars, {} redundant constraints ({}x{} -> {}x{})",
+            prep.num_fixed(), prep.num_redundant(),
+            problem.num_variables(), problem.num_constraints(),
+            prep.num_variables(), prep.num_constraints(),
+        );
+    }
+    let mut prep_opts = options.clone();
+    prep_opts.enable_preprocessing = false;
+    if options.max_wall_time > 0.0 {
+        let elapsed = solve_start.elapsed().as_secs_f64();
+        let remaining = (options.max_wall_time - elapsed).max(1.0);
+        prep_opts.max_wall_time = remaining * 0.5;
+    }
+    let reduced_result = solve(&prep, &prep_opts);
+    let result = prep.unmap_solution(&reduced_result);
+    if matches!(result.status, SolveStatus::Optimal) {
+        return Some(result);
+    }
+    if options.print_level >= 5 {
+        rip_log!(
+            "ripopt: Preprocessed solve failed ({:?}), retrying without preprocessing",
+            result.status
+        );
+    }
+    None
+}
+
 /// Detect an overdetermined nonlinear equation problem (f ≡ 0, all equalities,
 /// m ≥ n) and, if detected, solve it by reformulating as the unconstrained
 /// least-squares problem `min 0.5·||g(x) − target||²` via
@@ -1540,43 +1590,8 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     // NOTE: disabled -- extra problem evaluations here change CUTEst FP state and cause regressions.
     let (initial_obj, initial_feasible) = (f64::INFINITY, false);
 
-    // --- Preprocessing: eliminate fixed variables and redundant constraints ---
-    if options.enable_preprocessing {
-        let prep = crate::preprocessing::PreprocessedProblem::new(problem as &dyn NlpProblem, options.bound_push);
-        if prep.did_reduce() {
-            if options.print_level >= 5 {
-                rip_log!(
-                    "ripopt: Preprocessing reduced problem: {} fixed vars, {} redundant constraints ({}x{} -> {}x{})",
-                    prep.num_fixed(), prep.num_redundant(),
-                    problem.num_variables(), problem.num_constraints(),
-                    prep.num_variables(), prep.num_constraints(),
-                );
-            }
-            let mut prep_opts = options.clone();
-            prep_opts.enable_preprocessing = false; // prevent re-preprocessing
-            // Limit wall time for the preprocessed solve to half the remaining budget.
-            // Without this, the preprocessed fallback chain can consume the full budget,
-            // leaving no time for the unpreprocessed retry (which often succeeds when
-            // preprocessing changes the problem structure, e.g., ganges.gms 273x273->356x273).
-            if options.max_wall_time > 0.0 {
-                let elapsed = solve_start.elapsed().as_secs_f64();
-                let remaining = (options.max_wall_time - elapsed).max(1.0);
-                prep_opts.max_wall_time = remaining * 0.5;
-            }
-            let reduced_result = solve(&prep, &prep_opts);
-            let result = prep.unmap_solution(&reduced_result);
-            // If preprocessing made things worse, fall back to solving without it
-            if matches!(result.status, SolveStatus::Optimal) {
-                return result;
-            }
-            if options.print_level >= 5 {
-                rip_log!(
-                    "ripopt: Preprocessed solve failed ({:?}), retrying without preprocessing",
-                    result.status
-                );
-            }
-            // Fall through to solve without preprocessing
-        }
+    if let Some(result) = try_preprocessed_solve(problem, options, solve_start) {
+        return result;
     }
 
     if let Some(result) = try_ne_to_ls_reformulation(problem, options, solve_start) {
