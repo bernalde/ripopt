@@ -2116,6 +2116,95 @@ fn update_lbfgs_hessian(
     }
 }
 
+/// Bundled output of the per-iteration KKT assembly phase.
+///
+/// Holds the barrier diagonal `sigma` and whichever of the three KKT
+/// representations the dispatch selected. Exactly one of
+/// `condensed_system`, `sparse_condensed_system`, `kkt_system_opt`
+/// is `Some` on exit.
+struct AssembledKkt {
+    sigma: Vec<f64>,
+    use_sparse_condensed: bool,
+    condensed_system: Option<kkt::CondensedKktSystem>,
+    sparse_condensed_system: Option<kkt::SparseCondensedKktSystem>,
+    kkt_system_opt: Option<kkt::KktSystem>,
+}
+
+/// Build the KKT system(s) for the current iterate.
+///
+/// Three-way dispatch:
+/// - Dense condensed Schur complement when `m >= 2n` and `n` is small.
+///   Cost `O(n^2 m + n^3)` beats `O((n+m)^3)` when `m >> n`.
+/// - Sparse condensed Schur when the problem is large with constraints
+///   and dense condensed is not already selected.
+/// - Full augmented (n+m)x(n+m) KKT otherwise.
+///
+/// Extracted from `solve_ipm` as part of the v0.8 main-loop
+/// decomposition. Does not touch `timings` — the caller records the
+/// elapsed duration.
+fn assemble_kkt_systems(
+    state: &SolverState,
+    n: usize,
+    m: usize,
+    use_sparse: bool,
+    disable_sparse_condensed: bool,
+) -> AssembledKkt {
+    let sigma = kkt::compute_sigma(&state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u);
+
+    let use_condensed = m >= 2 * n && n > 0 && (!use_sparse || n <= 100);
+    let use_sparse_condensed = use_sparse && m > 0 && !use_condensed && !disable_sparse_condensed;
+
+    let condensed_system = if use_condensed {
+        Some(kkt::assemble_condensed_kkt(
+            n, m,
+            &state.hess_rows, &state.hess_cols, &state.hess_vals,
+            &state.jac_rows, &state.jac_cols, &state.jac_vals,
+            &sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
+            &state.y, &state.z_l, &state.z_u,
+            &state.x, &state.x_l, &state.x_u, state.mu,
+            &state.v_l, &state.v_u,
+        ))
+    } else {
+        None
+    };
+
+    let sparse_condensed_system = if use_sparse_condensed {
+        Some(kkt::assemble_sparse_condensed_kkt(
+            n, m,
+            &state.hess_rows, &state.hess_cols, &state.hess_vals,
+            &state.jac_rows, &state.jac_cols, &state.jac_vals,
+            &sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
+            &state.y, &state.z_l, &state.z_u,
+            &state.x, &state.x_l, &state.x_u, state.mu,
+            &state.v_l, &state.v_u,
+        ))
+    } else {
+        None
+    };
+
+    let kkt_system_opt = if !use_condensed && !use_sparse_condensed {
+        Some(kkt::assemble_kkt(
+            n, m,
+            &state.hess_rows, &state.hess_cols, &state.hess_vals,
+            &state.jac_rows, &state.jac_cols, &state.jac_vals,
+            &sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
+            &state.y, &state.z_l, &state.z_u,
+            &state.x, &state.x_l, &state.x_u, state.mu,
+            use_sparse, &state.v_l, &state.v_u,
+        ))
+    } else {
+        None
+    };
+
+    AssembledKkt {
+        sigma,
+        use_sparse_condensed,
+        condensed_system,
+        sparse_condensed_system,
+        kkt_system_opt,
+    }
+}
+
 /// Update the barrier parameter μ (interior-point centering parameter) once
 /// per iteration after the step has been accepted.
 ///
@@ -4212,63 +4301,14 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             m,
         );
 
-        // Compute sigma (barrier diagonal)
-        let sigma = kkt::compute_sigma(&state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u);
-
-        // Use dense condensed KKT (Schur complement) when m >> n and n is small,
-        // OR when the bandwidth detection (iteration 0) triggered a dense fallback.
-        // Condensed cost is O(n^2*m + n^3) vs O((n+m)^3) — strictly better when m >> n.
-        // Allow this even for "sparse" problems when n is tiny — an n×n dense solve
-        // is always faster than an (n+m)×(n+m) sparse solve for small n.
-        let use_condensed = m >= 2 * n && n > 0 && (!use_sparse || n <= 100);
-
-        // Use sparse condensed KKT when problem is large and has constraints,
-        // but only if the Schur complement is actually sparser than the augmented system.
-        let use_sparse_condensed = use_sparse && m > 0 && !use_condensed && !disable_sparse_condensed;
-
         let t_kkt = Instant::now();
-        let condensed_system = if use_condensed {
-            Some(kkt::assemble_condensed_kkt(
-                n, m,
-                &state.hess_rows, &state.hess_cols, &state.hess_vals,
-                &state.jac_rows, &state.jac_cols, &state.jac_vals,
-                &sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
-                &state.y, &state.z_l, &state.z_u,
-                &state.x, &state.x_l, &state.x_u, state.mu,
-                &state.v_l, &state.v_u,
-            ))
-        } else {
-            None
-        };
-
-        let mut sparse_condensed_system = if use_sparse_condensed {
-            Some(kkt::assemble_sparse_condensed_kkt(
-                n, m,
-                &state.hess_rows, &state.hess_cols, &state.hess_vals,
-                &state.jac_rows, &state.jac_cols, &state.jac_vals,
-                &sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
-                &state.y, &state.z_l, &state.z_u,
-                &state.x, &state.x_l, &state.x_u, state.mu,
-                &state.v_l, &state.v_u,
-            ))
-        } else {
-            None
-        };
-
-        // Build full KKT only when not using any condensed path
-        let mut kkt_system_opt: Option<kkt::KktSystem> = if !use_condensed && !use_sparse_condensed {
-            Some(kkt::assemble_kkt(
-                n, m,
-                &state.hess_rows, &state.hess_cols, &state.hess_vals,
-                &state.jac_rows, &state.jac_cols, &state.jac_vals,
-                &sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
-                &state.y, &state.z_l, &state.z_u,
-                &state.x, &state.x_l, &state.x_u, state.mu,
-                use_sparse, &state.v_l, &state.v_u,
-            ))
-        } else {
-            None
-        };
+        let AssembledKkt {
+            sigma,
+            use_sparse_condensed,
+            condensed_system,
+            mut sparse_condensed_system,
+            mut kkt_system_opt,
+        } = assemble_kkt_systems(&state, n, m, use_sparse, disable_sparse_condensed);
         timings.kkt_assembly += t_kkt.elapsed();
 
         // On first iteration with sparse condensed, detect bandwidth for the condensed system.
