@@ -2089,6 +2089,47 @@ fn dump_kkt_matrix(
     }
 }
 
+/// Emit a single iteration-row line to the solver log.
+///
+/// Ipopt parallel: `IpIpoptAlg::OutputIteration` (IpIpoptAlg.cpp:520–560).
+/// Header is reprinted every 25 data rows.
+///
+/// Extracted from `solve_ipm` as part of the v0.8 main-loop decomposition
+/// (pre-work step 2). Pure side-effect function — no solver state mutation
+/// beyond incrementing `log_line_count`.
+fn log_iteration_row(
+    iteration: usize,
+    state: &SolverState,
+    primal_inf: f64,
+    dual_inf: f64,
+    ls_steps: usize,
+    log_line_count: &mut usize,
+    options: &SolverOptions,
+) {
+    if options.print_level < 3 {
+        return;
+    }
+    // Reprint header every 25 data rows for readability
+    if *log_line_count > 0 && *log_line_count % 25 == 0 {
+        rip_log!(
+            "{:>4}  {:>14}  {:>10}  {:>10}  {:>7}  {:>8}  {:>8}  {:>3}",
+            "iter", "objective", "inf_pr", "inf_du", "lg(mu)", "alpha_pr", "alpha_du", "ls"
+        );
+    }
+    rip_log!(
+        "{:>4}  {:>14.7e}  {:>10.2e}  {:>10.2e}  {:>10.2e}  {:>8.2e}  {:>8.2e}  {:>3}",
+        iteration,
+        state.obj / state.obj_scaling,
+        primal_inf,
+        dual_inf,
+        state.mu,
+        state.alpha_primal,
+        state.alpha_dual,
+        ls_steps,
+    );
+    *log_line_count += 1;
+}
+
 /// Core IPM solver implementation.
 fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult {
     // --- NLP Scaling (gradient-based, matching Ipopt's nlp_scaling_method) ---
@@ -2655,27 +2696,15 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
         );
 
-        if options.print_level >= 3 {
-            // Reprint header every 25 data rows for readability
-            if log_line_count > 0 && log_line_count % 25 == 0 {
-                rip_log!(
-                    "{:>4}  {:>14}  {:>10}  {:>10}  {:>7}  {:>8}  {:>8}  {:>3}",
-                    "iter", "objective", "inf_pr", "inf_du", "lg(mu)", "alpha_pr", "alpha_du", "ls"
-                );
-            }
-            rip_log!(
-                "{:>4}  {:>14.7e}  {:>10.2e}  {:>10.2e}  {:>10.2e}  {:>8.2e}  {:>8.2e}  {:>3}",
-                iteration,
-                state.obj / state.obj_scaling,
-                primal_inf,
-                dual_inf,
-                state.mu,
-                state.alpha_primal,
-                state.alpha_dual,
-                ls_steps,
-            );
-            log_line_count += 1;
-        }
+        log_iteration_row(
+            iteration,
+            &state,
+            primal_inf,
+            dual_inf,
+            ls_steps,
+            &mut log_line_count,
+            options,
+        );
 
         // TSV trace for the direction-diff harness (env RIP_TRACE_TSV).
         // Emits iter-level intermediates for side-by-side comparison with
