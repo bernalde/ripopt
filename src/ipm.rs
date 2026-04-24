@@ -1224,6 +1224,314 @@ fn prepare_fallback_opts(options: &SolverOptions, solve_start: &Instant) -> Opti
     Some(opts)
 }
 
+/// Detect an overdetermined nonlinear equation problem (f ≡ 0, all equalities,
+/// m ≥ n) and, if detected, solve it by reformulating as the unconstrained
+/// least-squares problem `min 0.5·||g(x) − target||²` via
+/// `LeastSquaresProblem`. Post-solve, polish with Gauss-Newton on the
+/// original system, falling back to constrained IPM (and AL for square
+/// systems) when the LS residual is above `options.tol`.
+///
+/// Returns `Some(SolveResult)` when the NE detection fires, `None`
+/// otherwise (caller should fall through to the normal IPM path).
+fn try_ne_to_ls_reformulation<P: NlpProblem>(
+    problem: &P,
+    options: &SolverOptions,
+    solve_start: Instant,
+) -> Option<SolveResult> {
+    if !detect_ne_problem(problem) {
+        return None;
+    }
+    let n = problem.num_variables();
+    let m = problem.num_constraints();
+    if options.print_level >= 5 {
+        rip_log!(
+            "ripopt: Detected overdetermined NE problem (n={}, m={}), reformulating as least-squares",
+            n, m
+        );
+    }
+    let ls_problem = LeastSquaresProblem::new(problem);
+    // For square systems (m == n), cap LS iterations — they often fail the LS
+    // approach because there are no "extra" equations to drive residuals down.
+    let mut ls_opts = options.clone();
+    if m == n {
+        ls_opts.max_iter = (options.max_iter / 10).min(100);
+    }
+    let ls_result = solve_ipm(&ls_problem, &ls_opts);
+
+    // Evaluate original constraint violation at the LS solution
+    let mut g_final = vec![0.0; m];
+    if !problem.constraints(&ls_result.x, true, &mut g_final) {
+        let mut diag = ls_result.diagnostics.clone();
+        diag.fallback_used = Some("ne-to-ls".into());
+        return Some(SolveResult {
+            x: ls_result.x,
+            objective: ls_result.objective,
+            constraint_multipliers: vec![0.0; m],
+            bound_multipliers_lower: ls_result.bound_multipliers_lower,
+            bound_multipliers_upper: ls_result.bound_multipliers_upper,
+            constraint_values: g_final,
+            status: SolveStatus::EvaluationError,
+            iterations: ls_result.iterations,
+            diagnostics: diag,
+        });
+    }
+    let mut g_l = vec![0.0; m];
+    let mut g_u = vec![0.0; m];
+    problem.constraint_bounds(&mut g_l, &mut g_u);
+    let mut theta = convergence::primal_infeasibility(&g_final, &g_l, &g_u);
+
+    // Newton polish: if theta is close but not quite at tol, try a few
+    // Gauss-Newton steps on the original system g(x) = target to drive
+    // constraint violation below tol.
+    let mut polished_x = ls_result.x.clone();
+    if theta > options.tol && theta < 1e-2 {
+        let mut x_l_var = vec![0.0; n];
+        let mut x_u_var = vec![0.0; n];
+        problem.bounds(&mut x_l_var, &mut x_u_var);
+        let (jac_rows, jac_cols) = problem.jacobian_structure();
+        let nnz = jac_rows.len();
+
+        let target: Vec<f64> = (0..m).map(|i| {
+            if (g_u[i] - g_l[i]).abs() < 1e-15 { g_l[i] } else { 0.5 * (g_l[i] + g_u[i]) }
+        }).collect();
+
+        let max_newton_iters = 20;
+        for newton_iter in 0..max_newton_iters {
+            let r: Vec<f64> = (0..m).map(|i| g_final[i] - target[i]).collect();
+
+            let mut jac_vals = vec![0.0; nnz];
+            if !problem.jacobian_values(&polished_x, true, &mut jac_vals) {
+                break;
+            }
+
+            let mut j_dense = vec![0.0; m * n];
+            for k in 0..nnz {
+                j_dense[jac_rows[k] * n + jac_cols[k]] += jac_vals[k];
+            }
+
+            // Solve for dx using normal equations: (J^T J) dx = -J^T r
+            let mut jtj = vec![0.0; n * n];
+            let mut jtr = vec![0.0; n];
+            for i in 0..n {
+                for j in 0..n {
+                    let mut s = 0.0;
+                    for k in 0..m {
+                        s += j_dense[k * n + i] * j_dense[k * n + j];
+                    }
+                    jtj[i * n + j] = s;
+                }
+                let mut s = 0.0;
+                for k in 0..m {
+                    s += j_dense[k * n + i] * r[k];
+                }
+                jtr[i] = s;
+            }
+
+            for i in 0..n {
+                jtj[i * n + i] += 1e-14;
+            }
+
+            let dx = match dense_cholesky_solve(&jtj, &jtr, n) {
+                Some(dx) => dx,
+                None => break,
+            };
+
+            // Fraction-to-boundary line search on variable bounds
+            let mut alpha = 1.0;
+            let tau = 0.995;
+            for i in 0..n {
+                if dx[i] < 0.0 && x_l_var[i].is_finite() {
+                    let max_step = -tau * (polished_x[i] - x_l_var[i]) / dx[i];
+                    if max_step < alpha { alpha = max_step; }
+                }
+                if dx[i] > 0.0 && x_u_var[i].is_finite() {
+                    let max_step = tau * (x_u_var[i] - polished_x[i]) / dx[i];
+                    if max_step < alpha { alpha = max_step; }
+                }
+            }
+            alpha = alpha.max(0.0).min(1.0);
+
+            let mut trial_x = vec![0.0; n];
+            let mut trial_g = vec![0.0; m];
+            let mut best_alpha = alpha;
+            let mut best_theta = theta;
+            for _ in 0..10 {
+                for i in 0..n {
+                    trial_x[i] = polished_x[i] - best_alpha * dx[i];
+                }
+                if !problem.constraints(&trial_x, true, &mut trial_g) {
+                    best_alpha *= 0.5;
+                    continue;
+                }
+                let trial_theta = convergence::primal_infeasibility(&trial_g, &g_l, &g_u);
+                if trial_theta < theta {
+                    best_theta = trial_theta;
+                    break;
+                }
+                best_alpha *= 0.5;
+            }
+
+            if best_theta >= theta * 0.999 {
+                break;
+            }
+
+            for i in 0..n {
+                polished_x[i] -= best_alpha * dx[i];
+            }
+            if !problem.constraints(&polished_x, true, &mut g_final) {
+                break;
+            }
+            theta = best_theta;
+
+            if options.print_level >= 5 {
+                rip_log!(
+                    "ripopt: Newton polish iter {}: theta={:.2e}, alpha={:.4}",
+                    newton_iter + 1, theta, best_alpha,
+                );
+            }
+
+            if theta < options.tol {
+                break;
+            }
+        }
+    }
+
+    let g_out = g_final;
+
+    let status = if theta < options.tol {
+        SolveStatus::Optimal
+    } else {
+        SolveStatus::LocalInfeasibility
+    };
+
+    if options.print_level >= 5 {
+        rip_log!(
+            "ripopt: NE-to-LS result: obj_LS={:.4e}, constraint_violation={:.4e}, status={:?}",
+            ls_result.objective, theta, status
+        );
+    }
+
+    // Fall back to constrained IPM when LS reports infeasibility.
+    let ls_converged = matches!(ls_result.status, SolveStatus::Optimal);
+    if status == SolveStatus::LocalInfeasibility && (m == n || !ls_converged) {
+        if options.print_level >= 5 {
+            rip_log!(
+                "ripopt: LS reformulation reports infeasibility (theta={:.4e}, ls_status={:?}), falling back to constrained IPM",
+                theta, ls_result.status
+            );
+        }
+        let mut fallback_opts = options.clone();
+        if options.max_wall_time > 0.0 {
+            let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
+            if remaining <= 0.1 {
+                return Some(SolveResult {
+                    x: ls_result.x,
+                    objective: 0.0,
+                    constraint_multipliers: vec![0.0; m],
+                    bound_multipliers_lower: ls_result.bound_multipliers_lower,
+                    bound_multipliers_upper: ls_result.bound_multipliers_upper,
+                    constraint_values: g_out,
+                    status: SolveStatus::MaxIterations,
+                    iterations: ls_result.iterations,
+                    diagnostics: SolverDiagnostics::default(),
+                });
+            }
+            fallback_opts.max_wall_time = remaining;
+        }
+        let ipm_result = solve_ipm(problem, &fallback_opts);
+        if matches!(ipm_result.status, SolveStatus::Optimal) {
+            return Some(ipm_result);
+        }
+        // IPM fallback failed — try AL for square NE systems
+        if options.enable_al_fallback {
+            if options.print_level >= 5 {
+                rip_log!(
+                    "ripopt: NE constrained IPM fallback failed ({:?}), trying AL",
+                    ipm_result.status
+                );
+            }
+            let mut al_opts = options.clone();
+            al_opts.max_iter = options.max_iter.min(500).max(options.max_iter / 3);
+            if options.max_wall_time > 0.0 {
+                let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
+                if remaining <= 0.1 {
+                    return Some(ipm_result);
+                }
+                al_opts.max_wall_time = remaining;
+            }
+            let al_result = crate::augmented_lagrangian::solve(problem, &al_opts);
+            if matches!(al_result.status, SolveStatus::Optimal) {
+                if options.print_level >= 5 {
+                    rip_log!(
+                        "ripopt: NE AL fallback succeeded ({:?}, obj={:.6e})",
+                        al_result.status, al_result.objective
+                    );
+                }
+                return Some(al_result);
+            }
+        }
+        return Some(ipm_result);
+    }
+
+    // L-BFGS retry on LS problem when IPM found a local min with nonzero residual
+    let (final_x, final_status, final_g, final_iters, final_zl, final_zu) =
+        if status == SolveStatus::LocalInfeasibility && options.enable_lbfgs_fallback {
+            if options.print_level >= 5 {
+                rip_log!(
+                    "ripopt: NE-to-LS LocalInfeasibility (theta={:.4e}), trying L-BFGS on LS",
+                    theta
+                );
+            }
+            let lbfgs_ls = crate::lbfgs::solve(&ls_problem, options);
+            let mut g_lb = vec![0.0; m];
+            let theta_lb = if problem.constraints(&lbfgs_ls.x, true, &mut g_lb) {
+                convergence::primal_infeasibility(&g_lb, &g_l, &g_u)
+            } else {
+                f64::INFINITY
+            };
+
+            if theta_lb < theta {
+                let new_status = if theta_lb < options.tol {
+                    SolveStatus::Optimal
+                } else {
+                    SolveStatus::LocalInfeasibility
+                };
+                if options.print_level >= 5 {
+                    rip_log!(
+                        "ripopt: L-BFGS improved NE-to-LS (theta: {:.4e} -> {:.4e}, status={:?})",
+                        theta, theta_lb, new_status
+                    );
+                }
+                (lbfgs_ls.x, new_status, g_lb, lbfgs_ls.iterations,
+                 lbfgs_ls.bound_multipliers_lower, lbfgs_ls.bound_multipliers_upper)
+            } else {
+                if options.print_level >= 5 {
+                    rip_log!(
+                        "ripopt: L-BFGS did not improve NE-to-LS (theta_lb={:.4e} >= theta={:.4e})",
+                        theta_lb, theta
+                    );
+                }
+                (polished_x, status, g_out, ls_result.iterations,
+                 ls_result.bound_multipliers_lower, ls_result.bound_multipliers_upper)
+            }
+        } else {
+            (polished_x, status, g_out, ls_result.iterations,
+             ls_result.bound_multipliers_lower, ls_result.bound_multipliers_upper)
+        };
+
+    Some(SolveResult {
+        x: final_x,
+        objective: 0.0,
+        constraint_multipliers: vec![0.0; m],
+        bound_multipliers_lower: final_zl,
+        bound_multipliers_upper: final_zu,
+        constraint_values: final_g,
+        status: final_status,
+        iterations: final_iters,
+        diagnostics: SolverDiagnostics::default(),
+    })
+}
+
 /// Solve the NLP using the interior point method.
 pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult {
     let solve_start = Instant::now();
@@ -1271,316 +1579,8 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
     }
 
-    // --- NE-to-LS Detection and Reformulation ---
-    // Detect overdetermined nonlinear equation problems (m > n, f≡0, all equalities)
-    // and reformulate as least-squares: min 0.5*||g(x)-target||^2.
-    if detect_ne_problem(problem) {
-        let n = problem.num_variables();
-        let m = problem.num_constraints();
-        if options.print_level >= 5 {
-            rip_log!(
-                "ripopt: Detected overdetermined NE problem (n={}, m={}), reformulating as least-squares",
-                n, m
-            );
-        }
-        let ls_problem = LeastSquaresProblem::new(problem);
-        // For square systems (m == n), cap LS iterations — they often fail the LS
-        // approach because there are no "extra" equations to drive residuals down.
-        let mut ls_opts = options.clone();
-        if m == n {
-            ls_opts.max_iter = (options.max_iter / 10).min(100);
-        }
-        let ls_result = solve_ipm(&ls_problem, &ls_opts);
-
-        // Evaluate original constraint violation at the LS solution
-        let mut g_final = vec![0.0; m];
-        if !problem.constraints(&ls_result.x, true, &mut g_final) {
-            // Evaluation failed; skip polishing, return LS result as-is
-            let mut diag = ls_result.diagnostics.clone();
-            diag.fallback_used = Some("ne-to-ls".into());
-            return SolveResult {
-                x: ls_result.x,
-                objective: ls_result.objective,
-                constraint_multipliers: vec![0.0; m],
-                bound_multipliers_lower: ls_result.bound_multipliers_lower,
-                bound_multipliers_upper: ls_result.bound_multipliers_upper,
-                constraint_values: g_final,
-                status: SolveStatus::EvaluationError,
-                iterations: ls_result.iterations,
-                diagnostics: diag,
-            };
-        }
-        let mut g_l = vec![0.0; m];
-        let mut g_u = vec![0.0; m];
-        problem.constraint_bounds(&mut g_l, &mut g_u);
-        let mut theta = convergence::primal_infeasibility(&g_final, &g_l, &g_u);
-
-        // Newton polish: if theta is close but not quite at tol, try a few
-        // Gauss-Newton steps on the original system g(x) = target to drive
-        // constraint violation below tol.
-        let mut polished_x = ls_result.x.clone();
-        if theta > options.tol && theta < 1e-2 {
-            let mut x_l_var = vec![0.0; n];
-            let mut x_u_var = vec![0.0; n];
-            problem.bounds(&mut x_l_var, &mut x_u_var);
-            let (jac_rows, jac_cols) = problem.jacobian_structure();
-            let nnz = jac_rows.len();
-
-            // Target values for each constraint (midpoint of [g_l, g_u] for equalities)
-            let target: Vec<f64> = (0..m).map(|i| {
-                if (g_u[i] - g_l[i]).abs() < 1e-15 { g_l[i] } else { 0.5 * (g_l[i] + g_u[i]) }
-            }).collect();
-
-            let max_newton_iters = 20;
-            for newton_iter in 0..max_newton_iters {
-                // Residual: r = g(x) - target
-                let r: Vec<f64> = (0..m).map(|i| g_final[i] - target[i]).collect();
-
-                // Get Jacobian at current point
-                let mut jac_vals = vec![0.0; nnz];
-                if !problem.jacobian_values(&polished_x, true, &mut jac_vals) {
-                    break; // Eval failed, stop polishing
-                }
-
-                // Build dense J (m x n)
-                let mut j_dense = vec![0.0; m * n];
-                for k in 0..nnz {
-                    j_dense[jac_rows[k] * n + jac_cols[k]] += jac_vals[k];
-                }
-
-                // Solve for dx using normal equations: (J^T J) dx = -J^T r
-                // Form J^T J (n x n) and J^T r (n)
-                let mut jtj = vec![0.0; n * n];
-                let mut jtr = vec![0.0; n];
-                for i in 0..n {
-                    for j in 0..n {
-                        let mut s = 0.0;
-                        for k in 0..m {
-                            s += j_dense[k * n + i] * j_dense[k * n + j];
-                        }
-                        jtj[i * n + j] = s;
-                    }
-                    let mut s = 0.0;
-                    for k in 0..m {
-                        s += j_dense[k * n + i] * r[k];
-                    }
-                    jtr[i] = s;
-                }
-
-                // Add small regularization for numerical stability
-                for i in 0..n {
-                    jtj[i * n + i] += 1e-14;
-                }
-
-                // Solve with dense Cholesky (J^T J is SPD when J has full column rank)
-                let dx = match dense_cholesky_solve(&jtj, &jtr, n) {
-                    Some(dx) => dx,
-                    None => break, // J^T J singular, stop polishing
-                };
-
-                // Line search with fraction-to-boundary for variable bounds
-                let mut alpha = 1.0;
-                let tau = 0.995;
-                for i in 0..n {
-                    if dx[i] < 0.0 && x_l_var[i].is_finite() {
-                        let max_step = -tau * (polished_x[i] - x_l_var[i]) / dx[i];
-                        if max_step < alpha { alpha = max_step; }
-                    }
-                    if dx[i] > 0.0 && x_u_var[i].is_finite() {
-                        let max_step = tau * (x_u_var[i] - polished_x[i]) / dx[i];
-                        if max_step < alpha { alpha = max_step; }
-                    }
-                }
-                alpha = alpha.max(0.0).min(1.0);
-
-                // Backtracking: ensure theta actually decreases
-                let mut trial_x = vec![0.0; n];
-                let mut trial_g = vec![0.0; m];
-                let mut best_alpha = alpha;
-                let mut best_theta = theta;
-                for _ in 0..10 {
-                    for i in 0..n {
-                        trial_x[i] = polished_x[i] - best_alpha * dx[i];
-                    }
-                    if !problem.constraints(&trial_x, true, &mut trial_g) {
-                        best_alpha *= 0.5;
-                        continue; // Eval failed, try shorter step
-                    }
-                    let trial_theta = convergence::primal_infeasibility(&trial_g, &g_l, &g_u);
-                    if trial_theta < theta {
-                        best_theta = trial_theta;
-                        break;
-                    }
-                    best_alpha *= 0.5;
-                }
-
-                if best_theta >= theta * 0.999 {
-                    break; // No progress
-                }
-
-                // Accept step
-                for i in 0..n {
-                    polished_x[i] -= best_alpha * dx[i];
-                }
-                if !problem.constraints(&polished_x, true, &mut g_final) {
-                    break; // Eval failed, stop polishing
-                }
-                theta = best_theta;
-
-                if options.print_level >= 5 {
-                    rip_log!(
-                        "ripopt: Newton polish iter {}: theta={:.2e}, alpha={:.4}",
-                        newton_iter + 1, theta, best_alpha,
-                    );
-                }
-
-                if theta < options.tol {
-                    break; // Converged!
-                }
-            }
-        }
-
-        // g_final is from the original (unscaled) problem, no unscaling needed
-        let g_out = g_final;
-
-        let status = if theta < options.tol {
-            SolveStatus::Optimal
-        } else {
-            SolveStatus::LocalInfeasibility
-        };
-
-        if options.print_level >= 5 {
-            rip_log!(
-                "ripopt: NE-to-LS result: obj_LS={:.4e}, constraint_violation={:.4e}, status={:?}",
-                ls_result.objective, theta, status
-            );
-        }
-
-        // Fall back to constrained IPM when LS reports infeasibility:
-        // - For square systems (m==n): LS may have found a non-root critical point
-        //   of ||g||^2; constrained IPM can find the actual root.
-        // - For non-square systems: only fall back if LS didn't converge
-        //   (MaxIterations/RestorationFailed); if LS converged with high theta,
-        //   the system is genuinely inconsistent.
-        let ls_converged = matches!(ls_result.status, SolveStatus::Optimal);
-        if status == SolveStatus::LocalInfeasibility && (m == n || !ls_converged) {
-            if options.print_level >= 5 {
-                rip_log!(
-                    "ripopt: LS reformulation reports infeasibility (theta={:.4e}, ls_status={:?}), falling back to constrained IPM",
-                    theta, ls_result.status
-                );
-            }
-            let mut fallback_opts = options.clone();
-            if options.max_wall_time > 0.0 {
-                let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
-                if remaining <= 0.1 {
-                    return SolveResult {
-                        x: ls_result.x,
-                        objective: 0.0,
-                        constraint_multipliers: vec![0.0; m],
-                        bound_multipliers_lower: ls_result.bound_multipliers_lower,
-                        bound_multipliers_upper: ls_result.bound_multipliers_upper,
-                        constraint_values: g_out,
-                        status: SolveStatus::MaxIterations,
-                        iterations: ls_result.iterations,
-                        diagnostics: SolverDiagnostics::default(),
-                    };
-                }
-                fallback_opts.max_wall_time = remaining;
-            }
-            let ipm_result = solve_ipm(problem, &fallback_opts);
-            if matches!(ipm_result.status, SolveStatus::Optimal) {
-                return ipm_result;
-            }
-            // IPM fallback failed too — try AL fallback for square NE systems
-            // (e.g. HEART6 where both LS and constrained IPM fail)
-            if options.enable_al_fallback {
-                if options.print_level >= 5 {
-                    rip_log!(
-                        "ripopt: NE constrained IPM fallback failed ({:?}), trying AL",
-                        ipm_result.status
-                    );
-                }
-                let mut al_opts = options.clone();
-                al_opts.max_iter = options.max_iter.min(500).max(options.max_iter / 3);
-                if options.max_wall_time > 0.0 {
-                    let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
-                    if remaining <= 0.1 {
-                        return ipm_result;
-                    }
-                    al_opts.max_wall_time = remaining;
-                }
-                let al_result = crate::augmented_lagrangian::solve(problem, &al_opts);
-                if matches!(al_result.status, SolveStatus::Optimal) {
-                    if options.print_level >= 5 {
-                        rip_log!(
-                            "ripopt: NE AL fallback succeeded ({:?}, obj={:.6e})",
-                            al_result.status, al_result.objective
-                        );
-                    }
-                    return al_result;
-                }
-            }
-            return ipm_result;
-        }
-
-        // L-BFGS retry on LS problem when IPM found a local min with nonzero residual
-        let (final_x, final_status, final_g, final_iters, final_zl, final_zu) =
-            if status == SolveStatus::LocalInfeasibility && options.enable_lbfgs_fallback {
-                if options.print_level >= 5 {
-                    rip_log!(
-                        "ripopt: NE-to-LS LocalInfeasibility (theta={:.4e}), trying L-BFGS on LS",
-                        theta
-                    );
-                }
-                let lbfgs_ls = crate::lbfgs::solve(&ls_problem, options);
-                let mut g_lb = vec![0.0; m];
-                let theta_lb = if problem.constraints(&lbfgs_ls.x, true, &mut g_lb) {
-                    convergence::primal_infeasibility(&g_lb, &g_l, &g_u)
-                } else {
-                    f64::INFINITY // Eval failed, skip this fallback
-                };
-
-                if theta_lb < theta {
-                    let new_status = if theta_lb < options.tol {
-                        SolveStatus::Optimal
-                    } else {
-                        SolveStatus::LocalInfeasibility
-                    };
-                    if options.print_level >= 5 {
-                        rip_log!(
-                            "ripopt: L-BFGS improved NE-to-LS (theta: {:.4e} -> {:.4e}, status={:?})",
-                            theta, theta_lb, new_status
-                        );
-                    }
-                    (lbfgs_ls.x, new_status, g_lb, lbfgs_ls.iterations,
-                     lbfgs_ls.bound_multipliers_lower, lbfgs_ls.bound_multipliers_upper)
-                } else {
-                    if options.print_level >= 5 {
-                        rip_log!(
-                            "ripopt: L-BFGS did not improve NE-to-LS (theta_lb={:.4e} >= theta={:.4e})",
-                            theta_lb, theta
-                        );
-                    }
-                    (polished_x, status, g_out, ls_result.iterations,
-                     ls_result.bound_multipliers_lower, ls_result.bound_multipliers_upper)
-                }
-            } else {
-                (polished_x, status, g_out, ls_result.iterations,
-                 ls_result.bound_multipliers_lower, ls_result.bound_multipliers_upper)
-            };
-
-        return SolveResult {
-            x: final_x,
-            objective: 0.0, // Original objective is f≡0
-            constraint_multipliers: vec![0.0; m],
-            bound_multipliers_lower: final_zl,
-            bound_multipliers_upper: final_zu,
-            constraint_values: final_g,
-            status: final_status,
-            iterations: final_iters,
-            diagnostics: SolverDiagnostics::default(),
-        };
+    if let Some(result) = try_ne_to_ls_reformulation(problem, options, solve_start) {
+        return result;
     }
 
     // For unconstrained problems, try L-BFGS first (O(n·m) vs O(n³) per iteration)
