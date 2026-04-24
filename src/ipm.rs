@@ -5658,6 +5658,34 @@ fn estimate_schur_density_disable<P: NlpProblem>(
     disable
 }
 
+/// Detect constraints that are linear in `x` (constant Jacobian, zero
+/// contribution to the Hessian). When `options.detect_linear_constraints`
+/// is set, run `crate::linearity::detect_linear_constraints` on the
+/// original unscaled problem. Returns `Some(flags)` only when at least one
+/// linear constraint is found; `None` otherwise.
+fn detect_linear_constraint_flags<P: NlpProblem>(
+    problem: &P,
+    options: &SolverOptions,
+    x0: &[f64],
+    m_sc: usize,
+) -> Option<Vec<bool>> {
+    if !(options.detect_linear_constraints && m_sc > 0) {
+        return None;
+    }
+    let flags = crate::linearity::detect_linear_constraints(problem, x0);
+    let n_linear = flags.iter().filter(|&&f| f).count();
+    if n_linear == 0 {
+        return None;
+    }
+    if options.print_level >= 5 {
+        rip_log!(
+            "ripopt: Detected {}/{} linear constraints (Hessian contribution skipped)",
+            n_linear, m_sc
+        );
+    }
+    Some(flags)
+}
+
 /// Initialize constraint slack barrier multipliers `v_l`, `v_u` (Ipopt's
 /// `v_L`, `v_U`). For each inequality constraint side,
 /// `v = mu_init / max(slack, 1e-20)`. Equality rows (`g_l ≈ g_u`) are
@@ -5871,24 +5899,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         );
     }
 
-    // --- Linear constraint detection (on original unscaled problem for accuracy) ---
-    let linear_constraints: Option<Vec<bool>> = if options.detect_linear_constraints && m_sc > 0 {
-        let flags = crate::linearity::detect_linear_constraints(problem, &x0);
-        let n_linear = flags.iter().filter(|&&f| f).count();
-        if n_linear > 0 {
-            if options.print_level >= 5 {
-                rip_log!(
-                    "ripopt: Detected {}/{} linear constraints (Hessian contribution skipped)",
-                    n_linear, m_sc
-                );
-            }
-            Some(flags)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    let linear_constraints = detect_linear_constraint_flags(problem, options, &x0, m_sc);
 
     let scaled = ScaledProblem {
         inner: problem,
