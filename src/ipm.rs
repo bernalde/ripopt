@@ -2739,6 +2739,99 @@ fn compute_optimality_measures(state: &SolverState) -> OptimalityMeasures {
     }
 }
 
+/// Track constraint-violation history and optionally short-circuit
+/// with `LocalInfeasibility`.
+///
+/// Pushes the current `primal_inf` into `theta_history`, updates the
+/// "ever feasible" flag, and (when proactive infeasibility detection
+/// is enabled) looks for a stagnated θ with a near-stationary ∇θ
+/// over a 100-iteration window. Returns `Some(SolveResult)` when
+/// infeasibility is declared.
+///
+/// Ipopt uses its `RestoFilterConvCheck` for a broadly analogous
+/// purpose; this path is ripopt-specific and fires before the main
+/// IPM would otherwise burn iterations waiting for restoration to
+/// reach the same conclusion.
+///
+/// Extracted from `solve_ipm` as part of the v0.8 main-loop
+/// decomposition.
+#[allow(clippy::too_many_arguments)]
+fn track_feasibility_and_detect_infeasibility(
+    state: &SolverState,
+    options: &SolverOptions,
+    iteration: usize,
+    primal_inf: f64,
+    theta_history: &mut Vec<f64>,
+    theta_history_len: usize,
+    theta_stall_count: &mut usize,
+    ever_feasible: &mut bool,
+) -> Option<SolveResult> {
+    let n = state.n;
+    let m = state.m;
+
+    if theta_history.len() >= theta_history_len {
+        theta_history.remove(0);
+    }
+    theta_history.push(primal_inf);
+
+    if primal_inf < options.constr_viol_tol {
+        *ever_feasible = true;
+    }
+
+    // Proactive infeasibility detection: if θ has stagnated over the history
+    // window AND ‖∇θ‖_∞ is near zero, declare infeasibility instead of
+    // waiting for restoration to reach the same conclusion.
+    if options.proactive_infeasibility_detection
+        && !*ever_feasible
+        && m > 0
+        && iteration >= 50
+        && primal_inf > options.constr_viol_tol
+        && theta_history.len() >= theta_history_len
+    {
+        let theta_min_h = theta_history.iter().cloned().fold(f64::INFINITY, f64::min);
+        let theta_max_h = theta_history.iter().cloned().fold(0.0f64, f64::max);
+        if theta_max_h > 0.0 && (theta_max_h - theta_min_h) < 0.01 * primal_inf {
+            *theta_stall_count += 1;
+        } else {
+            *theta_stall_count = 0;
+        }
+        if *theta_stall_count >= 10 {
+            let mut violation = vec![0.0; m];
+            for i in 0..m {
+                let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
+                    && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
+                if is_eq {
+                    violation[i] = state.g[i] - state.g_l[i];
+                } else if state.g_l[i].is_finite() && state.g[i] < state.g_l[i] {
+                    violation[i] = state.g[i] - state.g_l[i];
+                } else if state.g_u[i].is_finite() && state.g[i] > state.g_u[i] {
+                    violation[i] = state.g[i] - state.g_u[i];
+                }
+            }
+            let mut grad_theta = vec![0.0; n];
+            for (idx, (&row, &col)) in
+                state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
+            {
+                grad_theta[col] += state.jac_vals[idx] * violation[row];
+            }
+            let grad_theta_norm = grad_theta.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+            let stationarity_tol = 1e-3 * primal_inf.max(1.0);
+            if grad_theta_norm < stationarity_tol {
+                log::info!(
+                    "Proactive infeasibility at iter {}: θ stagnated at {:.2e}, ‖∇θ‖={:.2e}",
+                    iteration, primal_inf, grad_theta_norm
+                );
+                return Some(make_result(state, SolveStatus::LocalInfeasibility));
+            }
+            // Stationarity not met — reset counter to check again next window.
+            *theta_stall_count = 0;
+        }
+    } else if *ever_feasible {
+        *theta_stall_count = 0;
+    }
+    None
+}
+
 /// Detect and recover from dual-infeasibility stagnation.
 ///
 /// Tracks the best dual-infeasibility seen so far (`last_good_du`,
@@ -3652,69 +3745,17 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             best_du_zu = Some(state.z_u.clone());
         }
 
-        // Track constraint violation history for infeasibility detection
-        if theta_history.len() >= theta_history_len {
-            theta_history.remove(0);
-        }
-        theta_history.push(primal_inf);
-
-        // Track whether we've ever been feasible
-        if primal_inf < options.constr_viol_tol {
-            ever_feasible = true;
-        }
-
-        // Proactive infeasibility detection: if θ has stagnated for many consecutive
-        // iterations AND the gradient of the violation is near-zero, declare infeasibility
-        // earlier rather than burning iterations until restoration eventually fires.
-        if options.proactive_infeasibility_detection
-            && !ever_feasible
-            && m > 0
-            && iteration >= 50
-            && primal_inf > options.constr_viol_tol
-            && theta_history.len() >= theta_history_len
-        {
-            let theta_min_h = theta_history.iter().cloned().fold(f64::INFINITY, f64::min);
-            let theta_max_h = theta_history.iter().cloned().fold(0.0f64, f64::max);
-            // "Stagnated" = less than 1% relative variation over the history window
-            if theta_max_h > 0.0 && (theta_max_h - theta_min_h) < 0.01 * primal_inf {
-                theta_stall_count += 1;
-            } else {
-                theta_stall_count = 0;
-            }
-            // After 10 consecutive stagnation windows, check stationarity of ∇θ
-            if theta_stall_count >= 10 {
-                let mut violation = vec![0.0; m];
-                for i in 0..m {
-                    let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
-                        && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
-                    if is_eq {
-                        violation[i] = state.g[i] - state.g_l[i];
-                    } else if state.g_l[i].is_finite() && state.g[i] < state.g_l[i] {
-                        violation[i] = state.g[i] - state.g_l[i];
-                    } else if state.g_u[i].is_finite() && state.g[i] > state.g_u[i] {
-                        violation[i] = state.g[i] - state.g_u[i];
-                    }
-                }
-                let mut grad_theta = vec![0.0; n];
-                for (idx, (&row, &col)) in
-                    state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
-                {
-                    grad_theta[col] += state.jac_vals[idx] * violation[row];
-                }
-                let grad_theta_norm = grad_theta.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
-                let stationarity_tol = 1e-3 * primal_inf.max(1.0);
-                if grad_theta_norm < stationarity_tol {
-                    log::info!(
-                        "Proactive infeasibility at iter {}: θ stagnated at {:.2e}, ‖∇θ‖={:.2e}",
-                        iteration, primal_inf, grad_theta_norm
-                    );
-                    return make_result(&state, SolveStatus::LocalInfeasibility);
-                }
-                // Stationarity not met — reset counter to check again in another window
-                theta_stall_count = 0;
-            }
-        } else if ever_feasible {
-            theta_stall_count = 0;
+        if let Some(result) = track_feasibility_and_detect_infeasibility(
+            &state,
+            options,
+            iteration,
+            primal_inf,
+            &mut theta_history,
+            theta_history_len,
+            &mut theta_stall_count,
+            &mut ever_feasible,
+        ) {
+            return result;
         }
 
         // Unbounded detection: objective diverging negatively with satisfied constraints.
