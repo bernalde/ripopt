@@ -2089,6 +2089,263 @@ fn dump_kkt_matrix(
     }
 }
 
+/// Update the barrier parameter μ (interior-point centering parameter) once
+/// per iteration after the step has been accepted.
+///
+/// Handles three cases:
+/// - No variable bounds: superlinear decrease `μ^mu_superlinear_decrease_power`.
+/// - `MuMode::Free` (adaptive oracle): Loqo mu oracle when enabled, with
+///   monotone floor to prevent single-step collapse; falls back to `avg_compl/kappa`
+///   when quality-function oracle is off; switches to Fixed mode on repeated
+///   insufficient progress or dual-infeasibility stagnation.
+/// - `MuMode::Fixed` (monotone decrease): decrease μ only when the barrier
+///   subproblem is approximately solved (Ipopt's `IpMonotoneMuUpdate`
+///   kappa_eps gate), using the min of linear and superlinear rates; may
+///   switch back to Free mode in adaptive strategy.
+///
+/// On every μ change the filter is reset and `theta_min` is recomputed
+/// (Ipopt convention, `IpFilterLSAcceptor.cpp:524-532`).
+///
+/// Ipopt parallel: `IpMuUpdate::UpdateBarrierParameter`, with concrete
+/// subclasses `MonotoneMuUpdate` / `AdaptiveMuUpdate` inline here and the
+/// `MuOracle` role played by the embedded Loqo formula.
+///
+/// Extracted from `solve_ipm` as part of the v0.8 main-loop decomposition
+/// (pre-work step 2). Does not return a value — all effects are via
+/// `&mut` on state, mu_state, filter, last_mehrotra_sigma.
+fn update_barrier_parameter(
+    state: &mut SolverState,
+    mu_state: &mut MuState,
+    filter: &mut Filter,
+    last_mehrotra_sigma: &mut Option<f64>,
+    options: &SolverOptions,
+) {
+    let n = state.n;
+    // When there are no variable bounds, mu serves no barrier purpose but is
+    // still used for KKT regularization and the filter line search. We decrease
+    // mu superlinearly (mu^1.5) rather than collapsing it instantly to mu_min,
+    // which would destroy filter protection against infeasible steps. This
+    // prevents the PENTAGON-type failure where mu=1e-11 at iteration 1 causes
+    // the switching condition to accept a step that destroys feasibility.
+    let has_bounds = (0..n).any(|i| state.x_l[i].is_finite() || state.x_u[i].is_finite());
+    if !has_bounds {
+        state.mu = state.mu.powf(options.mu_superlinear_decrease_power).max(options.mu_min);
+        return;
+    }
+
+    let kkt_error = {
+        let pi = state.constraint_violation();
+        let di = convergence::dual_infeasibility(
+            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+            &state.y, &state.z_l, &state.z_u, n,
+        );
+        let ci = convergence::complementarity_error(
+            &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
+        );
+        pi * pi + di * di + ci * ci
+    };
+
+    let sufficient = mu_state.check_sufficient_progress(kkt_error);
+
+    // Track dual infeasibility for stagnation detection.
+    // If du is not decreasing over 3 consecutive iterations in Free mode,
+    // force switch to Fixed mode with mu = 0.8 * avg_compl.
+    {
+        let du_now = convergence::dual_infeasibility(
+            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+            &state.y, &state.z_l, &state.z_u, n,
+        );
+        if mu_state.dual_inf_window.len() >= 3 {
+            mu_state.dual_inf_window.remove(0);
+        }
+        mu_state.dual_inf_window.push(du_now);
+    }
+
+    // Ipopt-style barrier-subproblem stop test (IpMonotoneMuUpdate.cpp:135-194).
+    // Decrease mu only when the current barrier subproblem is approximately
+    // solved: barrier_err <= kappa_eps * mu (kappa_eps = barrier_tol_factor,
+    // default 10). Without this gate, mu collapses every iteration regardless
+    // of whether the line search is actually making progress on the current
+    // subproblem — observed on cho parmest where mu went 1e-1 -> 1e-9 in 9
+    // iters while inf_pr stayed pinned at 19. The check_sufficient_progress
+    // gate below is a relative-history check; this is the absolute gate.
+    let barrier_err_for_gate = compute_barrier_error(state);
+    let barrier_subproblem_solved =
+        barrier_err_for_gate <= options.barrier_tol_factor * state.mu;
+
+    match mu_state.mode {
+        MuMode::Free => {
+            // Consume Mehrotra sigma for use as quality function candidate
+            let _sigma_mu = last_mehrotra_sigma.take();
+            if sufficient && !mu_state.tiny_step && barrier_subproblem_solved {
+                mu_state.consecutive_insufficient = 0;
+                mu_state.remember_accepted(kkt_error);
+                let avg_compl = compute_avg_complementarity(state);
+                if options.mu_oracle_quality_function && avg_compl > 0.0 {
+                    // Loqo mu oracle (IpLoqoMuOracle.cpp).
+                    // Uses centrality measure to set the centering parameter sigma.
+                    // When well-centered (xi≈1), sigma is tiny → aggressive mu decrease.
+                    // When off-center (xi≈0), sigma→0.8 → conservative mu decrease.
+                    let barrier_err = compute_barrier_error(state);
+                    let mu_floor = if barrier_err <= options.barrier_tol_factor * state.mu {
+                        options.mu_min
+                    } else {
+                        (state.mu / 5.0).max(options.mu_min)
+                    };
+
+                    // Compute centrality measure: xi = min(z_i*s_i) / avg_compl
+                    let mut min_compl = f64::INFINITY;
+                    for i in 0..n {
+                        if state.x_l[i].is_finite() {
+                            let s = (state.x[i] - state.x_l[i]).max(1e-20);
+                            min_compl = min_compl.min(s * state.z_l[i]);
+                        }
+                        if state.x_u[i].is_finite() {
+                            let s = (state.x_u[i] - state.x[i]).max(1e-20);
+                            min_compl = min_compl.min(s * state.z_u[i]);
+                        }
+                    }
+                    let xi = if avg_compl > 0.0 && min_compl.is_finite() {
+                        (min_compl / avg_compl).clamp(0.0, 1.0)
+                    } else {
+                        1.0
+                    };
+
+                    // Loqo formula: sigma = 0.1 * min(0.05*(1-xi)/xi, 2)^3.
+                    // Diagnostic (2026-04-18 direction diff vs Ipopt on a
+                    // 3-var log-band problem): ripopt's uncapped Loqo oracle
+                    // collapsed μ by 7 orders of magnitude in a single
+                    // iteration (e.g. 6.6e-3 → 9e-10) when the iterate was
+                    // well-centered (ξ ≈ 0.82 → σ ≈ 1e-7). Ipopt's
+                    // MonotoneMuUpdate floor max(σ·avg_compl, min(κ_μ·μ, μ^sldp))
+                    // bounds the per-iteration decrease even in adaptive mode;
+                    // apply the same floor here so the Loqo-proposed μ can't
+                    // undershoot a gradual monotone schedule.
+                    let ratio = if xi > 1e-20 {
+                        (0.05 * (1.0 - xi) / xi).min(2.0)
+                    } else {
+                        2.0
+                    };
+                    let sigma = 0.1 * ratio.powi(3);
+                    let loqo_mu = sigma * avg_compl;
+                    let monotone_floor =
+                        (options.mu_linear_decrease_factor * state.mu)
+                            .min(state.mu.powf(options.mu_superlinear_decrease_power));
+                    let new_mu = loqo_mu
+                        .max(monotone_floor)
+                        .clamp(mu_floor, 1e5);
+
+                    if options.print_level >= 5 {
+                        rip_log!("ripopt: mu loqo: xi={:.4} sigma={:.4} avg_compl={:.3e} floor={:.3e} -> mu={:.3e}",
+                            xi, sigma, avg_compl, monotone_floor, new_mu);
+                    }
+                    state.mu = new_mu;
+                } else if avg_compl > 0.0 {
+                    // Loqo fallback with rate limit (at most 5x decrease if subproblem not solved)
+                    let barrier_err = compute_barrier_error(state);
+                    let mu_floor = if barrier_err <= options.barrier_tol_factor * state.mu {
+                        options.mu_min
+                    } else {
+                        (state.mu / 5.0).max(options.mu_min)
+                    };
+                    state.mu = (avg_compl / options.kappa).clamp(mu_floor, 1e5);
+                } else {
+                    // No complementarity products (all bounds inactive) → decrease mu
+                    state.mu = (options.mu_linear_decrease_factor * state.mu)
+                        .max(options.mu_min);
+                }
+                // Reset filter on mu change (Ipopt convention,
+                // IpFilterLSAcceptor.cpp:524-532). Now that the barrier-
+                // stop gate above ensures mu only changes when the
+                // subproblem is approximately solved, this happens at
+                // the same low frequency as in Ipopt — not every iter.
+                filter.reset();
+                let theta_new = state.constraint_violation();
+                filter.set_theta_min_from_initial(theta_new);
+            } else {
+                // Also check dual infeasibility stagnation: if du is not improving
+                // over 3 consecutive iterations, force the switch to Fixed mode
+                // even if consecutive_insufficient < 2.
+                let du_stagnant = if mu_state.dual_inf_window.len() >= 3 {
+                    let w = &mu_state.dual_inf_window;
+                    let recent = w[w.len()-1];
+                    let oldest = w[w.len()-3];
+                    // Stagnant if recent du is >=90% of oldest (not improving)
+                    // and du is still large relative to tolerance
+                    recent >= 0.9 * oldest && recent > options.tol * 100.0
+                } else {
+                    false
+                };
+                mu_state.consecutive_insufficient += 1;
+                if mu_state.consecutive_insufficient >= 2 || du_stagnant {
+                    // Switch to fixed mode after 2 consecutive insufficient iterations
+                    // or when dual infeasibility is stagnant
+                    mu_state.consecutive_insufficient = 0;
+                    log::debug!("Switching to fixed mu mode (insufficient progress or tiny step)");
+                    state.diagnostics.mu_mode_switches += 1;
+                    mu_state.mode = MuMode::Fixed;
+                    mu_state.first_iter_in_mode = true;
+                    let avg_compl = compute_avg_complementarity(state);
+                    if avg_compl > 0.0 {
+                        state.mu = (options.adaptive_mu_monotone_init_factor * avg_compl)
+                            .clamp(options.mu_min, 1e5);
+                    } else {
+                        state.mu = (options.mu_linear_decrease_factor * state.mu)
+                            .max(options.mu_min);
+                    }
+                    filter.reset();
+                    let theta_new = state.constraint_violation();
+                    filter.set_theta_min_from_initial(theta_new);
+                } else if barrier_subproblem_solved {
+                    // Stay in Free mode with conservative mu decrease —
+                    // only when the barrier subproblem is approximately
+                    // solved. Without this gate, mu collapses unconditionally
+                    // even when the line search is making no progress
+                    // (observed on cho parmest: mu 0.1 -> 0.02 at iter 1
+                    // despite barrier_err=1.4e4).
+                    let avg_compl = compute_avg_complementarity(state);
+                    if avg_compl > 0.0 {
+                        let mu_floor = options.mu_min;
+                        state.mu = (avg_compl / options.kappa).clamp(mu_floor, 1e5);
+                    } else {
+                        state.mu = (options.mu_linear_decrease_factor * state.mu)
+                            .max(options.mu_min);
+                    }
+                }
+                // When !barrier_subproblem_solved, mu stays put and we
+                // wait for the line search to make progress on the current
+                // subproblem.
+            }
+        }
+        MuMode::Fixed => {
+            if options.mu_strategy_adaptive && sufficient && !mu_state.tiny_step && !mu_state.first_iter_in_mode {
+                // Switch back to free mode (only in adaptive strategy)
+                log::debug!("Switching back to free mu mode (sufficient progress)");
+                state.diagnostics.mu_mode_switches += 1;
+                mu_state.mode = MuMode::Free;
+                mu_state.remember_accepted(kkt_error);
+                mu_state.first_iter_in_mode = true;
+            } else {
+                mu_state.first_iter_in_mode = false;
+                // Check if subproblem is solved (barrier error small enough)
+                let barrier_err = compute_barrier_error(state);
+                if barrier_err <= options.barrier_tol_factor * state.mu || mu_state.tiny_step {
+                    let new_mu = (options.mu_linear_decrease_factor * state.mu)
+                        .min(state.mu.powf(options.mu_superlinear_decrease_power))
+                        .max(options.mu_min);
+                    if !(mu_state.tiny_step && (new_mu - state.mu).abs() < 1e-20) {
+                        state.mu = new_mu;
+                        filter.reset();
+                        let theta_new = state.constraint_violation();
+                        filter.set_theta_min_from_initial(theta_new);
+                        log::debug!("Fixed mode: mu decreased to {:.2e}", state.mu);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// State threaded through the convergence-check promotion attempts.
 ///
 /// Groups the loop-spanning history + one-shot promotion flags so the
@@ -5359,228 +5616,13 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
 
         // --- Barrier parameter update (free/fixed mode) ---
-        // When there are no variable bounds, mu serves no barrier purpose but is
-        // still used for KKT regularization and the filter line search. We decrease
-        // mu superlinearly (mu^1.5) rather than collapsing it instantly to mu_min,
-        // which would destroy filter protection against infeasible steps. This
-        // prevents the PENTAGON-type failure where mu=1e-11 at iteration 1 causes
-        // the switching condition to accept a step that destroys feasibility.
-        let has_bounds = (0..n).any(|i| state.x_l[i].is_finite() || state.x_u[i].is_finite());
-        if !has_bounds {
-            state.mu = state.mu.powf(options.mu_superlinear_decrease_power).max(options.mu_min);
-        } else {
-            let kkt_error = {
-                let pi = state.constraint_violation();
-                let di = convergence::dual_infeasibility(
-                    &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-                    &state.y, &state.z_l, &state.z_u, n,
-                );
-                let ci = convergence::complementarity_error(
-                    &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
-                );
-                pi * pi + di * di + ci * ci
-            };
-
-            let sufficient = mu_state.check_sufficient_progress(kkt_error);
-
-            // Track dual infeasibility for stagnation detection.
-            // If du is not decreasing over 3 consecutive iterations in Free mode,
-            // force switch to Fixed mode with mu = 0.8 * avg_compl.
-            {
-                let du_now = convergence::dual_infeasibility(
-                    &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-                    &state.y, &state.z_l, &state.z_u, n,
-                );
-                if mu_state.dual_inf_window.len() >= 3 {
-                    mu_state.dual_inf_window.remove(0);
-                }
-                mu_state.dual_inf_window.push(du_now);
-            }
-
-            // Ipopt-style barrier-subproblem stop test (IpMonotoneMuUpdate.cpp:135-194).
-            // Decrease mu only when the current barrier subproblem is approximately
-            // solved: barrier_err <= kappa_eps * mu (kappa_eps = barrier_tol_factor,
-            // default 10). Without this gate, mu collapses every iteration regardless
-            // of whether the line search is actually making progress on the current
-            // subproblem — observed on cho parmest where mu went 1e-1 -> 1e-9 in 9
-            // iters while inf_pr stayed pinned at 19. The check_sufficient_progress
-            // gate below is a relative-history check; this is the absolute gate.
-            let barrier_err_for_gate = compute_barrier_error(&state);
-            let barrier_subproblem_solved =
-                barrier_err_for_gate <= options.barrier_tol_factor * state.mu;
-
-            match mu_state.mode {
-                MuMode::Free => {
-                    // Consume Mehrotra sigma for use as quality function candidate
-                    let _sigma_mu = last_mehrotra_sigma.take();
-                    if sufficient && !mu_state.tiny_step && barrier_subproblem_solved {
-                        mu_state.consecutive_insufficient = 0;
-                        mu_state.remember_accepted(kkt_error);
-                        let avg_compl = compute_avg_complementarity(&state);
-                        if options.mu_oracle_quality_function && avg_compl > 0.0 {
-                            // Loqo mu oracle (IpLoqoMuOracle.cpp).
-                            // Uses centrality measure to set the centering parameter sigma.
-                            // When well-centered (xi≈1), sigma is tiny → aggressive mu decrease.
-                            // When off-center (xi≈0), sigma→0.8 → conservative mu decrease.
-                            let barrier_err = compute_barrier_error(&state);
-                            let mu_floor = if barrier_err <= options.barrier_tol_factor * state.mu {
-                                options.mu_min
-                            } else {
-                                (state.mu / 5.0).max(options.mu_min)
-                            };
-
-                            // Compute centrality measure: xi = min(z_i*s_i) / avg_compl
-                            let mut min_compl = f64::INFINITY;
-                            for i in 0..n {
-                                if state.x_l[i].is_finite() {
-                                    let s = (state.x[i] - state.x_l[i]).max(1e-20);
-                                    min_compl = min_compl.min(s * state.z_l[i]);
-                                }
-                                if state.x_u[i].is_finite() {
-                                    let s = (state.x_u[i] - state.x[i]).max(1e-20);
-                                    min_compl = min_compl.min(s * state.z_u[i]);
-                                }
-                            }
-                            let xi = if avg_compl > 0.0 && min_compl.is_finite() {
-                                (min_compl / avg_compl).clamp(0.0, 1.0)
-                            } else {
-                                1.0
-                            };
-
-                            // Loqo formula: sigma = 0.1 * min(0.05*(1-xi)/xi, 2)^3.
-                            // Diagnostic (2026-04-18 direction diff vs Ipopt on a
-                            // 3-var log-band problem): ripopt's uncapped Loqo oracle
-                            // collapsed μ by 7 orders of magnitude in a single
-                            // iteration (e.g. 6.6e-3 → 9e-10) when the iterate was
-                            // well-centered (ξ ≈ 0.82 → σ ≈ 1e-7). Ipopt's
-                            // MonotoneMuUpdate floor max(σ·avg_compl, min(κ_μ·μ, μ^sldp))
-                            // bounds the per-iteration decrease even in adaptive mode;
-                            // apply the same floor here so the Loqo-proposed μ can't
-                            // undershoot a gradual monotone schedule.
-                            let ratio = if xi > 1e-20 {
-                                (0.05 * (1.0 - xi) / xi).min(2.0)
-                            } else {
-                                2.0
-                            };
-                            let sigma = 0.1 * ratio.powi(3);
-                            let loqo_mu = sigma * avg_compl;
-                            let monotone_floor =
-                                (options.mu_linear_decrease_factor * state.mu)
-                                    .min(state.mu.powf(options.mu_superlinear_decrease_power));
-                            let new_mu = loqo_mu
-                                .max(monotone_floor)
-                                .clamp(mu_floor, 1e5);
-
-                            if options.print_level >= 5 {
-                                rip_log!("ripopt: mu loqo: xi={:.4} sigma={:.4} avg_compl={:.3e} floor={:.3e} -> mu={:.3e}",
-                                    xi, sigma, avg_compl, monotone_floor, new_mu);
-                            }
-                            state.mu = new_mu;
-                        } else if avg_compl > 0.0 {
-                            // Loqo fallback with rate limit (at most 5x decrease if subproblem not solved)
-                            let barrier_err = compute_barrier_error(&state);
-                            let mu_floor = if barrier_err <= options.barrier_tol_factor * state.mu {
-                                options.mu_min
-                            } else {
-                                (state.mu / 5.0).max(options.mu_min)
-                            };
-                            state.mu = (avg_compl / options.kappa).clamp(mu_floor, 1e5);
-                        } else {
-                            // No complementarity products (all bounds inactive) → decrease mu
-                            state.mu = (options.mu_linear_decrease_factor * state.mu)
-                                .max(options.mu_min);
-                        }
-                        // Reset filter on mu change (Ipopt convention,
-                        // IpFilterLSAcceptor.cpp:524-532). Now that the barrier-
-                        // stop gate above ensures mu only changes when the
-                        // subproblem is approximately solved, this happens at
-                        // the same low frequency as in Ipopt — not every iter.
-                        filter.reset();
-                        let theta_new = state.constraint_violation();
-                        filter.set_theta_min_from_initial(theta_new);
-                    } else {
-                        // Also check dual infeasibility stagnation: if du is not improving
-                        // over 3 consecutive iterations, force the switch to Fixed mode
-                        // even if consecutive_insufficient < 2.
-                        let du_stagnant = if mu_state.dual_inf_window.len() >= 3 {
-                            let w = &mu_state.dual_inf_window;
-                            let recent = w[w.len()-1];
-                            let oldest = w[w.len()-3];
-                            // Stagnant if recent du is >=90% of oldest (not improving)
-                            // and du is still large relative to tolerance
-                            recent >= 0.9 * oldest && recent > options.tol * 100.0
-                        } else {
-                            false
-                        };
-                        mu_state.consecutive_insufficient += 1;
-                        if mu_state.consecutive_insufficient >= 2 || du_stagnant {
-                            // Switch to fixed mode after 2 consecutive insufficient iterations
-                            // or when dual infeasibility is stagnant
-                            mu_state.consecutive_insufficient = 0;
-                            log::debug!("Switching to fixed mu mode (insufficient progress or tiny step)");
-                            state.diagnostics.mu_mode_switches += 1;
-                            mu_state.mode = MuMode::Fixed;
-                            mu_state.first_iter_in_mode = true;
-                            let avg_compl = compute_avg_complementarity(&state);
-                            if avg_compl > 0.0 {
-                                state.mu = (options.adaptive_mu_monotone_init_factor * avg_compl)
-                                    .clamp(options.mu_min, 1e5);
-                            } else {
-                                state.mu = (options.mu_linear_decrease_factor * state.mu)
-                                    .max(options.mu_min);
-                            }
-                            filter.reset();
-                            let theta_new = state.constraint_violation();
-                            filter.set_theta_min_from_initial(theta_new);
-                        } else if barrier_subproblem_solved {
-                            // Stay in Free mode with conservative mu decrease —
-                            // only when the barrier subproblem is approximately
-                            // solved. Without this gate, mu collapses unconditionally
-                            // even when the line search is making no progress
-                            // (observed on cho parmest: mu 0.1 -> 0.02 at iter 1
-                            // despite barrier_err=1.4e4).
-                            let avg_compl = compute_avg_complementarity(&state);
-                            if avg_compl > 0.0 {
-                                let mu_floor = options.mu_min;
-                                state.mu = (avg_compl / options.kappa).clamp(mu_floor, 1e5);
-                            } else {
-                                state.mu = (options.mu_linear_decrease_factor * state.mu)
-                                    .max(options.mu_min);
-                            }
-                        }
-                        // When !barrier_subproblem_solved, mu stays put and we
-                        // wait for the line search to make progress on the current
-                        // subproblem.
-                    }
-                }
-                MuMode::Fixed => {
-                    if options.mu_strategy_adaptive && sufficient && !mu_state.tiny_step && !mu_state.first_iter_in_mode {
-                        // Switch back to free mode (only in adaptive strategy)
-                        log::debug!("Switching back to free mu mode (sufficient progress)");
-                        state.diagnostics.mu_mode_switches += 1;
-                        mu_state.mode = MuMode::Free;
-                        mu_state.remember_accepted(kkt_error);
-                        mu_state.first_iter_in_mode = true;
-                    } else {
-                        mu_state.first_iter_in_mode = false;
-                        // Check if subproblem is solved (barrier error small enough)
-                        let barrier_err = compute_barrier_error(&state);
-                        if barrier_err <= options.barrier_tol_factor * state.mu || mu_state.tiny_step {
-                            let new_mu = (options.mu_linear_decrease_factor * state.mu)
-                                .min(state.mu.powf(options.mu_superlinear_decrease_power))
-                                .max(options.mu_min);
-                            if !(mu_state.tiny_step && (new_mu - state.mu).abs() < 1e-20) {
-                                state.mu = new_mu;
-                                filter.reset();
-                                let theta_new = state.constraint_violation();
-                                filter.set_theta_min_from_initial(theta_new);
-                                log::debug!("Fixed mode: mu decreased to {:.2e}", state.mu);
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        update_barrier_parameter(
+            &mut state,
+            &mut mu_state,
+            &mut filter,
+            &mut last_mehrotra_sigma,
+            options,
+        );
 
         // Post-step acceptable convergence tracking.
         // This catches cases where the step just taken pushes the state into the
