@@ -2675,6 +2675,125 @@ fn check_time_limits(
     None
 }
 
+/// Detect and recover from dual-infeasibility stagnation.
+///
+/// Tracks the best dual-infeasibility seen so far (`last_good_du`,
+/// `last_good_iter`) and, if `du` has failed to halve for ≥500
+/// iterations while a best-du iterate is available, restores that
+/// iterate and resets the filter/μ/inertia state for a fresh start.
+///
+/// Catches restoration-cycling failure modes where the main IPM and
+/// restoration NLP ping-pong and drift away from a near-converged
+/// point for thousands of iterations. No Ipopt parallel — this is a
+/// ripopt-specific safety net.
+///
+/// Extracted from `solve_ipm` as part of the v0.8 main-loop
+/// decomposition. Returns `Some(SolveResult)` only when the restored
+/// point already meets the near-tolerance acceptable level.
+#[allow(clippy::too_many_arguments)]
+fn handle_dual_stagnation<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    options: &SolverOptions,
+    iteration: usize,
+    filter: &mut Filter,
+    mu_state: &mut MuState,
+    inertia_params: &mut InertiaCorrectionParams,
+    lbfgs_state: &mut Option<LbfgsIpmState>,
+    last_good_du: &mut f64,
+    last_good_iter: &mut usize,
+    triggered: &mut bool,
+    best_x: &Option<Vec<f64>>,
+    best_du_x: &Option<Vec<f64>>,
+    best_du_y: &Option<Vec<f64>>,
+    best_du_zl: &Option<Vec<f64>>,
+    best_du_zu: &Option<Vec<f64>>,
+    linear_constraints: Option<&[bool]>,
+    lbfgs_mode: bool,
+) -> Option<SolveResult> {
+    if iteration == 0 {
+        return None;
+    }
+    let n = state.n;
+    let m = state.m;
+
+    let current_du = convergence::dual_infeasibility(
+        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+        &state.y, &state.z_l, &state.z_u, n,
+    );
+    if current_du < 0.5 * *last_good_du {
+        *last_good_du = current_du;
+        *last_good_iter = iteration;
+    }
+
+    let stall_iters = iteration.saturating_sub(*last_good_iter);
+    if stall_iters < 500
+        || *triggered
+        || current_du <= 100.0 * options.tol
+        || best_x.is_none()
+    {
+        return None;
+    }
+
+    let bdx = match best_du_x {
+        Some(v) => v,
+        None => return None,
+    };
+    log::debug!(
+        "Dual stagnation at iter {}: du={:.2e}, restoring best-du point (du={:.2e} at iter {})",
+        iteration, current_du, *last_good_du, *last_good_iter
+    );
+    state.x.copy_from_slice(bdx);
+    if let Some(ref bdy) = best_du_y { state.y.copy_from_slice(bdy); }
+    if let Some(ref bdzl) = best_du_zl { state.z_l.copy_from_slice(bdzl); }
+    if let Some(ref bdzu) = best_du_zu { state.z_u.copy_from_slice(bdzu); }
+    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+    update_lbfgs_hessian(lbfgs_state, state);
+
+    // Reset filter and bump mu for a fresh start from the good point.
+    filter.reset();
+    let theta_restart = state.constraint_violation();
+    filter.set_theta_min_from_initial(theta_restart);
+    state.mu = (state.mu * 100.0).max(1e-4).min(1e-1);
+    if options.mu_strategy_adaptive {
+        mu_state.mode = MuMode::Free;
+    }
+    mu_state.first_iter_in_mode = true;
+    mu_state.consecutive_restoration_failures = 0;
+    inertia_params.delta_w_last = 0.0;
+
+    // Check if the restored point meets acceptable convergence.
+    let rest_pr = state.constraint_violation();
+    let rest_du = convergence::dual_infeasibility(
+        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+        &state.y, &state.z_l, &state.z_u, n,
+    );
+    let rest_co = convergence::complementarity_error(
+        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
+    );
+    let s_max = 100.0_f64;
+    let mult_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
+        + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
+        + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
+    let s_d = if (m + 2 * n) > 0 {
+        (s_max.max(mult_sum / (m + 2 * n) as f64) / s_max).min(1e4)
+    } else { 1.0 };
+    let near_tol = 100.0 * options.tol;
+    let du_tol = (near_tol * s_d).max(1e-2);
+    let co_tol = (near_tol * s_d).max(1e-2);
+    let pr_tol = near_tol.max(10.0 * options.constr_viol_tol);
+    if rest_pr <= pr_tol && rest_du <= du_tol && rest_co <= co_tol {
+        log::debug!(
+            "Restored best-du point passes near-tolerance (pr={:.2e}, du={:.2e}, co={:.2e})",
+            rest_pr, rest_du, rest_co
+        );
+        return Some(make_result(state, SolveStatus::NumericalError));
+    }
+
+    *triggered = true;
+    None
+}
+
 /// Emit one row of the per-iteration TSV trace (for the
 /// direction-diff harness with Ipopt's IntermediateCallback).
 ///
@@ -3330,89 +3449,29 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             return result;
         }
 
-        // --- Dual stagnation detection (runs every iteration, including restoration) ---
-        // Track best du seen. If du hasn't improved for 500+ iterations and we have a
-        // best feasible point, restore it with fresh filter/mu.
-        // This catches cases where restoration cycling pushes the solver off a good
-        // region and it gets stuck for thousands of iterations.
-        if iteration > 0 {
-            let current_du = convergence::dual_infeasibility(
-                &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-                &state.y, &state.z_l, &state.z_u, n,
-            );
-            if current_du < 0.5 * dual_stall_last_good_du {
-                dual_stall_last_good_du = current_du;
-                dual_stall_last_good_iter = iteration;
-            }
-
-            let stall_iters = iteration.saturating_sub(dual_stall_last_good_iter);
-            if stall_iters >= 500
-                && !dual_stall_triggered
-                && current_du > 100.0 * options.tol
-                && best_x.is_some()
-            {
-                // Dual stagnation detected. Restore the best-du point (which had
-                // du=best_du_val with stored x, y, z). This point was near-converged
-                // but got disrupted by restoration cycling.
-                if let Some(ref bdx) = best_du_x {
-                    log::debug!(
-                        "Dual stagnation at iter {}: du={:.2e}, restoring best-du point (du={:.2e} at iter {})",
-                        iteration, current_du, dual_stall_last_good_du, dual_stall_last_good_iter
-                    );
-                    state.x.copy_from_slice(bdx);
-                    if let Some(ref bdy) = best_du_y { state.y.copy_from_slice(bdy); }
-                    if let Some(ref bdzl) = best_du_zl { state.z_l.copy_from_slice(bdzl); }
-                    if let Some(ref bdzu) = best_du_zu { state.z_u.copy_from_slice(bdzu); }
-                    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints.as_deref(), lbfgs_mode);
-        update_lbfgs_hessian(&mut lbfgs_state, &mut state);
-
-                    // Reset filter and bump mu for a fresh start from the good point.
-                    filter.reset();
-                    let theta_restart = state.constraint_violation();
-                    filter.set_theta_min_from_initial(theta_restart);
-                    state.mu = (state.mu * 100.0).max(1e-4).min(1e-1);
-                    if options.mu_strategy_adaptive {
-                        mu_state.mode = MuMode::Free;
-                    }
-                    mu_state.first_iter_in_mode = true;
-                    mu_state.consecutive_restoration_failures = 0;
-                    inertia_params.delta_w_last = 0.0;
-
-                    // Check if the restored point meets acceptable convergence.
-                    // The point had du=best_du_val which may already be excellent.
-                    let rest_pr = state.constraint_violation();
-                    let rest_du = convergence::dual_infeasibility(
-                        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-                        &state.y, &state.z_l, &state.z_u, n,
-                    );
-                    let rest_co = convergence::complementarity_error(
-                        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
-                    );
-                    // Use relaxed tolerances (acceptable level)
-                    let s_max = 100.0_f64;
-                    let mult_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
-                        + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
-                        + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
-                    let s_d = if (m + 2 * n) > 0 {
-                        (s_max.max(mult_sum / (m + 2 * n) as f64) / s_max).min(1e4)
-                    } else { 1.0 };
-                    let near_tol = 100.0 * options.tol;
-                    let du_tol = (near_tol * s_d).max(1e-2);
-                    let co_tol = (near_tol * s_d).max(1e-2);
-                    let pr_tol = near_tol.max(10.0 * options.constr_viol_tol);
-                    if rest_pr <= pr_tol && rest_du <= du_tol && rest_co <= co_tol {
-                        log::debug!(
-                            "Restored best-du point passes near-tolerance (pr={:.2e}, du={:.2e}, co={:.2e})",
-                            rest_pr, rest_du, rest_co
-                        );
-                        // Near-tolerance but promotion strategies unavailable here — return NumericalError
-                        return make_result(&state, SolveStatus::NumericalError);
-                    }
-
-                    dual_stall_triggered = true;
-                    // Fall through to normal iteration from good point
-                }
-            }
+        // Dual stagnation detection (runs every iteration, including restoration).
+        // Catches restoration cycling that drifts from a near-converged point.
+        if let Some(result) = handle_dual_stagnation(
+            &mut state,
+            problem,
+            options,
+            iteration,
+            &mut filter,
+            &mut mu_state,
+            &mut inertia_params,
+            &mut lbfgs_state,
+            &mut dual_stall_last_good_du,
+            &mut dual_stall_last_good_iter,
+            &mut dual_stall_triggered,
+            &best_x,
+            &best_du_x,
+            &best_du_y,
+            &best_du_zl,
+            &best_du_zu,
+            linear_constraints.as_deref(),
+            lbfgs_mode,
+        ) {
+            return result;
         }
 
         // Compute optimality measures.
