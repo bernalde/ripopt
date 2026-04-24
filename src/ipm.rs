@@ -5658,6 +5658,58 @@ fn estimate_schur_density_disable<P: NlpProblem>(
     disable
 }
 
+/// Initialize constraint slack barrier multipliers `v_l`, `v_u` (Ipopt's
+/// `v_L`, `v_U`). For each inequality constraint side,
+/// `v = mu_init / max(slack, 1e-20)`. Equality rows (`g_l ≈ g_u`) are
+/// skipped. Mirrors Ipopt's `IpDefaultIterateInitializer.cpp`.
+fn initialize_constraint_slack_multipliers(state: &mut SolverState, m: usize, options: &SolverOptions) {
+    for i in 0..m {
+        let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
+            && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
+        if is_eq {
+            continue;
+        }
+        if state.g_l[i].is_finite() {
+            let slack = (state.g[i] - state.g_l[i]).max(1e-20);
+            state.v_l[i] = options.mu_init / slack;
+        }
+        if state.g_u[i].is_finite() {
+            let slack = (state.g_u[i] - state.g[i]).max(1e-20);
+            state.v_u[i] = options.mu_init / slack;
+        }
+    }
+}
+
+/// Apply user-provided warm-start multipliers (`y`, `z_l`, `z_u`) and then
+/// run `WarmStartInitializer::initialize`, which pushes `x` off the bounds
+/// and rescales `(z_l, z_u)` if needed so (x − x_l)·z_l ≈ μ is well-posed.
+/// No-op when `options.warm_start` is false.
+fn apply_warm_start(state: &mut SolverState, options: &SolverOptions) {
+    if !options.warm_start {
+        return;
+    }
+    if let Some(ref init_y) = options.warm_start_y {
+        let len = init_y.len().min(state.y.len());
+        state.y[..len].copy_from_slice(&init_y[..len]);
+    }
+    if let Some(ref init_z_l) = options.warm_start_z_l {
+        let len = init_z_l.len().min(state.z_l.len());
+        state.z_l[..len].copy_from_slice(&init_z_l[..len]);
+    }
+    if let Some(ref init_z_u) = options.warm_start_z_u {
+        let len = init_z_u.len().min(state.z_u.len());
+        state.z_u[..len].copy_from_slice(&init_z_u[..len]);
+    }
+    state.mu = WarmStartInitializer::initialize(
+        &mut state.x,
+        &mut state.z_l,
+        &mut state.z_u,
+        &state.x_l,
+        &state.x_u,
+        options,
+    );
+}
+
 /// Evaluate the NLP at the initial point. If the evaluation fails, produces
 /// NaN/Inf in `obj` or `grad_f`, try up to three bound-push perturbations
 /// (1%, 10%, 50% of each bound range) and retry. If every perturbation also
@@ -5863,30 +5915,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         None
     };
 
-    // Handle warm-start
-    if options.warm_start {
-        // Copy user-provided initial multipliers before WarmStartInitializer adjusts them
-        if let Some(ref init_y) = options.warm_start_y {
-            let len = init_y.len().min(state.y.len());
-            state.y[..len].copy_from_slice(&init_y[..len]);
-        }
-        if let Some(ref init_z_l) = options.warm_start_z_l {
-            let len = init_z_l.len().min(state.z_l.len());
-            state.z_l[..len].copy_from_slice(&init_z_l[..len]);
-        }
-        if let Some(ref init_z_u) = options.warm_start_z_u {
-            let len = init_z_u.len().min(state.z_u.len());
-            state.z_u[..len].copy_from_slice(&init_z_u[..len]);
-        }
-        state.mu = WarmStartInitializer::initialize(
-            &mut state.x,
-            &mut state.z_l,
-            &mut state.z_u,
-            &state.x_l,
-            &state.x_u,
-            options,
-        );
-    }
+    apply_warm_start(&mut state, options);
 
     // Initialize linear solver — use sparse for large KKT systems
     let use_sparse = (n + m) >= options.sparse_threshold;
@@ -6015,24 +6044,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         return result;
     }
 
-    // Initialize constraint slack barrier multipliers v_l, v_u (Ipopt's v_L, v_U).
-    // For each inequality constraint side: v = mu_init / slack.
-    // This matches Ipopt's IpDefaultIterateInitializer.cpp.
-    for i in 0..m {
-        let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
-            && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
-        if is_eq {
-            continue;
-        }
-        if state.g_l[i].is_finite() {
-            let slack = (state.g[i] - state.g_l[i]).max(1e-20);
-            state.v_l[i] = options.mu_init / slack;
-        }
-        if state.g_u[i].is_finite() {
-            let slack = (state.g_u[i] - state.g[i]).max(1e-20);
-            state.v_u[i] = options.mu_init / slack;
-        }
-    }
+    initialize_constraint_slack_multipliers(&mut state, m, options);
 
     // Set filter parameters based on initial constraint violation
     let theta_init = state.constraint_violation();
