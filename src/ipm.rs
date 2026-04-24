@@ -2936,6 +2936,55 @@ enum CondensedDirectionOutcome {
     Return(SolveResult),
 }
 
+/// Outcome of `restore_after_solve_failure`. Continue = restoration
+/// succeeded and the iterate was updated; Return = restoration failed
+/// and the caller should bubble up `NumericalError`.
+enum SolveRestoreOutcome {
+    Continue,
+    Return(SolveResult),
+}
+
+/// Shared helper for the "factor or solve failed → call restoration"
+/// pattern that appears in `solve_dense_condensed_direction` (factor
+/// failure and KKT solve failure paths) and in
+/// `solve_for_search_direction`'s full-augmented error path.
+///
+/// On restoration success, advances `state.x`, zeros `alpha_primal`,
+/// re-evaluates the linear-aware step and updates the L-BFGS Hessian
+/// estimate. On failure, returns a `NumericalError` `SolveResult`.
+#[allow(clippy::too_many_arguments)]
+fn restore_after_solve_failure<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    options: &SolverOptions,
+    n: usize,
+    m: usize,
+    filter: &Filter,
+    restoration: &mut RestorationPhase,
+    lbfgs_state: &mut Option<LbfgsIpmState>,
+    lbfgs_mode: bool,
+    linear_constraints: Option<&[bool]>,
+    deadline: Option<Instant>,
+) -> SolveRestoreOutcome {
+    let (x_rest, success) = restoration.restore(
+        &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
+        &state.jac_rows, &state.jac_cols, n, m, options,
+        &|theta, phi| filter.is_acceptable(theta, phi),
+        &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
+        &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
+        Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
+        deadline,
+    );
+    if success {
+        state.x = x_rest;
+        state.alpha_primal = 0.0;
+        let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+        update_lbfgs_hessian(lbfgs_state, state);
+        return SolveRestoreOutcome::Continue;
+    }
+    SolveRestoreOutcome::Return(make_result(state, SolveStatus::NumericalError))
+}
+
 /// Mehrotra PC deflection revert: solve the original (μ-current)
 /// RHS via iterative refinement and check the angle between the
 /// PC step `dx_dir` and the original step `dx_orig`. If
@@ -3245,23 +3294,13 @@ fn solve_dense_condensed_direction<P: NlpProblem>(
         &mut kkt, lin_solver, inertia_params,
     );
     if fb_ic.is_err() {
-        let (x_rest, success) = restoration.restore(
-            &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
-            &state.jac_rows, &state.jac_cols, n, m, options,
-            &|theta, phi| filter.is_acceptable(theta, phi),
-            &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
-            &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
-            Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
-            deadline,
-        );
-        if success {
-            state.x = x_rest;
-            state.alpha_primal = 0.0;
-            let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-            update_lbfgs_hessian(lbfgs_state, state);
-            return CondensedDirectionOutcome::Continue;
-        }
-        return CondensedDirectionOutcome::Return(make_result(state, SolveStatus::NumericalError));
+        return match restore_after_solve_failure(
+            state, problem, options, n, m, filter, restoration,
+            lbfgs_state, lbfgs_mode, linear_constraints, deadline,
+        ) {
+            SolveRestoreOutcome::Continue => CondensedDirectionOutcome::Continue,
+            SolveRestoreOutcome::Return(r) => CondensedDirectionOutcome::Return(r),
+        };
     }
     let (fb_dw, fb_dc) = fb_ic.unwrap();
     match kkt::solve_for_direction(&kkt, lin_solver, fb_dw, fb_dc) {
@@ -3275,23 +3314,13 @@ fn solve_dense_condensed_direction<P: NlpProblem>(
         }
         Err(e) => {
             log::warn!("KKT solve failed: {}", e);
-            let (x_rest, success) = restoration.restore(
-                &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
-                &state.jac_rows, &state.jac_cols, n, m, options,
-                &|theta, phi| filter.is_acceptable(theta, phi),
-                &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
-                &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
-                Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
-                deadline,
-            );
-            if success {
-                state.x = x_rest;
-                state.alpha_primal = 0.0;
-                let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-                update_lbfgs_hessian(lbfgs_state, state);
-                return CondensedDirectionOutcome::Continue;
+            match restore_after_solve_failure(
+                state, problem, options, n, m, filter, restoration,
+                lbfgs_state, lbfgs_mode, linear_constraints, deadline,
+            ) {
+                SolveRestoreOutcome::Continue => CondensedDirectionOutcome::Continue,
+                SolveRestoreOutcome::Return(r) => CondensedDirectionOutcome::Return(r),
             }
-            CondensedDirectionOutcome::Return(make_result(state, SolveStatus::NumericalError))
         }
     }
 }
@@ -3397,23 +3426,13 @@ fn solve_for_search_direction<P: NlpProblem>(
                 if let Some(fallback) = gradient_descent_fallback(state) {
                     fallback
                 } else {
-                    let (x_rest, success) = restoration.restore(
-                        &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
-                        &state.jac_rows, &state.jac_cols, n, m, options,
-                        &|theta, phi| filter.is_acceptable(theta, phi),
-                        &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
-                        &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
-                        Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
-                        deadline,
-                    );
-                    if success {
-                        state.x = x_rest;
-                        state.alpha_primal = 0.0;
-                        let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-                        update_lbfgs_hessian(lbfgs_state, state);
-                        return DirectionSolveDecision::Continue;
+                    match restore_after_solve_failure(
+                        state, problem, options, n, m, filter, restoration,
+                        lbfgs_state, lbfgs_mode, linear_constraints, deadline,
+                    ) {
+                        SolveRestoreOutcome::Continue => return DirectionSolveDecision::Continue,
+                        SolveRestoreOutcome::Return(r) => return DirectionSolveDecision::Return(r),
                     }
-                    return DirectionSolveDecision::Return(make_result(state, SolveStatus::NumericalError));
                 }
             }
         };
