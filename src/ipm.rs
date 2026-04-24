@@ -2936,6 +2936,54 @@ enum CondensedDirectionOutcome {
     Return(SolveResult),
 }
 
+/// Sparse condensed direction solve: factor the sparse Schur
+/// complement S with the banded/sparse solver. On factor or
+/// solve failure rebuilds the full augmented KKT, factors it with
+/// inertia correction (using a fresh fallback solver), and falls
+/// back to a gradient-descent step if even that fails. Always
+/// returns a (dx, dy) pair — restoration is never invoked here
+/// because gradient_descent_fallback acts as the floor.
+#[allow(clippy::too_many_arguments)]
+fn solve_sparse_condensed_direction(
+    state: &SolverState,
+    sc: &kkt::SparseCondensedKktSystem,
+    sigma: &[f64],
+    n: usize,
+    m: usize,
+    use_sparse: bool,
+    lin_solver: &mut dyn LinearSolver,
+    inertia_params: &mut InertiaCorrectionParams,
+) -> (Vec<f64>, Vec<f64>) {
+    let kkt_sc = KktMatrix::Sparse(sc.matrix.clone());
+    let factor_ok = lin_solver.factor(&kkt_sc).is_ok();
+    if factor_ok {
+        match kkt::solve_sparse_condensed(sc, lin_solver) {
+            Ok(d) => return d,
+            Err(_) => {}
+        }
+    }
+    let mut kkt = kkt::assemble_kkt(
+        n, m,
+        &state.hess_rows, &state.hess_cols, &state.hess_vals,
+        &state.jac_rows, &state.jac_cols, &state.jac_vals,
+        sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
+        &state.y, &state.z_l, &state.z_u,
+        &state.x, &state.x_l, &state.x_u, state.mu,
+        use_sparse, &state.v_l, &state.v_u,
+    );
+    let mut fallback_solver = new_fallback_solver(use_sparse);
+    if let Ok((fb_dw, fb_dc)) = kkt::factor_with_inertia_correction(
+        &mut kkt, fallback_solver.as_mut(), inertia_params,
+    ) {
+        kkt::solve_for_direction(&kkt, fallback_solver.as_mut(), fb_dw, fb_dc)
+            .unwrap_or_else(|_| gradient_descent_fallback(state)
+                .unwrap_or_else(|| (vec![0.0; n], vec![0.0; m])))
+    } else {
+        gradient_descent_fallback(state)
+            .unwrap_or_else(|| (vec![0.0; n], vec![0.0; m]))
+    }
+}
+
 /// Dense condensed direction solve: Bunch-Kaufman on the n×n Schur
 /// complement `H + Σ + J^T·D_c^{-1}·J`. On BK or solve failure rebuilds
 /// the full augmented KKT, factors it with inertia correction, and
@@ -3106,57 +3154,9 @@ fn solve_for_search_direction<P: NlpProblem>(
             CondensedDirectionOutcome::Return(r) => return DirectionSolveDecision::Return(r),
         }
     } else if let Some(sc) = sparse_condensed_system.as_ref() {
-        // Sparse condensed: factor S with banded / sparse solver.
-        let kkt_sc = KktMatrix::Sparse(sc.matrix.clone());
-        let factor_ok = lin_solver.factor(&kkt_sc).is_ok();
-        if factor_ok {
-            match kkt::solve_sparse_condensed(sc, lin_solver) {
-                Ok(d) => d,
-                Err(_) => {
-                    let mut kkt = kkt::assemble_kkt(
-                        n, m,
-                        &state.hess_rows, &state.hess_cols, &state.hess_vals,
-                        &state.jac_rows, &state.jac_cols, &state.jac_vals,
-                        sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
-                        &state.y, &state.z_l, &state.z_u,
-                        &state.x, &state.x_l, &state.x_u, state.mu,
-                        use_sparse, &state.v_l, &state.v_u,
-                    );
-                    let mut fallback_solver = new_fallback_solver(use_sparse);
-                    if let Ok((fb_dw, fb_dc)) = kkt::factor_with_inertia_correction(
-                        &mut kkt, fallback_solver.as_mut(), inertia_params,
-                    ) {
-                        kkt::solve_for_direction(&kkt, fallback_solver.as_mut(), fb_dw, fb_dc)
-                            .unwrap_or_else(|_| gradient_descent_fallback(state)
-                                .unwrap_or_else(|| (vec![0.0; n], vec![0.0; m])))
-                    } else {
-                        gradient_descent_fallback(state)
-                            .unwrap_or_else(|| (vec![0.0; n], vec![0.0; m]))
-                    }
-                }
-            }
-        } else {
-            let mut kkt = kkt::assemble_kkt(
-                n, m,
-                &state.hess_rows, &state.hess_cols, &state.hess_vals,
-                &state.jac_rows, &state.jac_cols, &state.jac_vals,
-                sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
-                &state.y, &state.z_l, &state.z_u,
-                &state.x, &state.x_l, &state.x_u, state.mu,
-                use_sparse, &state.v_l, &state.v_u,
-            );
-            let mut fallback_solver = new_fallback_solver(use_sparse);
-            if let Ok((fb_dw, fb_dc)) = kkt::factor_with_inertia_correction(
-                &mut kkt, fallback_solver.as_mut(), inertia_params,
-            ) {
-                kkt::solve_for_direction(&kkt, fallback_solver.as_mut(), fb_dw, fb_dc)
-                    .unwrap_or_else(|_| gradient_descent_fallback(state)
-                        .unwrap_or_else(|| (vec![0.0; n], vec![0.0; m])))
-            } else {
-                gradient_descent_fallback(state)
-                    .unwrap_or_else(|| (vec![0.0; n], vec![0.0; m]))
-            }
-        }
+        solve_sparse_condensed_direction(
+            state, sc, sigma, n, m, use_sparse, lin_solver, inertia_params,
+        )
     } else {
         // Full augmented KKT with optional Mehrotra PC.
         let saved_rhs = if options.mehrotra_pc {
