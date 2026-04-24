@@ -2936,6 +2936,86 @@ enum CondensedDirectionOutcome {
     Return(SolveResult),
 }
 
+/// Mehrotra predictor-corrector probe: solve the affine-predictor
+/// system (rhs zeroed of barrier terms), recover bound-multiplier
+/// directions via `kkt::recover_dz` at μ=0, take the
+/// fraction-to-boundary step α_aff under τ=1-1e-3, derive the
+/// affine complementarity μ_aff and centering parameter
+/// σ = (μ_aff/μ)^3 ∈ [0,1], and rebuild the RHS at
+/// μ_pc = max(σ·μ, μ_min). Returns the rebuilt RHS together with
+/// the affine direction (dx_aff, dz_l_aff, dz_u_aff) and μ_pc.
+/// Returns None when the affine solve fails or no bound
+/// constraints contributed to μ_aff.
+fn try_mehrotra_predictor(
+    state: &SolverState,
+    options: &SolverOptions,
+    kkt: &kkt::KktSystem,
+    lin_solver: &mut dyn LinearSolver,
+    iteration: usize,
+    n: usize,
+    last_mehrotra_sigma: &mut Option<f64>,
+) -> Option<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, f64)> {
+    let rhs_aff = kkt::affine_predictor_rhs(
+        &kkt.rhs, &state.x, &state.x_l, &state.x_u, state.mu,
+    );
+    let (dx_aff, _) = kkt::solve_with_custom_rhs_refined(
+        &kkt.matrix, kkt.n, kkt.dim, lin_solver, &rhs_aff,
+    ).ok()?;
+    let (dz_l_aff, dz_u_aff) = kkt::recover_dz(
+        &state.x, &state.x_l, &state.x_u,
+        &state.z_l, &state.z_u, &dx_aff, 0.0,
+    );
+    let tau_aff = 1.0 - 1e-3;
+    let aff_zl = filter::fraction_to_boundary(&state.z_l, &dz_l_aff, tau_aff);
+    let aff_zu = filter::fraction_to_boundary(&state.z_u, &dz_u_aff, tau_aff);
+    let mut alpha_aff = aff_zl.min(aff_zu).min(1.0);
+    for i in 0..n {
+        if state.x_l[i].is_finite() && dx_aff[i] < 0.0 {
+            let s = (state.x[i] - state.x_l[i]).max(1e-20);
+            alpha_aff = alpha_aff.min(tau_aff * s / (-dx_aff[i]));
+        }
+        if state.x_u[i].is_finite() && dx_aff[i] > 0.0 {
+            let s = (state.x_u[i] - state.x[i]).max(1e-20);
+            alpha_aff = alpha_aff.min(tau_aff * s / dx_aff[i]);
+        }
+    }
+    alpha_aff = alpha_aff.clamp(0.0, 1.0);
+    let mut mu_aff_sum = 0.0_f64;
+    let mut nb: usize = 0;
+    for i in 0..n {
+        if state.x_l[i].is_finite() {
+            let s = (state.x[i] + alpha_aff * dx_aff[i]
+                - state.x_l[i]).max(1e-20);
+            let z = (state.z_l[i] + alpha_aff * dz_l_aff[i]).max(1e-20);
+            mu_aff_sum += s * z;
+            nb += 1;
+        }
+        if state.x_u[i].is_finite() {
+            let s = (state.x_u[i] - state.x[i]
+                - alpha_aff * dx_aff[i]).max(1e-20);
+            let z = (state.z_u[i] + alpha_aff * dz_u_aff[i]).max(1e-20);
+            mu_aff_sum += s * z;
+            nb += 1;
+        }
+    }
+    if nb == 0 {
+        return None;
+    }
+    let mu_aff = mu_aff_sum / nb as f64;
+    let sigma_mehr = (mu_aff / state.mu).powi(3).clamp(0.0, 1.0);
+    *last_mehrotra_sigma = Some(sigma_mehr);
+    let mu_pc = (sigma_mehr * state.mu).max(options.mu_min);
+    log::debug!(
+        "Mehrotra PC iter {}: σ={:.4} α_aff={:.4} μ: {:.2e}→{:.2e}",
+        iteration, sigma_mehr, alpha_aff, state.mu, mu_pc
+    );
+    let new_rhs = kkt::rebuild_rhs_with_mu(
+        &kkt.rhs, &state.x, &state.x_l, &state.x_u,
+        state.mu, mu_pc,
+    );
+    Some((new_rhs, dx_aff, dz_l_aff, dz_u_aff, mu_pc))
+}
+
 /// Sparse condensed direction solve: factor the sparse Schur
 /// complement S with the banded/sparse solver. On factor or
 /// solve failure rebuilds the full augmented KKT, factors it with
@@ -3169,73 +3249,10 @@ fn solve_for_search_direction<P: NlpProblem>(
         if options.mehrotra_pc {
             let has_bounds = (0..n).any(|i| state.x_l[i].is_finite() || state.x_u[i].is_finite());
             if has_bounds {
-                let pc_result: Option<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, f64)> = {
-                    let kkt = kkt_system_opt.as_ref().unwrap();
-                    let rhs_aff = kkt::affine_predictor_rhs(
-                        &kkt.rhs, &state.x, &state.x_l, &state.x_u, state.mu,
-                    );
-                    if let Ok((dx_aff, _)) = kkt::solve_with_custom_rhs_refined(
-                        &kkt.matrix, kkt.n, kkt.dim, lin_solver, &rhs_aff,
-                    ) {
-                        let (dz_l_aff, dz_u_aff) = kkt::recover_dz(
-                            &state.x, &state.x_l, &state.x_u,
-                            &state.z_l, &state.z_u, &dx_aff, 0.0,
-                        );
-                        let tau_aff = 1.0 - 1e-3;
-                        let aff_zl = filter::fraction_to_boundary(&state.z_l, &dz_l_aff, tau_aff);
-                        let aff_zu = filter::fraction_to_boundary(&state.z_u, &dz_u_aff, tau_aff);
-                        let mut alpha_aff = aff_zl.min(aff_zu).min(1.0);
-                        for i in 0..n {
-                            if state.x_l[i].is_finite() && dx_aff[i] < 0.0 {
-                                let s = (state.x[i] - state.x_l[i]).max(1e-20);
-                                alpha_aff = alpha_aff.min(tau_aff * s / (-dx_aff[i]));
-                            }
-                            if state.x_u[i].is_finite() && dx_aff[i] > 0.0 {
-                                let s = (state.x_u[i] - state.x[i]).max(1e-20);
-                                alpha_aff = alpha_aff.min(tau_aff * s / dx_aff[i]);
-                            }
-                        }
-                        alpha_aff = alpha_aff.clamp(0.0, 1.0);
-                        let mut mu_aff_sum = 0.0_f64;
-                        let mut nb: usize = 0;
-                        for i in 0..n {
-                            if state.x_l[i].is_finite() {
-                                let s = (state.x[i] + alpha_aff * dx_aff[i]
-                                    - state.x_l[i]).max(1e-20);
-                                let z = (state.z_l[i] + alpha_aff * dz_l_aff[i]).max(1e-20);
-                                mu_aff_sum += s * z;
-                                nb += 1;
-                            }
-                            if state.x_u[i].is_finite() {
-                                let s = (state.x_u[i] - state.x[i]
-                                    - alpha_aff * dx_aff[i]).max(1e-20);
-                                let z = (state.z_u[i] + alpha_aff * dz_u_aff[i]).max(1e-20);
-                                mu_aff_sum += s * z;
-                                nb += 1;
-                            }
-                        }
-                        if nb > 0 {
-                            let mu_aff = mu_aff_sum / nb as f64;
-                            let sigma_mehr = (mu_aff / state.mu).powi(3).clamp(0.0, 1.0);
-                            *last_mehrotra_sigma = Some(sigma_mehr);
-                            let mu_pc = (sigma_mehr * state.mu).max(options.mu_min);
-                            log::debug!(
-                                "Mehrotra PC iter {}: σ={:.4} α_aff={:.4} μ: {:.2e}→{:.2e}",
-                                iteration, sigma_mehr, alpha_aff, state.mu, mu_pc
-                            );
-                            let new_rhs = kkt::rebuild_rhs_with_mu(
-                                &kkt.rhs, &state.x, &state.x_l, &state.x_u,
-                                state.mu, mu_pc,
-                            );
-                            Some((new_rhs, dx_aff, dz_l_aff, dz_u_aff, mu_pc))
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                };
-
+                let pc_result = try_mehrotra_predictor(
+                    state, options, kkt_system_opt.as_ref().unwrap(), lin_solver,
+                    iteration, n, last_mehrotra_sigma,
+                );
                 if let Some((new_rhs, dx_aff_v, dz_l_aff_v, dz_u_aff_v, mu_pc_used)) = pc_result {
                     kkt_system_opt.as_mut().unwrap().rhs = new_rhs;
                     mehrotra_applied = true;
