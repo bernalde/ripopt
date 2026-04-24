@@ -1583,46 +1583,7 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         return result;
     }
 
-    // For unconstrained problems, try L-BFGS first (O(n·m) vs O(n³) per iteration)
-    // then fall back to IPM if needed.
-    let mut result = if options.enable_lbfgs_fallback && problem.num_constraints() == 0 {
-        let lbfgs_result = crate::lbfgs::solve(problem, options);
-        if matches!(lbfgs_result.status, SolveStatus::Optimal) {
-            if options.print_level >= 5 {
-                rip_log!(
-                    "ripopt: L-BFGS solved unconstrained problem ({:?}, obj={:.6e})",
-                    lbfgs_result.status, lbfgs_result.objective
-                );
-            }
-            lbfgs_result
-        } else {
-            if options.print_level >= 5 {
-                rip_log!(
-                    "ripopt: L-BFGS failed ({:?}, obj={:.6e}), trying IPM",
-                    lbfgs_result.status, lbfgs_result.objective
-                );
-            }
-            let ipm_result = solve_ipm(problem, options);
-            if matches!(ipm_result.status, SolveStatus::Optimal) {
-                ipm_result
-            } else if lbfgs_result.objective < ipm_result.objective {
-                lbfgs_result
-            } else {
-                ipm_result
-            }
-        }
-    } else {
-        // For constrained problems with wall time limits, reserve budget for fallbacks.
-        // Without this, the first solve_ipm consumes the full max_wall_time, leaving
-        // nothing for SQP/slack/AL fallbacks that might succeed.
-        if options.max_wall_time > 0.0 && problem.num_constraints() > 0 {
-            let mut main_opts = options.clone();
-            main_opts.max_wall_time = options.max_wall_time * 0.5;
-            solve_ipm(problem, &main_opts)
-        } else {
-            solve_ipm(problem, options)
-        }
-    };
+    let mut result = run_initial_solve(problem, options);
 
     // --- Diagnostic-driven recovery ---
     // Instead of trying every fallback in a fixed order, diagnose the failure
@@ -1855,6 +1816,50 @@ pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
     result.diagnostics.wall_time_secs = solve_start.elapsed().as_secs_f64();
     result
+}
+
+/// Run the initial solve, picking a method based on problem structure:
+///
+///   * **Unconstrained (`m == 0`) and L-BFGS fallback enabled**: try
+///     L-BFGS first; if L-BFGS converges to Optimal, return its result.
+///     Otherwise run IPM and return the better of the two.
+///   * **Constrained with a wall-time budget**: cap the initial IPM at
+///     50% of `max_wall_time` so SQP/slack/AL fallbacks have time left.
+///   * **Constrained without a wall-time budget**: full IPM with the
+///     unmodified options.
+fn run_initial_solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult {
+    if options.enable_lbfgs_fallback && problem.num_constraints() == 0 {
+        let lbfgs_result = crate::lbfgs::solve(problem, options);
+        if matches!(lbfgs_result.status, SolveStatus::Optimal) {
+            if options.print_level >= 5 {
+                rip_log!(
+                    "ripopt: L-BFGS solved unconstrained problem ({:?}, obj={:.6e})",
+                    lbfgs_result.status, lbfgs_result.objective
+                );
+            }
+            return lbfgs_result;
+        }
+        if options.print_level >= 5 {
+            rip_log!(
+                "ripopt: L-BFGS failed ({:?}, obj={:.6e}), trying IPM",
+                lbfgs_result.status, lbfgs_result.objective
+            );
+        }
+        let ipm_result = solve_ipm(problem, options);
+        if matches!(ipm_result.status, SolveStatus::Optimal) {
+            ipm_result
+        } else if lbfgs_result.objective < ipm_result.objective {
+            lbfgs_result
+        } else {
+            ipm_result
+        }
+    } else if options.max_wall_time > 0.0 && problem.num_constraints() > 0 {
+        let mut main_opts = options.clone();
+        main_opts.max_wall_time = options.max_wall_time * 0.5;
+        solve_ipm(problem, &main_opts)
+    } else {
+        solve_ipm(problem, options)
+    }
 }
 
 /// Conservative IPM retry: revert v0.4.0 algorithmic changes (Gondzio MCC,
