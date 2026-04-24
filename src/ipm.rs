@@ -2089,6 +2089,115 @@ fn dump_kkt_matrix(
     }
 }
 
+/// Populate the per-iteration IterateSnapshot and invoke the user
+/// intermediate callback.
+///
+/// Sets the global "current iterate" for GetCurrentIterate / GetViolations
+/// access inside the callback, then runs it. If the callback returns false
+/// the solver must terminate with `UserRequestedStop`; returns
+/// `Some(SolveResult)` in that case. The snapshot is cleared before return
+/// regardless.
+///
+/// Ipopt parallel: IpIpoptAlg intermediate-callback invocation (around
+/// IpIpoptAlg.cpp:560–610 and IpOptionsList intermediate_callback wiring).
+///
+/// Extracted from `solve_ipm` as part of the v0.8 main-loop decomposition
+/// (pre-work step 2).
+fn populate_snapshot_and_invoke_callback(
+    state: &SolverState,
+    iteration: usize,
+    primal_inf: f64,
+    dual_inf: f64,
+    prev_ic_delta_w: f64,
+    ls_steps: usize,
+    options: &SolverOptions,
+) -> Option<SolveResult> {
+    use crate::intermediate::IterateSnapshot;
+    let n = state.n;
+    let m = state.m;
+
+    // Populate iterate snapshot for GetCurrentIterate/Violations access
+    let mut x_l_viol = vec![0.0; n];
+    let mut x_u_viol = vec![0.0; n];
+    let mut compl_xl = vec![0.0; n];
+    let mut compl_xu = vec![0.0; n];
+    for i in 0..n {
+        if state.x_l[i].is_finite() {
+            x_l_viol[i] = (state.x_l[i] - state.x[i]).max(0.0);
+            compl_xl[i] = (state.x[i] - state.x_l[i]) * state.z_l[i];
+        }
+        if state.x_u[i].is_finite() {
+            x_u_viol[i] = (state.x[i] - state.x_u[i]).max(0.0);
+            compl_xu[i] = (state.x_u[i] - state.x[i]) * state.z_u[i];
+        }
+    }
+    // grad_lag = grad_f + J^T y - z_l + z_u
+    let mut grad_lag = state.grad_f.clone();
+    for (k, (&r, &c)) in state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate() {
+        grad_lag[c] += state.jac_vals[k] * state.y[r];
+    }
+    for i in 0..n {
+        grad_lag[i] -= state.z_l[i];
+        grad_lag[i] += state.z_u[i];
+    }
+    let mut constr_viol = vec![0.0; m];
+    let mut compl_g_vec = vec![0.0; m];
+    for i in 0..m {
+        if state.g_l[i].is_finite() && state.g[i] < state.g_l[i] {
+            constr_viol[i] = state.g_l[i] - state.g[i];
+        } else if state.g_u[i].is_finite() && state.g[i] > state.g_u[i] {
+            constr_viol[i] = state.g[i] - state.g_u[i];
+        }
+        // Complementarity: lambda_i * c_i where c_i is the active constraint slack
+        if state.g_l[i].is_finite() && state.g_u[i].is_finite() {
+            // Equality or range: use min slack
+            compl_g_vec[i] = state.y[i] * (state.g[i] - state.g_l[i]).min(state.g_u[i] - state.g[i]);
+        } else if state.g_l[i].is_finite() {
+            compl_g_vec[i] = state.y[i] * (state.g[i] - state.g_l[i]);
+        } else if state.g_u[i].is_finite() {
+            compl_g_vec[i] = state.y[i] * (state.g_u[i] - state.g[i]);
+        }
+    }
+    crate::intermediate::set_current_iterate(Some(IterateSnapshot {
+        x: state.x.clone(),
+        z_l: state.z_l.clone(),
+        z_u: state.z_u.clone(),
+        g: state.g.clone(),
+        lambda: state.y.clone(),
+        x_l_violation: x_l_viol,
+        x_u_violation: x_u_viol,
+        compl_x_l: compl_xl,
+        compl_x_u: compl_xu,
+        grad_lag_x: grad_lag,
+        constraint_violation: constr_viol,
+        compl_g: compl_g_vec,
+    }));
+
+    // Invoke intermediate callback (if registered)
+    let d_norm = state.dx.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+    let continue_ok = crate::intermediate::invoke_intermediate(
+        0, // alg_mod: 0 = regular mode (not in restoration)
+        iteration,
+        state.obj / state.obj_scaling,
+        primal_inf,
+        dual_inf,
+        state.mu,
+        d_norm,
+        prev_ic_delta_w,
+        state.alpha_dual,
+        state.alpha_primal,
+        ls_steps,
+    );
+    crate::intermediate::set_current_iterate(None);
+    if !continue_ok {
+        if options.print_level >= 5 {
+            rip_log!("ripopt: User requested stop via intermediate callback");
+        }
+        return Some(make_result(state, SolveStatus::UserRequestedStop));
+    }
+    None
+}
+
 /// Emit a single iteration-row line to the solver log.
 ///
 /// Ipopt parallel: `IpIpoptAlg::OutputIteration` (IpIpoptAlg.cpp:520–560).
@@ -2775,88 +2884,17 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             last_soc_accepted = false;
         }
 
-        // Populate iterate snapshot for GetCurrentIterate/Violations access
-        {
-            use crate::intermediate::IterateSnapshot;
-            let mut x_l_viol = vec![0.0; n];
-            let mut x_u_viol = vec![0.0; n];
-            let mut compl_xl = vec![0.0; n];
-            let mut compl_xu = vec![0.0; n];
-            for i in 0..n {
-                if state.x_l[i].is_finite() {
-                    x_l_viol[i] = (state.x_l[i] - state.x[i]).max(0.0);
-                    compl_xl[i] = (state.x[i] - state.x_l[i]) * state.z_l[i];
-                }
-                if state.x_u[i].is_finite() {
-                    x_u_viol[i] = (state.x[i] - state.x_u[i]).max(0.0);
-                    compl_xu[i] = (state.x_u[i] - state.x[i]) * state.z_u[i];
-                }
-            }
-            // grad_lag = grad_f + J^T y - z_l + z_u
-            let mut grad_lag = state.grad_f.clone();
-            for (k, (&r, &c)) in state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate() {
-                grad_lag[c] += state.jac_vals[k] * state.y[r];
-            }
-            for i in 0..n {
-                grad_lag[i] -= state.z_l[i];
-                grad_lag[i] += state.z_u[i];
-            }
-            let mut constr_viol = vec![0.0; m];
-            let mut compl_g_vec = vec![0.0; m];
-            for i in 0..m {
-                if state.g_l[i].is_finite() && state.g[i] < state.g_l[i] {
-                    constr_viol[i] = state.g_l[i] - state.g[i];
-                } else if state.g_u[i].is_finite() && state.g[i] > state.g_u[i] {
-                    constr_viol[i] = state.g[i] - state.g_u[i];
-                }
-                // Complementarity: lambda_i * c_i where c_i is the active constraint slack
-                if state.g_l[i].is_finite() && state.g_u[i].is_finite() {
-                    // Equality or range: use min slack
-                    compl_g_vec[i] = state.y[i] * (state.g[i] - state.g_l[i]).min(state.g_u[i] - state.g[i]);
-                } else if state.g_l[i].is_finite() {
-                    compl_g_vec[i] = state.y[i] * (state.g[i] - state.g_l[i]);
-                } else if state.g_u[i].is_finite() {
-                    compl_g_vec[i] = state.y[i] * (state.g_u[i] - state.g[i]);
-                }
-            }
-            crate::intermediate::set_current_iterate(Some(IterateSnapshot {
-                x: state.x.clone(),
-                z_l: state.z_l.clone(),
-                z_u: state.z_u.clone(),
-                g: state.g.clone(),
-                lambda: state.y.clone(),
-                x_l_violation: x_l_viol,
-                x_u_violation: x_u_viol,
-                compl_x_l: compl_xl,
-                compl_x_u: compl_xu,
-                grad_lag_x: grad_lag,
-                constraint_violation: constr_viol,
-                compl_g: compl_g_vec,
-            }));
-        }
-
-        // Invoke intermediate callback (if registered)
-        let d_norm = state.dx.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
-        if !crate::intermediate::invoke_intermediate(
-            0, // alg_mod: 0 = regular mode (not in restoration)
+        if let Some(result) = populate_snapshot_and_invoke_callback(
+            &state,
             iteration,
-            state.obj / state.obj_scaling,
             primal_inf,
             dual_inf,
-            state.mu,
-            d_norm,
             prev_ic_delta_w,
-            state.alpha_dual,
-            state.alpha_primal,
             ls_steps,
+            options,
         ) {
-            crate::intermediate::set_current_iterate(None);
-            if options.print_level >= 5 {
-                rip_log!("ripopt: User requested stop via intermediate callback");
-            }
-            return make_result(&state, SolveStatus::UserRequestedStop);
+            return result;
         }
-        crate::intermediate::set_current_iterate(None);
 
         // Compute multiplier scaling for convergence check
         let multiplier_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
