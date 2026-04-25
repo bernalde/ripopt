@@ -2639,15 +2639,7 @@ fn assemble_kkt_systems(
     };
 
     let kkt_system_opt = if !use_condensed && !use_sparse_condensed {
-        Some(kkt::assemble_kkt(
-            n, m,
-            &state.hess_rows, &state.hess_cols, &state.hess_vals,
-            &state.jac_rows, &state.jac_cols, &state.jac_vals,
-            &sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
-            &state.y, &state.z_l, &state.z_u,
-            &state.x, &state.x_l, &state.x_u, state.mu,
-            use_sparse, &state.v_l, &state.v_u,
-        ))
+        Some(assemble_kkt_from_state(state, n, m, &sigma, use_sparse))
     } else {
         None
     };
@@ -3485,15 +3477,7 @@ fn solve_sparse_condensed_direction(
             Err(_) => {}
         }
     }
-    let mut kkt = kkt::assemble_kkt(
-        n, m,
-        &state.hess_rows, &state.hess_cols, &state.hess_vals,
-        &state.jac_rows, &state.jac_cols, &state.jac_vals,
-        sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
-        &state.y, &state.z_l, &state.z_u,
-        &state.x, &state.x_l, &state.x_u, state.mu,
-        use_sparse, &state.v_l, &state.v_u,
-    );
+    let mut kkt = assemble_kkt_from_state(state, n, m, sigma, use_sparse);
     let mut fallback_solver = new_fallback_solver(use_sparse);
     if let Ok((fb_dw, fb_dc)) = kkt::factor_with_inertia_correction(
         &mut kkt, fallback_solver.as_mut(), inertia_params,
@@ -3611,15 +3595,7 @@ fn fall_back_to_full_kkt_after_condensed_failure<P: NlpProblem>(
     linear_constraints: Option<&[bool]>,
     deadline: Option<Instant>,
 ) -> CondensedDirectionOutcome {
-    let mut kkt = kkt::assemble_kkt(
-        n, m,
-        &state.hess_rows, &state.hess_cols, &state.hess_vals,
-        &state.jac_rows, &state.jac_cols, &state.jac_vals,
-        sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
-        &state.y, &state.z_l, &state.z_u,
-        &state.x, &state.x_l, &state.x_u, state.mu,
-        use_sparse, &state.v_l, &state.v_u,
-    );
+    let mut kkt = assemble_kkt_from_state(state, n, m, sigma, use_sparse);
     let fb_ic = kkt::factor_with_inertia_correction(
         &mut kkt, lin_solver, inertia_params,
     );
@@ -3875,15 +3851,7 @@ fn adjust_sparse_condensed_bandwidth<P: NlpProblem>(
         }
         *disable_sparse_condensed = true;
         *sparse_condensed_system = None;
-        *kkt_system_opt = Some(kkt::assemble_kkt(
-            n, m,
-            &state.hess_rows, &state.hess_cols, &state.hess_vals,
-            &state.jac_rows, &state.jac_cols, &state.jac_vals,
-            sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
-            &state.y, &state.z_l, &state.z_u,
-            &state.x, &state.x_l, &state.x_u, state.mu,
-            use_sparse, &state.v_l, &state.v_u,
-        ));
+        *kkt_system_opt = Some(assemble_kkt_from_state(state, n, m, sigma, use_sparse));
     } else if bw * bw <= n {
         if options.print_level >= 5 {
             rip_log!("ripopt: Sparse condensed S has bandwidth {} for n={}, using banded solver", bw, n);
@@ -4541,14 +4509,7 @@ fn try_early_perturbation_recovery<P: NlpProblem>(
             let sigma_p = kkt::compute_sigma(
                 &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u,
             );
-            let mut kkt_p = kkt::assemble_kkt(
-                n, m, &state.hess_rows, &state.hess_cols, &state.hess_vals,
-                &state.jac_rows, &state.jac_cols, &state.jac_vals, &sigma_p,
-                &state.grad_f, &state.g, &state.g_l, &state.g_u,
-                &state.y, &state.z_l, &state.z_u,
-                &state.x, &state.x_l, &state.x_u, state.mu,
-                use_sparse, &state.v_l, &state.v_u,
-            );
+            let mut kkt_p = assemble_kkt_from_state(state, n, m, &sigma_p, use_sparse);
             if kkt::factor_with_inertia_correction(
                 &mut kkt_p, lin_solver, inertia_params,
             ).is_ok() {
@@ -8900,6 +8861,30 @@ fn compute_clamped_trial_x(state: &SolverState, dx: &[f64], alpha: f64) -> Vec<f
         clamp_to_open_bounds(&mut x_trial, &state.x_l, &state.x_u, i);
     }
     x_trial
+}
+
+/// `kkt::assemble_kkt` invoked with the standard `state.*` argument
+/// pattern (Hessian/Jacobian triplets, primal/dual iterate, bounds, mu,
+/// dense vs. sparse choice). Centralises the five callers — main solve
+/// (assemble_kkt_systems), the sparse-condensed full-KKT fallback, the
+/// full-augmented direction solve, the bandwidth-driven downgrade, and
+/// the perturbation recovery path.
+fn assemble_kkt_from_state(
+    state: &SolverState,
+    n: usize,
+    m: usize,
+    sigma: &[f64],
+    use_sparse: bool,
+) -> kkt::KktSystem {
+    kkt::assemble_kkt(
+        n, m,
+        &state.hess_rows, &state.hess_cols, &state.hess_vals,
+        &state.jac_rows, &state.jac_cols, &state.jac_vals,
+        sigma, &state.grad_f, &state.g, &state.g_l, &state.g_u,
+        &state.y, &state.z_l, &state.z_u,
+        &state.x, &state.x_l, &state.x_u, state.mu,
+        use_sparse, &state.v_l, &state.v_u,
+    )
 }
 
 /// Commit a trial point as the new iterate: writes `x`, `obj`, `g`,
