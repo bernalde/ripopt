@@ -611,17 +611,7 @@ impl SolverState {
         let mut x = vec![0.0; n];
         problem.initial_point(&mut x);
 
-        // Relax fixed variables: when x_l == x_u, the variable is fixed.
-        // Interior-point methods require strictly interior starting points,
-        // so we relax the bounds slightly (Ipopt's relax_bounds approach).
-        for i in 0..n {
-            if x_l[i].is_finite() && x_u[i].is_finite() && (x_u[i] - x_l[i]).abs() < 1e-10 {
-                let center = (x_l[i] + x_u[i]) / 2.0;
-                let relax = 1e-8 * center.abs().max(1.0);
-                x_l[i] = center - relax;
-                x_u[i] = center + relax;
-            }
-        }
+        relax_fixed_variable_bounds(&mut x_l, &mut x_u);
 
         push_initial_point_from_bounds(&mut x, &x_l, &x_u, options);
 
@@ -8204,6 +8194,21 @@ fn compute_ls_multiplier_rhs(
         b[row] -= jac_vals[idx] * rhs_grad[col];
     }
     b
+}
+
+/// Relax fixed variables (x_l == x_u) by widening bounds to a tiny
+/// interval centered on the fixed value. Interior-point methods require
+/// strictly interior starting points; without this fixed variables would
+/// have zero feasible interior. Mirrors Ipopt's relax_bounds approach.
+fn relax_fixed_variable_bounds(x_l: &mut [f64], x_u: &mut [f64]) {
+    for i in 0..x_l.len() {
+        if x_l[i].is_finite() && x_u[i].is_finite() && (x_u[i] - x_l[i]).abs() < 1e-10 {
+            let center = (x_l[i] + x_u[i]) / 2.0;
+            let relax = 1e-8 * center.abs().max(1.0);
+            x_l[i] = center - relax;
+            x_u[i] = center + relax;
+        }
+    }
 }
 
 /// Push the initial point strictly inside finite variable bounds. For
