@@ -2944,10 +2944,7 @@ fn compute_mcc_alpha_max(
     dz_u: &[f64],
     tau_mcc: f64,
 ) -> f64 {
-    let mcc_zl = filter::fraction_to_boundary(&state.z_l, dz_l, tau_mcc);
-    let mcc_zu = filter::fraction_to_boundary(&state.z_u, dz_u, tau_mcc);
-    let alpha = mcc_zl
-        .min(mcc_zu)
+    let alpha = fraction_to_boundary_dual_z_min(state, dz_l, dz_u, tau_mcc)
         .min(fraction_to_boundary_primal_x(state, dx, tau_mcc));
     alpha.clamp(0.0, 1.0)
 }
@@ -3452,9 +3449,8 @@ fn try_mehrotra_predictor(
         &state.z_l, &state.z_u, &dx_aff, 0.0,
     );
     let tau_aff = 1.0 - 1e-3;
-    let aff_zl = filter::fraction_to_boundary(&state.z_l, &dz_l_aff, tau_aff);
-    let aff_zu = filter::fraction_to_boundary(&state.z_u, &dz_u_aff, tau_aff);
-    let mut alpha_aff = aff_zl.min(aff_zu).min(1.0);
+    let mut alpha_aff = fraction_to_boundary_dual_z_min(state, &dz_l_aff, &dz_u_aff, tau_aff)
+        .min(1.0);
     for i in 0..n {
         if state.x_l[i].is_finite() && dx_aff[i] < 0.0 {
             alpha_aff = alpha_aff.min(tau_aff * slack_xl(state, i) / (-dx_aff[i]));
@@ -4467,9 +4463,7 @@ fn compute_alpha_max(
     let alpha_primal_max =
         fraction_to_boundary_primal_x(state, &state.dx, tau).clamp(0.0, 1.0);
 
-    let alpha_dual_max_l = filter::fraction_to_boundary(&state.z_l, &state.dz_l, tau);
-    let alpha_dual_max_u = filter::fraction_to_boundary(&state.z_u, &state.dz_u, tau);
-    let alpha_dual_max = alpha_dual_max_l.min(alpha_dual_max_u);
+    let alpha_dual_max = fraction_to_boundary_dual_z_min(state, &state.dz_l, &state.dz_u, tau);
 
     (tau, alpha_primal_max, alpha_dual_max)
 }
@@ -8683,6 +8677,17 @@ fn compute_tau(
     } else {
         (1.0 - state.mu).max(options.tau_min)
     }
+}
+
+/// Fraction-to-boundary cap on the dual step `α·(dz_l, dz_u)` against
+/// the bound multipliers `state.z_l` / `state.z_u`. Returns
+/// `min(α_zl, α_zu)` (no `[0, 1]` clamp). Centralises the three sites
+/// — main-step `α_dual_max`, Gondzio MCC corrector cap, and Mehrotra
+/// affine-predictor cap — that all spell out two
+/// `filter::fraction_to_boundary` calls plus a `.min` inline.
+fn fraction_to_boundary_dual_z_min(state: &SolverState, dz_l: &[f64], dz_u: &[f64], tau: f64) -> f64 {
+    filter::fraction_to_boundary(&state.z_l, dz_l, tau)
+        .min(filter::fraction_to_boundary(&state.z_u, dz_u, tau))
 }
 
 /// Fraction-to-boundary cap on the primal step `α·dx` against the
