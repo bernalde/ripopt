@@ -6020,13 +6020,10 @@ fn handle_near_tolerance_stall(
                 state.mu, new_mu, primal_inf_max
             );
         }
-        state.mu = new_mu;
-        reset_stall_counters_and_filter(
-            state, filter,
+        boost_mu_and_switch_to_fixed_with_stall_reset(
+            state, new_mu, mu_state, filter,
             stall_no_progress_count, stall_best_pr, stall_best_du,
         );
-        mu_state.mode = MuMode::Fixed;
-        mu_state.first_iter_in_mode = true;
         return StallDecision::Continue;
     }
     if !options.mu_strategy_adaptive && state.mu > options.mu_min {
@@ -6095,13 +6092,10 @@ fn try_boost_mu_for_stall(
             state.mu, new_mu, primal_inf_max
         );
     }
-    state.mu = new_mu;
-    reset_stall_counters_and_filter(
-        state, filter,
+    boost_mu_and_switch_to_fixed_with_stall_reset(
+        state, new_mu, mu_state, filter,
         stall_no_progress_count, stall_best_pr, stall_best_du,
     );
-    mu_state.mode = MuMode::Fixed;
-    mu_state.first_iter_in_mode = true;
     Some(StallDecision::Continue)
 }
 
@@ -8896,6 +8890,32 @@ fn compute_compl_err_at_state(state: &SolverState) -> f64 {
 /// on the objective + gradient pair (`IpIpoptCalculatedQuantities`).
 fn obj_and_grad_finite(state: &SolverState) -> bool {
     state.obj.is_finite() && state.grad_f.iter().all(|v| v.is_finite())
+}
+
+/// Boost μ to `new_mu`, reset the filter and overall-progress stall
+/// counters, and pin the strategy in Fixed mode. Used by the two
+/// stall-recovery branches (`handle_near_tolerance_stall` near-tol
+/// boost and `try_boost_mu_for_stall`) — both first decide a target
+/// μ from `primal_inf_max`, log it, then run this exact mutation.
+/// Does NOT increment `diagnostics.mu_mode_switches` (these
+/// stall-driven flips are tracked separately from the Free↔Fixed
+/// transitions in `switch_mu_mode`).
+fn boost_mu_and_switch_to_fixed_with_stall_reset(
+    state: &mut SolverState,
+    new_mu: f64,
+    mu_state: &mut MuState,
+    filter: &mut Filter,
+    stall_no_progress_count: &mut usize,
+    stall_best_pr: &mut f64,
+    stall_best_du: &mut f64,
+) {
+    state.mu = new_mu;
+    reset_stall_counters_and_filter(
+        state, filter,
+        stall_no_progress_count, stall_best_pr, stall_best_du,
+    );
+    mu_state.mode = MuMode::Fixed;
+    mu_state.first_iter_in_mode = true;
 }
 
 /// Clamp `arr[i]` strictly inside the open variable box at index `i`,
