@@ -3036,12 +3036,7 @@ fn apply_gondzio_mcc(
     let n = state.n;
     let m = state.m;
 
-    let tau_mcc = if mu_state.mode == MuMode::Free {
-        let nlp_error = primal_inf + dual_inf + compl_inf;
-        (1.0 - nlp_error).max(options.tau_min)
-    } else {
-        (1.0 - state.mu).max(options.tau_min)
-    };
+    let tau_mcc = compute_tau(state, options, mu_state, primal_inf, dual_inf, compl_inf);
     let mut alpha_mcc = compute_mcc_alpha_max(
         state, &state.dx, &state.dz_l, &state.dz_u, tau_mcc,
     );
@@ -4510,12 +4505,7 @@ fn compute_alpha_max(
     dual_inf: f64,
     compl_inf: f64,
 ) -> (f64, f64, f64) {
-    let tau = if mu_state.mode == MuMode::Free {
-        let nlp_error = primal_inf + dual_inf + compl_inf;
-        (1.0 - nlp_error).max(options.tau_min)
-    } else {
-        (1.0 - state.mu).max(options.tau_min)
-    };
+    let tau = compute_tau(state, options, mu_state, primal_inf, dual_inf, compl_inf);
 
     let alpha_primal_max =
         fraction_to_boundary_primal_x(state, &state.dx, tau).clamp(0.0, 1.0);
@@ -8736,6 +8726,28 @@ fn theta_for_g(state: &SolverState, g: &[f64]) -> f64 {
 fn accumulate_jt_y(state: &SolverState, target: &mut [f64]) {
     for (idx, (&row, &col)) in state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate() {
         target[col] += state.jac_vals[idx] * state.y[row];
+    }
+}
+
+/// Fraction-to-boundary `tau` factor used by the main step and the
+/// Gondzio multiple-centrality corrections. Free mode uses
+/// `1 - NLP_error` (Wächter & Biegler 2006 eq. 8); fixed mode uses
+/// `1 - mu` (Ipopt's standard `IpAlgorithmRegOp::tau_min`). Both are
+/// floored at `options.tau_min` so the primal/dual fraction-to-
+/// boundary scan stays strictly positive.
+fn compute_tau(
+    state: &SolverState,
+    options: &SolverOptions,
+    mu_state: &MuState,
+    primal_inf: f64,
+    dual_inf: f64,
+    compl_inf: f64,
+) -> f64 {
+    if mu_state.mode == MuMode::Free {
+        let nlp_error = primal_inf + dual_inf + compl_inf;
+        (1.0 - nlp_error).max(options.tau_min)
+    } else {
+        (1.0 - state.mu).max(options.tau_min)
     }
 }
 
