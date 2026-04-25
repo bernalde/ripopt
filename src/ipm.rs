@@ -4699,9 +4699,7 @@ fn try_early_perturbation_recovery<P: NlpProblem>(
             }
         }
         let pert_eval_ok = evaluate_and_refresh_lbfgs(state, problem, lbfgs_state, linear_constraints, lbfgs_mode);
-        if pert_eval_ok && !state.obj.is_nan() && !state.obj.is_infinite()
-            && !state.grad_f.iter().any(|v| v.is_nan() || v.is_infinite())
-        {
+        if pert_eval_ok && obj_and_grad_finite(state) {
             let sigma_p = kkt::compute_sigma(
                 &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u,
             );
@@ -6858,9 +6856,7 @@ fn initial_evaluate_with_recovery<P: NlpProblem>(
 ) -> Result<(), SolveResult> {
     let init_eval_ok = evaluate_and_refresh_lbfgs(state, problem, lbfgs_state, linear_constraints, lbfgs_mode);
 
-    if init_eval_ok && !state.obj.is_nan() && !state.obj.is_infinite()
-        && !state.grad_f.iter().any(|v| v.is_nan() || v.is_infinite())
-    {
+    if init_eval_ok && obj_and_grad_finite(state) {
         return Ok(());
     }
 
@@ -6895,9 +6891,7 @@ fn initial_evaluate_with_recovery<P: NlpProblem>(
             }
         }
         let perturb_ok = evaluate_and_refresh_lbfgs(state, problem, lbfgs_state, linear_constraints, lbfgs_mode);
-        if perturb_ok && !state.obj.is_nan() && !state.obj.is_infinite()
-            && !state.grad_f.iter().any(|v| v.is_nan() || v.is_infinite())
-        {
+        if perturb_ok && obj_and_grad_finite(state) {
             return Ok(());
         }
     }
@@ -8893,6 +8887,15 @@ fn compute_compl_err_at_state(state: &SolverState) -> f64 {
     convergence::complementarity_error(
         &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
     )
+}
+
+/// True iff the current objective and gradient evaluation are
+/// numerically valid (finite, no NaN). Used by post-perturbation
+/// recovery paths to gate a "did the new iterate evaluate cleanly"
+/// check before accepting it. Mirrors Ipopt's `Eval_Error` predicate
+/// on the objective + gradient pair (`IpIpoptCalculatedQuantities`).
+fn obj_and_grad_finite(state: &SolverState) -> bool {
+    state.obj.is_finite() && state.grad_f.iter().all(|v| v.is_finite())
 }
 
 /// Clamp `arr[i]` strictly inside the open variable box at index `i`,
