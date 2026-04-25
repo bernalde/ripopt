@@ -1571,6 +1571,60 @@ fn try_preprocessed_solve<P: NlpProblem>(
     None
 }
 
+/// Compute the accepted step length and resulting θ for one Gauss–Newton
+/// polish iterate. Applies a τ=0.995 fraction-to-boundary cap on variable
+/// bounds, then halves α (up to 10×) until θ improves. Returns
+/// `Some((alpha, theta))` if an improving step was found, `None` if the
+/// constraint evaluation failed; the caller owns the "no improvement"
+/// termination check by comparing the returned θ against the previous one.
+fn try_polish_step_with_backtrack<P: NlpProblem>(
+    problem: &P,
+    polished_x: &[f64],
+    dx: &[f64],
+    x_l_var: &[f64],
+    x_u_var: &[f64],
+    g_l: &[f64],
+    g_u: &[f64],
+    current_theta: f64,
+    n: usize,
+    m: usize,
+) -> Option<(f64, f64)> {
+    let mut alpha = 1.0;
+    let tau = 0.995;
+    for i in 0..n {
+        if dx[i] < 0.0 && x_l_var[i].is_finite() {
+            let max_step = -tau * (polished_x[i] - x_l_var[i]) / dx[i];
+            if max_step < alpha { alpha = max_step; }
+        }
+        if dx[i] > 0.0 && x_u_var[i].is_finite() {
+            let max_step = tau * (x_u_var[i] - polished_x[i]) / dx[i];
+            if max_step < alpha { alpha = max_step; }
+        }
+    }
+    alpha = alpha.max(0.0).min(1.0);
+
+    let mut trial_x = vec![0.0; n];
+    let mut trial_g = vec![0.0; m];
+    let mut best_alpha = alpha;
+    let mut best_theta = current_theta;
+    for _ in 0..10 {
+        for i in 0..n {
+            trial_x[i] = polished_x[i] - best_alpha * dx[i];
+        }
+        if !problem.constraints(&trial_x, true, &mut trial_g) {
+            best_alpha *= 0.5;
+            continue;
+        }
+        let trial_theta = convergence::primal_infeasibility(&trial_g, g_l, g_u);
+        if trial_theta < current_theta {
+            best_theta = trial_theta;
+            return Some((best_alpha, best_theta));
+        }
+        best_alpha *= 0.5;
+    }
+    Some((best_alpha, best_theta))
+}
+
 /// Gauss–Newton polish of an LS solution against the original constraint
 /// system. Runs only when the current `theta` is above `options.tol` but
 /// below `1e-2` — the regime where a few Newton steps on `g(x) = target`
@@ -1619,40 +1673,12 @@ fn polish_ls_solution_with_newton<P: NlpProblem>(
             None => break,
         };
 
-        // Fraction-to-boundary line search on variable bounds
-        let mut alpha = 1.0;
-        let tau = 0.995;
-        for i in 0..n {
-            if dx[i] < 0.0 && x_l_var[i].is_finite() {
-                let max_step = -tau * (polished_x[i] - x_l_var[i]) / dx[i];
-                if max_step < alpha { alpha = max_step; }
-            }
-            if dx[i] > 0.0 && x_u_var[i].is_finite() {
-                let max_step = tau * (x_u_var[i] - polished_x[i]) / dx[i];
-                if max_step < alpha { alpha = max_step; }
-            }
-        }
-        alpha = alpha.max(0.0).min(1.0);
-
-        let mut trial_x = vec![0.0; n];
-        let mut trial_g = vec![0.0; m];
-        let mut best_alpha = alpha;
-        let mut best_theta = *theta;
-        for _ in 0..10 {
-            for i in 0..n {
-                trial_x[i] = polished_x[i] - best_alpha * dx[i];
-            }
-            if !problem.constraints(&trial_x, true, &mut trial_g) {
-                best_alpha *= 0.5;
-                continue;
-            }
-            let trial_theta = convergence::primal_infeasibility(&trial_g, g_l, g_u);
-            if trial_theta < *theta {
-                best_theta = trial_theta;
-                break;
-            }
-            best_alpha *= 0.5;
-        }
+        let (best_alpha, best_theta) = match try_polish_step_with_backtrack(
+            problem, polished_x, &dx, &x_l_var, &x_u_var, g_l, g_u, *theta, n, m,
+        ) {
+            Some(t) => t,
+            None => break,
+        };
 
         if best_theta >= *theta * 0.999 {
             break;
