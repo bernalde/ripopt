@@ -762,12 +762,10 @@ impl SolverState {
         let mut phi = self.obj;
         for i in 0..self.n {
             if self.x_l[i].is_finite() {
-                let slack = (self.x[i] - self.x_l[i]).max(1e-20);
-                phi -= self.mu * slack.ln();
+                phi -= self.mu * slack_xl(self, i).ln();
             }
             if self.x_u[i].is_finite() {
-                let slack = (self.x_u[i] - self.x[i]).max(1e-20);
-                phi -= self.mu * slack.ln();
+                phi -= self.mu * slack_xu(self, i).ln();
             }
         }
         if options.constraint_slack_barrier {
@@ -807,12 +805,10 @@ impl SolverState {
         for i in 0..self.n {
             let mut grad_phi_i = self.grad_f[i];
             if self.x_l[i].is_finite() {
-                let slack = (self.x[i] - self.x_l[i]).max(1e-20);
-                grad_phi_i -= self.mu / slack;
+                grad_phi_i -= self.mu / slack_xl(self, i);
             }
             if self.x_u[i].is_finite() {
-                let slack = (self.x_u[i] - self.x[i]).max(1e-20);
-                grad_phi_i += self.mu / slack;
+                grad_phi_i += self.mu / slack_xu(self, i);
             }
             grad_phi_dx += grad_phi_i * self.dx[i];
         }
@@ -2759,14 +2755,14 @@ fn apply_kappa_sigma_bound_multiplier_reset(
     for i in 0..n {
         if state.x_l[i].is_finite() {
             let z_new = (state.z_l[i] + alpha_d * state.dz_l[i]).max(1e-20);
-            let s_l = (state.x[i] - state.x_l[i]).max(1e-20);
+            let s_l = slack_xl(state, i);
             let z_lo = mu_ks / (kappa_sigma * s_l);
             let z_hi = kappa_sigma * mu_ks / s_l;
             state.z_l[i] = z_new.clamp(z_lo, z_hi);
         }
         if state.x_u[i].is_finite() {
             let z_new = (state.z_u[i] + alpha_d * state.dz_u[i]).max(1e-20);
-            let s_u = (state.x_u[i] - state.x[i]).max(1e-20);
+            let s_u = slack_xu(state, i);
             let z_lo = mu_ks / (kappa_sigma * s_u);
             let z_hi = kappa_sigma * mu_ks / s_u;
             state.z_u[i] = z_new.clamp(z_lo, z_hi);
@@ -2872,12 +2868,10 @@ fn build_mcc_corrected_direction(
     let mut ddz_u = vec![0.0_f64; n];
     for i in 0..n {
         if state.x_l[i].is_finite() {
-            let s_l = (state.x[i] - state.x_l[i]).max(1e-20);
-            ddz_l[i] = -(state.z_l[i] / s_l) * ddx[i];
+            ddz_l[i] = -(state.z_l[i] / slack_xl(state, i)) * ddx[i];
         }
         if state.x_u[i].is_finite() {
-            let s_u = (state.x_u[i] - state.x[i]).max(1e-20);
-            ddz_u[i] = (state.z_u[i] / s_u) * ddx[i];
+            ddz_u[i] = (state.z_u[i] / slack_xu(state, i)) * ddx[i];
         }
     }
 
@@ -3497,12 +3491,10 @@ fn try_mehrotra_predictor(
     let mut alpha_aff = aff_zl.min(aff_zu).min(1.0);
     for i in 0..n {
         if state.x_l[i].is_finite() && dx_aff[i] < 0.0 {
-            let s = (state.x[i] - state.x_l[i]).max(1e-20);
-            alpha_aff = alpha_aff.min(tau_aff * s / (-dx_aff[i]));
+            alpha_aff = alpha_aff.min(tau_aff * slack_xl(state, i) / (-dx_aff[i]));
         }
         if state.x_u[i].is_finite() && dx_aff[i] > 0.0 {
-            let s = (state.x_u[i] - state.x[i]).max(1e-20);
-            alpha_aff = alpha_aff.min(tau_aff * s / dx_aff[i]);
+            alpha_aff = alpha_aff.min(tau_aff * slack_xu(state, i) / dx_aff[i]);
         }
     }
     alpha_aff = alpha_aff.clamp(0.0, 1.0);
@@ -4970,12 +4962,10 @@ fn compute_loqo_mu(
     let mut min_compl = f64::INFINITY;
     for i in 0..n {
         if state.x_l[i].is_finite() {
-            let s = (state.x[i] - state.x_l[i]).max(1e-20);
-            min_compl = min_compl.min(s * state.z_l[i]);
+            min_compl = min_compl.min(slack_xl(state, i) * state.z_l[i]);
         }
         if state.x_u[i].is_finite() {
-            let s = (state.x_u[i] - state.x[i]).max(1e-20);
-            min_compl = min_compl.min(s * state.z_u[i]);
+            min_compl = min_compl.min(slack_xu(state, i) * state.z_u[i]);
         }
     }
     let xi = if avg_compl > 0.0 && min_compl.is_finite() {
@@ -6450,12 +6440,10 @@ fn emit_trace_row_if_enabled(
         for i in 0..n {
             let mut s_i = 0.0_f64;
             if state.x_l[i].is_finite() {
-                let s = (state.x[i] - state.x_l[i]).max(1e-20);
-                s_i += state.z_l[i] / s;
+                s_i += state.z_l[i] / slack_xl(state, i);
             }
             if state.x_u[i].is_finite() {
-                let s = (state.x_u[i] - state.x[i]).max(1e-20);
-                s_i += state.z_u[i] / s;
+                s_i += state.z_u[i] / slack_xu(state, i);
             }
             if s_i > 0.0 {
                 mn = mn.min(s_i);
@@ -8864,12 +8852,10 @@ fn reseed_bound_multipliers_from_mu(state: &mut SolverState, mu: f64) {
     let n = state.n;
     for i in 0..n {
         if state.x_l[i].is_finite() {
-            let slack = (state.x[i] - state.x_l[i]).max(1e-20);
-            state.z_l[i] = mu / slack;
+            state.z_l[i] = mu / slack_xl(state, i);
         }
         if state.x_u[i].is_finite() {
-            let slack = (state.x_u[i] - state.x[i]).max(1e-20);
-            state.z_u[i] = mu / slack;
+            state.z_u[i] = mu / slack_xu(state, i);
         }
     }
 }
@@ -8913,6 +8899,21 @@ fn clamp_to_open_bounds(arr: &mut [f64], x_l: &[f64], x_u: &[f64], i: usize) {
     if x_u[i].is_finite() {
         arr[i] = arr[i].min(x_u[i] - 1e-14);
     }
+}
+
+/// Strictly-positive lower-bound primal slack `max(x - x_l, 1e-20)`,
+/// clamped away from zero so callers can divide by it without producing
+/// inf/NaN. Caller is responsible for the `x_l[i].is_finite()` guard;
+/// without that guard `state.x_l[i]` may be -inf and the result is
+/// undefined.
+fn slack_xl(state: &SolverState, i: usize) -> f64 {
+    (state.x[i] - state.x_l[i]).max(1e-20)
+}
+
+/// Strictly-positive upper-bound primal slack `max(x_u - x, 1e-20)`.
+/// See [`slack_xl`] for the finite-guard contract.
+fn slack_xu(state: &SolverState, i: usize) -> f64 {
+    (state.x_u[i] - state.x[i]).max(1e-20)
 }
 
 /// Build a trial point `x + alpha * dx`, clamped strictly inside the
@@ -8990,13 +8991,11 @@ fn compute_avg_complementarity(state: &SolverState) -> f64 {
     // Variable bound complementarity: z_l * (x - x_l), z_u * (x_u - x)
     for i in 0..state.n {
         if state.x_l[i].is_finite() {
-            let slack = (state.x[i] - state.x_l[i]).max(1e-20);
-            sum_compl += slack * state.z_l[i];
+            sum_compl += slack_xl(state, i) * state.z_l[i];
             count += 1;
         }
         if state.x_u[i].is_finite() {
-            let slack = (state.x_u[i] - state.x[i]).max(1e-20);
-            sum_compl += slack * state.z_u[i];
+            sum_compl += slack_xu(state, i) * state.z_u[i];
             count += 1;
         }
     }
@@ -9058,12 +9057,12 @@ fn compute_barrier_error(state: &SolverState) -> f64 {
     let mut count = 0;
     for i in 0..n {
         if state.x_l[i].is_finite() {
-            let slack = (state.x[i] - state.x_l[i]).max(1e-20);
+            let slack = slack_xl(state, i);
             compl_err += (slack * state.z_l[i] - state.mu).abs();
             count += 1;
         }
         if state.x_u[i].is_finite() {
-            let slack = (state.x_u[i] - state.x[i]).max(1e-20);
+            let slack = slack_xu(state, i);
             compl_err += (slack * state.z_u[i] - state.mu).abs();
             count += 1;
         }
