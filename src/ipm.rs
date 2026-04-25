@@ -4599,6 +4599,73 @@ fn try_gradient_descent_fallback<P: NlpProblem>(
     false
 }
 
+/// Cascade tried after a KKT factorization failure (inertia correction
+/// could not produce the required signature). In order:
+///   1. Early-iteration perturbation recovery (degenerate starting point).
+///   2. Gradient-descent fallback with Armijo backtracking.
+///   3. Gauss–Newton restoration.
+///   4. Last-resort cumulative x perturbation.
+/// Each succeeded path returns `FactorDecision::Continue` so the main
+/// loop restarts the iteration; otherwise the cascade ends with
+/// `FactorDecision::Return(NumericalError)`.
+#[allow(clippy::too_many_arguments)]
+fn recover_from_factor_failure<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    options: &SolverOptions,
+    iteration: usize,
+    n: usize,
+    m: usize,
+    use_sparse: bool,
+    lin_solver: &mut dyn LinearSolver,
+    inertia_params: &mut InertiaCorrectionParams,
+    lbfgs_state: &mut Option<LbfgsIpmState>,
+    filter: &mut Filter,
+    restoration: &mut RestorationPhase,
+    linear_constraints: Option<&[bool]>,
+    lbfgs_mode: bool,
+    deadline: Option<Instant>,
+) -> FactorDecision {
+    if try_early_perturbation_recovery(
+        state, problem, iteration, n, m, use_sparse,
+        lin_solver, inertia_params, lbfgs_state, filter,
+        linear_constraints, lbfgs_mode,
+    ) {
+        return FactorDecision::Continue;
+    }
+
+    if try_gradient_descent_fallback(
+        state, problem, n, lbfgs_state, linear_constraints, lbfgs_mode,
+    ) {
+        return FactorDecision::Continue;
+    }
+
+    let (x_rest, success) = restoration.restore(
+        &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
+        &state.jac_rows, &state.jac_cols, n, m, options,
+        &|theta, phi| filter.is_acceptable(theta, phi),
+        &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
+        &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
+        Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
+        deadline,
+    );
+    if success {
+        state.x = x_rest;
+        state.alpha_primal = 0.0;
+        let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+        update_lbfgs_hessian(lbfgs_state, state);
+        return FactorDecision::Continue;
+    }
+
+    if try_last_resort_perturbation(
+        state, problem, iteration, n, lbfgs_state, filter,
+        linear_constraints, lbfgs_mode,
+    ) {
+        return FactorDecision::Continue;
+    }
+    FactorDecision::Return(make_result(state, SolveStatus::NumericalError))
+}
+
 fn factor_kkt_with_recovery<P: NlpProblem>(
     state: &mut SolverState,
     problem: &P,
@@ -4670,48 +4737,11 @@ fn factor_kkt_with_recovery<P: NlpProblem>(
     };
     log::warn!("KKT factorization failed: {}", e);
 
-    // Early-iteration perturbation: degenerate starting point recovery.
-    if try_early_perturbation_recovery(
-        state, problem, iteration, n, m, use_sparse,
-        lin_solver, inertia_params, lbfgs_state, filter,
-        linear_constraints, lbfgs_mode,
-    ) {
-        return FactorDecision::Continue;
-    }
-
-    // Gradient descent fallback with Armijo backtracking.
-    if try_gradient_descent_fallback(
-        state, problem, n, lbfgs_state, linear_constraints, lbfgs_mode,
-    ) {
-        return FactorDecision::Continue;
-    }
-
-    // Restoration phase.
-    let (x_rest, success) = restoration.restore(
-        &state.x, &state.x_l, &state.x_u, &state.g_l, &state.g_u,
-        &state.jac_rows, &state.jac_cols, n, m, options,
-        &|theta, phi| filter.is_acceptable(theta, phi),
-        &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
-        &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
-        Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
-        deadline,
-    );
-    if success {
-        state.x = x_rest;
-        state.alpha_primal = 0.0;
-        let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-        update_lbfgs_hessian(lbfgs_state, state);
-        return FactorDecision::Continue;
-    }
-
-    // Last resort: perturb x and retry.
-    if try_last_resort_perturbation(
-        state, problem, iteration, n, lbfgs_state, filter,
-        linear_constraints, lbfgs_mode,
-    ) {
-        return FactorDecision::Continue;
-    }
-    FactorDecision::Return(make_result(state, SolveStatus::NumericalError))
+    recover_from_factor_failure(
+        state, problem, options, iteration, n, m, use_sparse,
+        lin_solver, inertia_params, lbfgs_state, filter, restoration,
+        linear_constraints, lbfgs_mode, deadline,
+    )
 }
 
 /// Last-resort perturbation after restoration has also failed: cumulatively
