@@ -5767,6 +5767,81 @@ fn handle_near_tolerance_stall(
     StallDecision::Return(make_result(state, SolveStatus::NumericalError))
 }
 
+/// Last-chance stall recovery: when primal feasibility is reasonable
+/// (< 0.1) but μ has outrun it (μ < pr_max·0.01), bump μ back to
+/// pr_max·0.1 (floor 1e-6), reset the filter, clear stall counters,
+/// and switch to Fixed mode. Returns Some(Continue) on recovery, None
+/// if the trigger isn't met.
+fn try_boost_mu_for_stall(
+    state: &mut SolverState,
+    options: &SolverOptions,
+    filter: &mut Filter,
+    mu_state: &mut MuState,
+    primal_inf_max: f64,
+    stall_no_progress_count: &mut usize,
+    stall_best_pr: &mut f64,
+    stall_best_du: &mut f64,
+) -> Option<StallDecision> {
+    if !(primal_inf_max < 0.1 && state.mu < primal_inf_max * 0.01) {
+        return None;
+    }
+    let new_mu = (primal_inf_max * 0.1).max(1e-6);
+    if options.print_level >= 3 {
+        rip_log!(
+            "ripopt: Stall recovery: boosting mu {:.2e} -> {:.2e} (pr_max={:.2e})",
+            state.mu, new_mu, primal_inf_max
+        );
+    }
+    state.mu = new_mu;
+    filter.reset();
+    let theta_new = state.constraint_violation();
+    filter.set_theta_min_from_initial(theta_new);
+    *stall_no_progress_count = 0;
+    *stall_best_pr = f64::INFINITY;
+    *stall_best_du = f64::INFINITY;
+    mu_state.mode = MuMode::Fixed;
+    mu_state.first_iter_in_mode = true;
+    Some(StallDecision::Continue)
+}
+
+/// Just before declaring NumericalError on stall, revert (x, y, z_l, z_u)
+/// to the best-du iterate when its dual infeasibility is < 10% of the
+/// current iterate's. Post-stall y/z can be corrupted by inertia-escalated
+/// KKT solves (CONCON: iter 48 had du=7e-16, stall at iter 81 has
+/// du=1.03 at the same x).
+#[allow(clippy::too_many_arguments)]
+fn revert_to_best_du_iterate_if_better<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    options: &SolverOptions,
+    dual_inf: f64,
+    best_du_val: f64,
+    best_du_x: &Option<Vec<f64>>,
+    best_du_y: &Option<Vec<f64>>,
+    best_du_zl: &Option<Vec<f64>>,
+    best_du_zu: &Option<Vec<f64>>,
+    linear_constraints: Option<&[bool]>,
+    lbfgs_mode: bool,
+) {
+    if let (Some(bdx), Some(bdy), Some(bdzl), Some(bdzu)) =
+        (best_du_x, best_du_y, best_du_zl, best_du_zu)
+    {
+        if best_du_val < dual_inf * 0.1 {
+            state.x.copy_from_slice(bdx);
+            state.y.copy_from_slice(bdy);
+            state.z_l.copy_from_slice(bdzl);
+            state.z_u.copy_from_slice(bdzu);
+            let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+            if options.print_level >= 3 {
+                rip_log!(
+                    "ripopt: Reverting to best-du iterate (du: {:.2e} -> {:.2e}) before NumericalError exit",
+                    dual_inf, best_du_val
+                );
+            }
+        }
+    }
+}
+
 fn detect_and_handle_progress_stall<P: NlpProblem>(
     state: &mut SolverState,
     problem: &P,
@@ -5835,49 +5910,17 @@ fn detect_and_handle_progress_stall<P: NlpProblem>(
     ) {
         return decision;
     }
-    // Before terminating: if primal is close but μ is very small, boost μ
-    // to restore KKT regularization for dual convergence. Addresses the
-    // "μ outrunning feasibility" pattern.
-    if primal_inf_max < 0.1 && state.mu < primal_inf_max * 0.01 {
-        let new_mu = (primal_inf_max * 0.1).max(1e-6);
-        if options.print_level >= 3 {
-            rip_log!(
-                "ripopt: Stall recovery: boosting mu {:.2e} -> {:.2e} (pr_max={:.2e})",
-                state.mu, new_mu, primal_inf_max
-            );
-        }
-        state.mu = new_mu;
-        filter.reset();
-        let theta_new = state.constraint_violation();
-        filter.set_theta_min_from_initial(theta_new);
-        *stall_no_progress_count = 0;
-        *stall_best_pr = f64::INFINITY;
-        *stall_best_du = f64::INFINITY;
-        mu_state.mode = MuMode::Fixed;
-        mu_state.first_iter_in_mode = true;
-        return StallDecision::Continue;
+    if let Some(decision) = try_boost_mu_for_stall(
+        state, options, filter, mu_state,
+        primal_inf_max, stall_no_progress_count, stall_best_pr, stall_best_du,
+    ) {
+        return decision;
     }
-    // Revert to the best-du iterate if it has significantly better dual
-    // feasibility before declaring NumericalError. Post-stall y/z can be
-    // corrupted by inertia-escalated KKT solves (CONCON: iter 48 had
-    // du=7e-16, stall at iter 81 has du=1.03 at the same x).
-    if let (Some(bdx), Some(bdy), Some(bdzl), Some(bdzu)) =
-        (best_du_x, best_du_y, best_du_zl, best_du_zu)
-    {
-        if best_du_val < dual_inf * 0.1 {
-            state.x.copy_from_slice(bdx);
-            state.y.copy_from_slice(bdy);
-            state.z_l.copy_from_slice(bdzl);
-            state.z_u.copy_from_slice(bdzu);
-            let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-            if options.print_level >= 3 {
-                rip_log!(
-                    "ripopt: Reverting to best-du iterate (du: {:.2e} -> {:.2e}) before NumericalError exit",
-                    dual_inf, best_du_val
-                );
-            }
-        }
-    }
+    revert_to_best_du_iterate_if_better(
+        state, problem, options, dual_inf, best_du_val,
+        best_du_x, best_du_y, best_du_zl, best_du_zu,
+        linear_constraints, lbfgs_mode,
+    );
     if options.print_level >= 3 {
         rip_log!(
             "ripopt: Stalled for {} iterations without progress (alpha_p={:.2e}, pr={:.2e}, du={:.2e}), terminating",
