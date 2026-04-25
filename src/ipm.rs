@@ -3973,12 +3973,8 @@ fn track_post_step_acceptable(state: &mut SolverState, options: &SolverOptions) 
     };
     let post_du = dual_inf_with_z(state, &post_zl_opt, &post_zu_opt);
     let post_du_unsc = compute_dual_inf_unscaled_at_state(state);
-    let post_compl = convergence::complementarity_error(
-        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
-    );
-    let post_compl_opt = convergence::complementarity_error(
-        &state.x, &state.x_l, &state.x_u, &post_zl_opt, &post_zu_opt, 0.0,
-    );
+    let post_compl = compute_compl_err_at_state(state);
+    let post_compl_opt = compl_err_with_z(state, &post_zl_opt, &post_zu_opt);
     let post_compl_best = post_compl.min(post_compl_opt);
     let post_sd = compute_s_d_at_state(state);
     let post_near_scaled = post_primal <= 100.0 * options.tol
@@ -5815,9 +5811,7 @@ fn check_stall_near_tolerance_via_optimal_duals(
     accumulate_jt_y(state, &mut gj);
     let (opt_zl, opt_zu) = recover_active_set_z(state, &gj, n);
     let opt_du = dual_inf_with_z(state, &opt_zl, &opt_zu);
-    let opt_co = convergence::complementarity_error(
-        &state.x, &state.x_l, &state.x_u, &opt_zl, &opt_zu, 0.0,
-    );
+    let opt_co = compl_err_with_z(state, &opt_zl, &opt_zu);
     let opt_co_best = compl_inf.min(opt_co);
     let fmult: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
         + opt_zl.iter().map(|v| v.abs()).sum::<f64>()
@@ -8821,6 +8815,17 @@ fn compute_dual_inf_unscaled_at_state(state: &SolverState) -> f64 {
     convergence::dual_infeasibility_scaled(
         &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
         &state.y, &state.z_l, &state.z_u, state.n,
+    )
+}
+
+/// `convergence::complementarity_error` at the current iterate using
+/// caller-supplied `z_l`/`z_u` (typically the active-set z recovered
+/// by [`recover_active_set_z`] for an optimistic optimality probe)
+/// instead of `state.z_l`/`state.z_u`. Always evaluated with `μ = 0`
+/// (the optimality complementarity rather than the centered-path one).
+fn compl_err_with_z(state: &SolverState, z_l: &[f64], z_u: &[f64]) -> f64 {
+    convergence::complementarity_error(
+        &state.x, &state.x_l, &state.x_u, z_l, z_u, 0.0,
     )
 }
 
