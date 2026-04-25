@@ -7673,6 +7673,50 @@ fn finalize_after_max_iter(
     make_result(state, SolveStatus::MaxIterations)
 }
 
+/// Classify each constraint as equality / lower-bounded / upper-bounded
+/// and build the initial `(c_soc, latest_trial_c)` pair used by the
+/// second-order correction iteration. Mirrors the residual setup in
+/// Ipopt IpFilterLSAcceptor.cpp:555-569.
+fn init_soc_constraint_residuals(
+    state: &SolverState,
+    g_trial: &[f64],
+) -> (Vec<f64>, Vec<f64>) {
+    let m = state.m;
+    let mut c_soc = vec![0.0; m];
+    let mut latest_trial_c = vec![0.0; m];
+    for i in 0..m {
+        let is_equality = state.g_l[i].is_finite() && state.g_u[i].is_finite()
+            && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
+        if is_equality || state.g_l[i].is_finite() {
+            c_soc[i] = state.g[i] - state.g_l[i];
+            latest_trial_c[i] = g_trial[i] - state.g_l[i];
+        } else if state.g_u[i].is_finite() {
+            c_soc[i] = state.g[i] - state.g_u[i];
+            latest_trial_c[i] = g_trial[i] - state.g_u[i];
+        }
+    }
+    (c_soc, latest_trial_c)
+}
+
+/// Refresh `latest_trial_c` from a newly evaluated `g_soc`, using the
+/// same equality/lower/upper classification as
+/// `init_soc_constraint_residuals`.
+fn update_soc_latest_trial_c(
+    state: &SolverState,
+    g_soc: &[f64],
+    latest_trial_c: &mut [f64],
+) {
+    for i in 0..state.m {
+        let is_equality = state.g_l[i].is_finite() && state.g_u[i].is_finite()
+            && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
+        if is_equality || state.g_l[i].is_finite() {
+            latest_trial_c[i] = g_soc[i] - state.g_l[i];
+        } else if state.g_u[i].is_finite() {
+            latest_trial_c[i] = g_soc[i] - state.g_u[i];
+        }
+    }
+}
+
 /// Attempt a second-order correction step.
 ///
 /// If the trial point has worse constraint violation than the current point,
@@ -7705,19 +7749,7 @@ fn attempt_soc<P: NlpProblem>(
     // c_soc starts at curr_c (constraint residual at current iterate) and
     // accumulates alpha_primal_soc * trial_c each iter. Matches Ipopt
     // IpFilterLSAcceptor.cpp:555-569.
-    let mut c_soc = vec![0.0; m];
-    let mut latest_trial_c = vec![0.0; m];
-    for i in 0..m {
-        let is_equality = state.g_l[i].is_finite() && state.g_u[i].is_finite()
-            && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
-        if is_equality || state.g_l[i].is_finite() {
-            c_soc[i] = state.g[i] - state.g_l[i];
-            latest_trial_c[i] = g_trial[i] - state.g_l[i];
-        } else if state.g_u[i].is_finite() {
-            c_soc[i] = state.g[i] - state.g_u[i];
-            latest_trial_c[i] = g_trial[i] - state.g_u[i];
-        }
-    }
+    let (mut c_soc, mut latest_trial_c) = init_soc_constraint_residuals(state, g_trial);
 
     let mut alpha_primal_soc = alpha;
     let mut theta_prev_soc = convergence::primal_infeasibility(g_trial, &state.g_l, &state.g_u);
@@ -7798,15 +7830,7 @@ fn attempt_soc<P: NlpProblem>(
         }
 
         // Update latest trial_c for next iter's accumulation.
-        for i in 0..m {
-            let is_equality = state.g_l[i].is_finite() && state.g_u[i].is_finite()
-                && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
-            if is_equality || state.g_l[i].is_finite() {
-                latest_trial_c[i] = g_soc[i] - state.g_l[i];
-            } else if state.g_u[i].is_finite() {
-                latest_trial_c[i] = g_soc[i] - state.g_u[i];
-            }
-        }
+        update_soc_latest_trial_c(state, &g_soc, &mut latest_trial_c);
     }
 
     None
@@ -7841,19 +7865,7 @@ fn attempt_soc_condensed<P: NlpProblem>(
     let kappa_soc = 0.99;
     let tau = (1.0 - state.mu).max(options.tau_min);
 
-    let mut c_soc = vec![0.0; m];
-    let mut latest_trial_c = vec![0.0; m];
-    for i in 0..m {
-        let is_equality = state.g_l[i].is_finite() && state.g_u[i].is_finite()
-            && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
-        if is_equality || state.g_l[i].is_finite() {
-            c_soc[i] = state.g[i] - state.g_l[i];
-            latest_trial_c[i] = g_trial[i] - state.g_l[i];
-        } else if state.g_u[i].is_finite() {
-            c_soc[i] = state.g[i] - state.g_u[i];
-            latest_trial_c[i] = g_trial[i] - state.g_u[i];
-        }
-    }
+    let (mut c_soc, mut latest_trial_c) = init_soc_constraint_residuals(state, g_trial);
 
     let mut alpha_primal_soc = alpha;
     let mut theta_prev_soc = convergence::primal_infeasibility(g_trial, &state.g_l, &state.g_u);
@@ -7923,15 +7935,7 @@ fn attempt_soc_condensed<P: NlpProblem>(
             return Some((x_soc, obj_soc, g_soc, alpha_primal_soc));
         }
 
-        for i in 0..m {
-            let is_equality = state.g_l[i].is_finite() && state.g_u[i].is_finite()
-                && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
-            if is_equality || state.g_l[i].is_finite() {
-                latest_trial_c[i] = g_soc[i] - state.g_l[i];
-            } else if state.g_u[i].is_finite() {
-                latest_trial_c[i] = g_soc[i] - state.g_u[i];
-            }
-        }
+        update_soc_latest_trial_c(state, &g_soc, &mut latest_trial_c);
     }
 
     None
@@ -7958,19 +7962,7 @@ fn attempt_soc_sparse_condensed<P: NlpProblem>(
     let kappa_soc = 0.99;
     let tau = (1.0 - state.mu).max(options.tau_min);
 
-    let mut c_soc = vec![0.0; m];
-    let mut latest_trial_c = vec![0.0; m];
-    for i in 0..m {
-        let is_equality = state.g_l[i].is_finite() && state.g_u[i].is_finite()
-            && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
-        if is_equality || state.g_l[i].is_finite() {
-            c_soc[i] = state.g[i] - state.g_l[i];
-            latest_trial_c[i] = g_trial[i] - state.g_l[i];
-        } else if state.g_u[i].is_finite() {
-            c_soc[i] = state.g[i] - state.g_u[i];
-            latest_trial_c[i] = g_trial[i] - state.g_u[i];
-        }
-    }
+    let (mut c_soc, mut latest_trial_c) = init_soc_constraint_residuals(state, g_trial);
 
     let mut alpha_primal_soc = alpha;
     let mut theta_prev_soc = convergence::primal_infeasibility(g_trial, &state.g_l, &state.g_u);
@@ -8024,15 +8016,7 @@ fn attempt_soc_sparse_condensed<P: NlpProblem>(
         );
         if acceptable { return Some((x_soc, obj_soc, g_soc, alpha_primal_soc)); }
 
-        for i in 0..m {
-            let is_equality = state.g_l[i].is_finite() && state.g_u[i].is_finite()
-                && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
-            if is_equality || state.g_l[i].is_finite() {
-                latest_trial_c[i] = g_soc[i] - state.g_l[i];
-            } else if state.g_u[i].is_finite() {
-                latest_trial_c[i] = g_soc[i] - state.g_u[i];
-            }
-        }
+        update_soc_latest_trial_c(state, &g_soc, &mut latest_trial_c);
     }
 
     None
