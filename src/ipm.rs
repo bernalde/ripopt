@@ -8599,35 +8599,28 @@ fn compute_ls_multiplier_estimate(
 /// On factorization failure, returns None. Matches Ipopt behavior at
 /// IpLeastSquareMults.cpp:82-87 — no δ_c retry, no Tikhonov regularization.
 /// Callers apply the `constr_mult_init_max` cap externally.
-fn compute_ls_multiplier_estimate_augmented(
-    grad_f: &[f64],
+/// Build the symmetric augmented matrix for the LS multiplier
+/// estimate in upper-triangle triplet form:
+///
+///   ```text
+///   [ I    J^T ]
+///   [ J     0  ]
+///   ```
+///
+/// Layout: identity diagonal on rows `0..n`, the Jacobian transpose
+/// at `(col, n+row)` for each `(row, col)` triple (always in the
+/// upper triangle since `col < n ≤ n+row`), and explicit
+/// structural zeros on the lower `(2,2)` diagonal so the sparse
+/// solver sees a non-singular pattern. Used by
+/// `compute_ls_multiplier_estimate_augmented`.
+fn build_ls_augmented_matrix(
     jac_rows: &[usize],
     jac_cols: &[usize],
     jac_vals: &[f64],
-    g_l: &[f64],
-    g_u: &[f64],
     n: usize,
     m: usize,
-    z_l: Option<&[f64]>,
-    z_u: Option<&[f64]>,
-) -> Option<Vec<f64>> {
+) -> crate::linear_solver::SparseSymmetricMatrix {
     use crate::linear_solver::SparseSymmetricMatrix;
-    if m == 0 {
-        return None;
-    }
-
-    // RHS: [grad_f − z_L + z_U; 0]
-    let mut rhs = vec![0.0_f64; n + m];
-    for i in 0..n {
-        rhs[i] = grad_f[i];
-        if let Some(zl) = z_l { rhs[i] -= zl[i]; }
-        if let Some(zu) = z_u { rhs[i] += zu[i]; }
-    }
-
-    // Build augmented matrix in upper-triangle triplet form (row ≤ col):
-    //   (i, i) = 1         for i in 0..n           (identity (1,1) block)
-    //   (col, n+row) = J_{row,col}                 (J^T off-diagonal)
-    //   (n+j, n+j) = 0     for j in 0..m           (structural zero on (2,2) diag)
     let nnz_est = n + jac_rows.len() + m;
     let mut ssm = SparseSymmetricMatrix {
         n: n + m,
@@ -8641,7 +8634,6 @@ fn compute_ls_multiplier_estimate_augmented(
         ssm.triplet_vals.push(1.0);
     }
     for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
-        // J^T at (col, n+row). Since col < n ≤ n+row, this is always upper triangle.
         ssm.triplet_rows.push(col);
         ssm.triplet_cols.push(n + row);
         ssm.triplet_vals.push(jac_vals[idx]);
@@ -8651,8 +8643,36 @@ fn compute_ls_multiplier_estimate_augmented(
         ssm.triplet_cols.push(n + j);
         ssm.triplet_vals.push(0.0);
     }
+    ssm
+}
 
-    let matrix = KktMatrix::Sparse(ssm);
+fn compute_ls_multiplier_estimate_augmented(
+    grad_f: &[f64],
+    jac_rows: &[usize],
+    jac_cols: &[usize],
+    jac_vals: &[f64],
+    g_l: &[f64],
+    g_u: &[f64],
+    n: usize,
+    m: usize,
+    z_l: Option<&[f64]>,
+    z_u: Option<&[f64]>,
+) -> Option<Vec<f64>> {
+    if m == 0 {
+        return None;
+    }
+
+    // RHS: [grad_f − z_L + z_U; 0]
+    let mut rhs = vec![0.0_f64; n + m];
+    for i in 0..n {
+        rhs[i] = grad_f[i];
+        if let Some(zl) = z_l { rhs[i] -= zl[i]; }
+        if let Some(zu) = z_u { rhs[i] += zu[i]; }
+    }
+
+    let matrix = KktMatrix::Sparse(build_ls_augmented_matrix(
+        jac_rows, jac_cols, jac_vals, n, m,
+    ));
     let mut solver = new_sparse_solver();
     if solver.factor(&matrix).is_err() {
         return None;
