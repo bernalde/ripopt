@@ -8442,6 +8442,34 @@ fn quality_function_mu(state: &SolverState, mu_lower: f64, mu_upper: f64, n_cand
     best_mu
 }
 
+/// Build the RHS `b = -J·(grad_f − z_L + z_U)` for the normal-equations
+/// LS multiplier estimate. Treats `None` for `z_l`/`z_u` as zero
+/// (cold-start). Shared by the dense and sparse variants of
+/// `compute_ls_multiplier_estimate_*`.
+fn compute_ls_multiplier_rhs(
+    grad_f: &[f64],
+    jac_rows: &[usize],
+    jac_cols: &[usize],
+    jac_vals: &[f64],
+    n: usize,
+    m: usize,
+    z_l: Option<&[f64]>,
+    z_u: Option<&[f64]>,
+) -> Vec<f64> {
+    let mut rhs_grad = grad_f.to_vec();
+    if let Some(zl) = z_l {
+        for i in 0..n { rhs_grad[i] -= zl[i]; }
+    }
+    if let Some(zu) = z_u {
+        for i in 0..n { rhs_grad[i] += zu[i]; }
+    }
+    let mut b = vec![0.0; m];
+    for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
+        b[row] -= jac_vals[idx] * rhs_grad[col];
+    }
+    b
+}
+
 /// Compute least-squares multiplier estimate: min ||grad_f + J^T y||^2.
 /// Solves the normal equations (J J^T) y = -J grad_f.
 /// Uses dense Bunch-Kaufman for small problems, sparse LDL^T for large ones.
@@ -8585,18 +8613,7 @@ fn compute_ls_multiplier_estimate_with_z(
         return None;
     }
 
-    // b = -J * (grad_f - z_L + z_U)
-    let mut rhs_grad = grad_f.to_vec();
-    if let Some(zl) = z_l {
-        for i in 0..n { rhs_grad[i] -= zl[i]; }
-    }
-    if let Some(zu) = z_u {
-        for i in 0..n { rhs_grad[i] += zu[i]; }
-    }
-    let mut b = vec![0.0; m];
-    for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
-        b[row] -= jac_vals[idx] * rhs_grad[col];
-    }
+    let b = compute_ls_multiplier_rhs(grad_f, jac_rows, jac_cols, jac_vals, n, m, z_l, z_u);
 
     // Compute A = J * J^T  (m x m dense symmetric matrix)
     let mut j_dense = vec![0.0; m * n];
@@ -8655,18 +8672,7 @@ fn compute_ls_multiplier_estimate_sparse(
         return None;
     }
 
-    // b = -J * (grad_f - z_L + z_U)
-    let mut rhs_grad = grad_f.to_vec();
-    if let Some(zl) = z_l {
-        for i in 0..n { rhs_grad[i] -= zl[i]; }
-    }
-    if let Some(zu) = z_u {
-        for i in 0..n { rhs_grad[i] += zu[i]; }
-    }
-    let mut b = vec![0.0; m];
-    for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
-        b[row] -= jac_vals[idx] * rhs_grad[col];
-    }
+    let b = compute_ls_multiplier_rhs(grad_f, jac_rows, jac_cols, jac_vals, n, m, z_l, z_u);
 
     // Build sparse J*J^T: group Jacobian entries by column, then for each
     // column accumulate outer products into COO triplets.
