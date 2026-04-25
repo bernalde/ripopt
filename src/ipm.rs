@@ -5537,27 +5537,46 @@ fn track_consecutive_acceptable(
     s_d_for_acc
 }
 
-/// Record the current iterate as the best-du point if its dual
-/// infeasibility beats the previous best.
+/// Snapshot of the best-dual-feasibility iterate seen so far.
 ///
 /// Used by the overall-progress stall detector to revert before a
 /// `NumericalError` exit, and by the dual-stagnation detector to
-/// restart from the good point.
+/// restart from the good point. `x.is_none()` indicates "no snapshot
+/// yet"; once `x` is `Some` the other fields are also `Some`.
+#[derive(Default)]
+struct BestDuIterate {
+    val: f64,
+    x: Option<Vec<f64>>,
+    y: Option<Vec<f64>>,
+    z_l: Option<Vec<f64>>,
+    z_u: Option<Vec<f64>>,
+}
+
+impl BestDuIterate {
+    fn new() -> Self {
+        Self {
+            val: f64::INFINITY,
+            x: None,
+            y: None,
+            z_l: None,
+            z_u: None,
+        }
+    }
+}
+
+/// Record the current iterate as the best-du point if its dual
+/// infeasibility beats the previous best.
 fn update_best_du_iterate(
     state: &SolverState,
     dual_inf: f64,
-    best_du_val: &mut f64,
-    best_du_x: &mut Option<Vec<f64>>,
-    best_du_y: &mut Option<Vec<f64>>,
-    best_du_zl: &mut Option<Vec<f64>>,
-    best_du_zu: &mut Option<Vec<f64>>,
+    best_du: &mut BestDuIterate,
 ) {
-    if dual_inf < *best_du_val {
-        *best_du_val = dual_inf;
-        *best_du_x = Some(state.x.clone());
-        *best_du_y = Some(state.y.clone());
-        *best_du_zl = Some(state.z_l.clone());
-        *best_du_zu = Some(state.z_u.clone());
+    if dual_inf < best_du.val {
+        best_du.val = dual_inf;
+        best_du.x = Some(state.x.clone());
+        best_du.y = Some(state.y.clone());
+        best_du.z_l = Some(state.z_l.clone());
+        best_du.z_u = Some(state.z_u.clone());
     }
 }
 
@@ -5839,38 +5858,28 @@ fn try_boost_mu_for_stall(
 /// current iterate's. Post-stall y/z can be corrupted by inertia-escalated
 /// KKT solves (CONCON: iter 48 had du=7e-16, stall at iter 81 has
 /// du=1.03 at the same x).
-#[allow(clippy::too_many_arguments)]
 fn revert_to_best_du_iterate_if_better<P: NlpProblem>(
     state: &mut SolverState,
     problem: &P,
     options: &SolverOptions,
     dual_inf: f64,
-    best_du_val: f64,
-    best_du_x: &Option<Vec<f64>>,
-    best_du_y: &Option<Vec<f64>>,
-    best_du_zl: &Option<Vec<f64>>,
-    best_du_zu: &Option<Vec<f64>>,
+    best_du: &BestDuIterate,
     linear_constraints: Option<&[bool]>,
     lbfgs_mode: bool,
 ) {
-    if let (Some(bdx), Some(_), Some(_), Some(_)) =
-        (best_du_x, best_du_y, best_du_zl, best_du_zu)
-    {
-        if best_du_val < dual_inf * 0.1 {
-            // Pass &mut None for lbfgs_state — the stall path doesn't need to
-            // refresh the L-BFGS Hessian here (callers do it later if needed).
-            let mut no_lbfgs: Option<LbfgsIpmState> = None;
-            restore_best_du_iterate(
-                state, problem, &mut no_lbfgs, bdx,
-                best_du_y, best_du_zl, best_du_zu,
-                linear_constraints, lbfgs_mode,
+    if best_du.x.is_some() && best_du.val < dual_inf * 0.1 {
+        // Pass &mut None for lbfgs_state — the stall path doesn't need to
+        // refresh the L-BFGS Hessian here (callers do it later if needed).
+        let mut no_lbfgs: Option<LbfgsIpmState> = None;
+        restore_best_du_iterate(
+            state, problem, &mut no_lbfgs, best_du,
+            linear_constraints, lbfgs_mode,
+        );
+        if options.print_level >= 3 {
+            rip_log!(
+                "ripopt: Reverting to best-du iterate (du: {:.2e} -> {:.2e}) before NumericalError exit",
+                dual_inf, best_du.val
             );
-            if options.print_level >= 3 {
-                rip_log!(
-                    "ripopt: Reverting to best-du iterate (du: {:.2e} -> {:.2e}) before NumericalError exit",
-                    dual_inf, best_du_val
-                );
-            }
         }
     }
 }
@@ -5890,11 +5899,7 @@ fn detect_and_handle_progress_stall<P: NlpProblem>(
     stall_no_progress_count: &mut usize,
     stall_best_pr: &mut f64,
     stall_best_du: &mut f64,
-    best_du_val: f64,
-    best_du_x: &Option<Vec<f64>>,
-    best_du_y: &Option<Vec<f64>>,
-    best_du_zl: &Option<Vec<f64>>,
-    best_du_zu: &Option<Vec<f64>>,
+    best_du: &BestDuIterate,
     linear_constraints: Option<&[bool]>,
     lbfgs_mode: bool,
 ) -> StallDecision {
@@ -5950,8 +5955,7 @@ fn detect_and_handle_progress_stall<P: NlpProblem>(
         return decision;
     }
     revert_to_best_du_iterate_if_better(
-        state, problem, options, dual_inf, best_du_val,
-        best_du_x, best_du_y, best_du_zl, best_du_zu,
+        state, problem, options, dual_inf, best_du,
         linear_constraints, lbfgs_mode,
     );
     if options.print_level >= 3 {
@@ -6082,27 +6086,24 @@ fn check_restored_point_near_tolerance(
     None
 }
 
-/// Copy the saved best-du iterate `(best_du_x, best_du_y, best_du_zl,
-/// best_du_zu)` back into `state` and re-evaluate. Each multiplier
-/// vector is restored only when its `Option` is `Some`, allowing the
-/// caller to opt out of restoring `(y, z)` when the best-du save was
-/// primal-only. After the copy, calls `evaluate_with_linear` to
-/// refresh `obj`, `g`, gradients, and the L-BFGS Hessian.
+/// Copy the saved best-du iterate back into `state` and re-evaluate.
+/// Each multiplier vector is restored only when its `Option` is
+/// `Some`, allowing snapshots that were primal-only. After the copy,
+/// calls `evaluate_with_linear` to refresh `obj`, `g`, gradients, and
+/// the L-BFGS Hessian. No-op when `best_du.x` is `None`.
 fn restore_best_du_iterate<P: NlpProblem>(
     state: &mut SolverState,
     problem: &P,
     lbfgs_state: &mut Option<LbfgsIpmState>,
-    best_du_x: &[f64],
-    best_du_y: &Option<Vec<f64>>,
-    best_du_zl: &Option<Vec<f64>>,
-    best_du_zu: &Option<Vec<f64>>,
+    best_du: &BestDuIterate,
     linear_constraints: Option<&[bool]>,
     lbfgs_mode: bool,
 ) {
-    state.x.copy_from_slice(best_du_x);
-    if let Some(ref bdy) = best_du_y { state.y.copy_from_slice(bdy); }
-    if let Some(ref bdzl) = best_du_zl { state.z_l.copy_from_slice(bdzl); }
-    if let Some(ref bdzu) = best_du_zu { state.z_u.copy_from_slice(bdzu); }
+    let Some(ref bdx) = best_du.x else { return };
+    state.x.copy_from_slice(bdx);
+    if let Some(ref bdy) = best_du.y { state.y.copy_from_slice(bdy); }
+    if let Some(ref bdzl) = best_du.z_l { state.z_l.copy_from_slice(bdzl); }
+    if let Some(ref bdzu) = best_du.z_u { state.z_u.copy_from_slice(bdzu); }
     let _ = evaluate_and_refresh_lbfgs(state, problem, lbfgs_state, linear_constraints, lbfgs_mode);
 }
 
@@ -6119,10 +6120,7 @@ fn handle_dual_stagnation<P: NlpProblem>(
     last_good_iter: &mut usize,
     triggered: &mut bool,
     best_x: &Option<Vec<f64>>,
-    best_du_x: &Option<Vec<f64>>,
-    best_du_y: &Option<Vec<f64>>,
-    best_du_zl: &Option<Vec<f64>>,
-    best_du_zu: &Option<Vec<f64>>,
+    best_du: &BestDuIterate,
     linear_constraints: Option<&[bool]>,
     lbfgs_mode: bool,
 ) -> Option<SolveResult> {
@@ -6145,16 +6143,15 @@ fn handle_dual_stagnation<P: NlpProblem>(
         return None;
     }
 
-    let bdx = match best_du_x {
-        Some(v) => v,
-        None => return None,
-    };
+    if best_du.x.is_none() {
+        return None;
+    }
     log::debug!(
         "Dual stagnation at iter {}: du={:.2e}, restoring best-du point (du={:.2e} at iter {})",
         iteration, current_du, *last_good_du, *last_good_iter
     );
     restore_best_du_iterate(
-        state, problem, lbfgs_state, bdx, best_du_y, best_du_zl, best_du_zu,
+        state, problem, lbfgs_state, best_du,
         linear_constraints, lbfgs_mode,
     );
 
@@ -6824,11 +6821,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let mut best_obj: f64 = f64::INFINITY;
 
     // Best-du point tracking
-    let mut best_du_x: Option<Vec<f64>> = None;
-    let mut best_du_val: f64 = f64::INFINITY;
-    let mut best_du_y: Option<Vec<f64>> = None;
-    let mut best_du_zl: Option<Vec<f64>> = None;
-    let mut best_du_zu: Option<Vec<f64>> = None;
+    let mut best_du = BestDuIterate::new();
 
     // Dual stagnation detection: track best du improvement.
     // If du hasn't improved significantly over many iterations and we have a
@@ -6906,10 +6899,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             &mut dual_stall_last_good_iter,
             &mut dual_stall_triggered,
             &best_x,
-            &best_du_x,
-            &best_du_y,
-            &best_du_zl,
-            &best_du_zu,
+            &best_du,
             linear_constraints.as_deref(),
             lbfgs_mode,
         ) {
@@ -7001,15 +6991,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             multiplier_sum,
         );
 
-        update_best_du_iterate(
-            &state,
-            dual_inf,
-            &mut best_du_val,
-            &mut best_du_x,
-            &mut best_du_y,
-            &mut best_du_zl,
-            &mut best_du_zu,
-        );
+        update_best_du_iterate(&state, dual_inf, &mut best_du);
 
         if let Some(result) = track_feasibility_and_detect_infeasibility(
             &state,
@@ -7049,11 +7031,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             &mut stall_no_progress_count,
             &mut stall_best_pr,
             &mut stall_best_du,
-            best_du_val,
-            &best_du_x,
-            &best_du_y,
-            &best_du_zl,
-            &best_du_zu,
+            &best_du,
             linear_constraints.as_deref(),
             lbfgs_mode,
         ) {
