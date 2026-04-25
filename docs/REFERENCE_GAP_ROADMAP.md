@@ -123,8 +123,11 @@ where a reader short on time should start.
 17. **rmumps: METIS fallback via optional feature flag.** AMD on a 50k
     KKT is measurably worse than METIS for both fill and flop count.
     `ana_set_ordering.F` is the reference auto-fallback.
-18. **ripopt: `warm_start_target_mu` + per-component bound_push.**
-    Parametric / MPC loops cannot resume at a user-specified mu today.
+18. **[DONE] ripopt: `warm_start_target_mu` (mu_init override on warm start).**
+    Implemented in `src/options.rs` (field) and `src/ipm.rs:SolverState::new`
+    (initial-mu override + bound multiplier init at chosen mu). Test:
+    `tests/correctness.rs::warm_start_target_mu_sets_initial_mu`.
+    Per-component bound_push remains a follow-up.
 19. **ripopt: full `PDPerturbationHandler` port including `delta_s`
     and `delta_d`.** Required for correct regularization trajectory
     on inequality-only rank deficiency.
@@ -184,7 +187,7 @@ equivalent.
 | One-sided g(x) ≤ u / l ≤ g(x) kept explicit (no artificial slack doubling) | Handled by ripopt's single slack-less formulation | `src/ipm.rs`/`src/convergence.rs` | `IpTNLPAdapter.cpp` |
 | Warm start: `warm_start_init_point`, `warm_start_bound_push`, `warm_start_mult_bound_push`, `warm_start_bound_frac` | Faithful for primal and bound multipliers | `src/warmstart.rs:25-100` | `IpWarmStartIterateInitializer.cpp` |
 | Warm start of y (constraint multipliers) | Present (passes through y from user) | `src/warmstart.rs` | |
-| Warm start target-mu (`warm_start_target_mu`, `mu_init` override) | Absent | | `IpWarmStartIterateInitializer.cpp` |
+| Warm start target-mu (`warm_start_target_mu`, `mu_init` override) | Faithful (mu_init override + bound mult init at chosen mu) | `src/options.rs::warm_start_target_mu`, `src/ipm.rs::SolverState::new` | `IpWarmStartIterateInitializer.cpp` |
 | sIPOPT parametric sensitivity | One mode only (one-shot KKT back-solve at optimum) | `src/sensitivity.rs:67-285` | `contrib/sIPOPT/src/SensAlgorithm.cpp` |
 | sIPOPT approximation modes (1=sens_only, 2=sens+update_bounds, 3=...) | Not exposed; ripopt does sens_only | | `contrib/sIPOPT/src/SensAlgorithm.hpp` |
 

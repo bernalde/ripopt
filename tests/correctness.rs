@@ -1758,7 +1758,7 @@ fn warm_start_with_multipliers_fewer_iterations() {
     assert_eq!(result1.status, SolveStatus::Optimal);
 
     // Second solve: warm start from the solution
-    let mut opts2 = SolverOptions {
+    let opts2 = SolverOptions {
         print_level: 0,
         warm_start: true,
         warm_start_y: Some(result1.constraint_multipliers.clone()),
@@ -1851,6 +1851,108 @@ fn user_scaling_produces_correct_result() {
     assert_eq!(result2.status, SolveStatus::Optimal);
     assert!((result2.x[0] - 1.0).abs() < 1e-6);
     assert!((result2.x[1] - 1.0).abs() < 1e-6);
+}
+
+/// Roadmap item #18: warm_start_target_mu overrides mu_init when
+/// warm_start is enabled. Verifies that a fresh solve with
+/// mu_init=0.1 ends at a different mu than a warm-started solve
+/// with warm_start_target_mu=1e-6 (which should accept the warmed
+/// iterate at the small mu without re-centering).
+#[test]
+fn warm_start_target_mu_sets_initial_mu() {
+    let opts_cold = SolverOptions { print_level: 0, ..SolverOptions::default() };
+    let r1 = ripopt::solve(&HS071, &opts_cold);
+    assert_eq!(r1.status, SolveStatus::Optimal);
+
+    // Reuse the warm-start scaffolding from the multipliers test.
+    struct WarmHS071 { x0: Vec<f64> }
+    impl NlpProblem for WarmHS071 {
+        fn num_variables(&self) -> usize { 4 }
+        fn num_constraints(&self) -> usize { 2 }
+        fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+            for i in 0..4 { x_l[i] = 1.0; x_u[i] = 5.0; }
+        }
+        fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+            g_l[0] = 25.0; g_u[0] = f64::INFINITY;
+            g_l[1] = 40.0; g_u[1] = 40.0;
+        }
+        fn initial_point(&self, x0: &mut [f64]) { x0.copy_from_slice(&self.x0); }
+        fn objective(&self, x: &[f64], _new_x: bool, obj: &mut f64) -> bool {
+            *obj = x[0] * x[3] * (x[0] + x[1] + x[2]) + x[2]; true
+        }
+        fn gradient(&self, x: &[f64], _new_x: bool, grad: &mut [f64]) -> bool {
+            grad[0] = x[3] * (2.0 * x[0] + x[1] + x[2]);
+            grad[1] = x[0] * x[3];
+            grad[2] = x[0] * x[3] + 1.0;
+            grad[3] = x[0] * (x[0] + x[1] + x[2]);
+            true
+        }
+        fn constraints(&self, x: &[f64], _new_x: bool, g: &mut [f64]) -> bool {
+            g[0] = x[0] * x[1] * x[2] * x[3];
+            g[1] = x[0]*x[0] + x[1]*x[1] + x[2]*x[2] + x[3]*x[3];
+            true
+        }
+        fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+            (vec![0,0,0,0,1,1,1,1], vec![0,1,2,3,0,1,2,3])
+        }
+        fn jacobian_values(&self, x: &[f64], _new_x: bool, v: &mut [f64]) -> bool {
+            v[0]=x[1]*x[2]*x[3]; v[1]=x[0]*x[2]*x[3];
+            v[2]=x[0]*x[1]*x[3]; v[3]=x[0]*x[1]*x[2];
+            v[4]=2.0*x[0]; v[5]=2.0*x[1]; v[6]=2.0*x[2]; v[7]=2.0*x[3];
+            true
+        }
+        fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+            (vec![0,1,1,2,2,2,3,3,3,3], vec![0,0,1,0,1,2,0,1,2,3])
+        }
+        fn hessian_values(&self, x: &[f64], _new_x: bool, s: f64, l: &[f64], v: &mut [f64]) -> bool {
+            v[0]=s*2.0*x[3]+l[1]*2.0;
+            v[1]=s*x[3]+l[0]*x[2]*x[3];
+            v[2]=l[1]*2.0;
+            v[3]=s*x[3]+l[0]*x[1]*x[3];
+            v[4]=l[0]*x[0]*x[3];
+            v[5]=l[1]*2.0;
+            v[6]=s*(2.0*x[0]+x[1]+x[2])+l[0]*x[1]*x[2];
+            v[7]=s*x[0]+l[0]*x[0]*x[2];
+            v[8]=s*x[0]+l[0]*x[0]*x[1];
+            v[9]=l[1]*2.0;
+            true
+        }
+    }
+    let warm_prob = WarmHS071 { x0: r1.x.clone() };
+
+    // Warm with target_mu = 1e-6 (small): the IPM begins centered at
+    // the warmed iterate and converges in very few iterations.
+    let opts_warm_small = SolverOptions {
+        print_level: 0,
+        warm_start: true,
+        warm_start_target_mu: Some(1e-6),
+        warm_start_y: Some(r1.constraint_multipliers.clone()),
+        warm_start_z_l: Some(r1.bound_multipliers_lower.clone()),
+        warm_start_z_u: Some(r1.bound_multipliers_upper.clone()),
+        ..SolverOptions::default()
+    };
+    let r_small = ripopt::solve(&warm_prob, &opts_warm_small);
+    assert_eq!(r_small.status, SolveStatus::Optimal);
+
+    // Warm with target_mu = 0.1 (default-ish): the IPM has to
+    // re-center, taking strictly more iterations than the small-mu
+    // case for the same warm-start data.
+    let opts_warm_large = SolverOptions {
+        print_level: 0,
+        warm_start: true,
+        warm_start_target_mu: Some(0.1),
+        warm_start_y: Some(r1.constraint_multipliers.clone()),
+        warm_start_z_l: Some(r1.bound_multipliers_lower.clone()),
+        warm_start_z_u: Some(r1.bound_multipliers_upper.clone()),
+        ..SolverOptions::default()
+    };
+    let r_large = ripopt::solve(&warm_prob, &opts_warm_large);
+    assert_eq!(r_large.status, SolveStatus::Optimal);
+
+    assert!(r_small.iterations <= r_large.iterations,
+        "warm_start_target_mu=1e-6 ({} iters) should not be slower than \
+         warm_start_target_mu=0.1 ({} iters) on the same warm-start data",
+        r_small.iterations, r_large.iterations);
 }
 
 /// Roadmap item #9 guardrail: user_x_scaling is not implemented yet, so

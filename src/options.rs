@@ -63,6 +63,14 @@ pub struct SolverOptions {
     pub warm_start_bound_frac: f64,
     /// Warm-start multiplier initial value.
     pub warm_start_mult_bound_push: f64,
+    /// Target barrier parameter for warm-start initialization. When
+    /// `warm_start = true` and this is `Some(mu)`, the IPM begins at
+    /// `state.mu = mu` regardless of `mu_init`. Mirrors Ipopt's
+    /// `warm_start_target_mu` (default in Ipopt: -1.0, meaning use
+    /// `mu_init`). Set this to your previous solve's final `mu` to
+    /// resume parametric / MPC sweeps without recentering through a
+    /// large mu first. Default: `None` (falls through to `mu_init`).
+    pub warm_start_target_mu: Option<f64>,
     /// Any bound less than this value is treated as -infinity (no bound).
     /// Set to a finite value to add artificial lower bounds on unbounded variables.
     pub nlp_lower_bound_inf: f64,
@@ -240,6 +248,7 @@ impl Default for SolverOptions {
             warm_start_bound_push: 1e-3,
             warm_start_bound_frac: 1e-3,
             warm_start_mult_bound_push: 1e-3,
+            warm_start_target_mu: None,
             nlp_lower_bound_inf: -1e20,
             nlp_upper_bound_inf: 1e20,
             kappa: 10.0,

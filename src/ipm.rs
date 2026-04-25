@@ -623,7 +623,15 @@ impl SolverState {
 
         push_initial_point_from_bounds(&mut x, &x_l, &x_u, options);
 
-        let (mut z_l, mut z_u) = init_bound_multipliers(&x, &x_l, &x_u, options.mu_init);
+        // Initial barrier parameter: warm_start_target_mu overrides
+        // mu_init when warm_start is enabled (Ipopt's
+        // `warm_start_target_mu`, used to resume parametric/MPC sweeps
+        // at the previous solve's final mu without re-centering).
+        let initial_mu = match (options.warm_start, options.warm_start_target_mu) {
+            (true, Some(mu)) if mu > 0.0 => mu,
+            _ => options.mu_init,
+        };
+        let (mut z_l, mut z_u) = init_bound_multipliers(&x, &x_l, &x_u, initial_mu);
 
         let (jac_rows, jac_cols) = problem.jacobian_structure();
         let jac_nnz = jac_rows.len();
@@ -654,7 +662,7 @@ impl SolverState {
             dz_l: vec![0.0; n],
             dz_u: vec![0.0; n],
 
-            mu: options.mu_init,
+            mu: initial_mu,
             alpha_primal: 0.0,
             alpha_dual: 0.0,
             iter: 0,
