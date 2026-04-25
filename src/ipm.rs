@@ -8441,6 +8441,68 @@ fn identify_active_bounds(state: &SolverState, n: usize, m: usize) -> Option<Act
     Some(ActiveSet { active_lower, active_upper, free_idx, orig_to_free, n_free, dim })
 }
 
+/// Build the reduced dense KKT system for the working active set:
+///   [ H_ff   J_f^T ] [ dx_f ]   [ -grad_f_f       ]
+///   [ J_f    0     ] [ dy   ] = [ g_target - g(x) ]
+/// where H_ff is the Hessian restricted to free-free pairs, J_f is the
+/// Jacobian columns for free variables, and the constraint target picks
+/// either g_l or g_u depending on which side is active (or 0 for inactive
+/// inequalities). Returns the dense `dim*dim` KKT (row-major) and the
+/// length-`dim` RHS.
+fn build_reduced_kkt_dense(
+    state: &SolverState,
+    orig_to_free: &[usize],
+    free_idx: &[usize],
+    n_free: usize,
+    m: usize,
+    dim: usize,
+) -> (Vec<f64>, Vec<f64>) {
+    let mut kkt = vec![0.0; dim * dim];
+    let mut rhs = vec![0.0; dim];
+
+    // H_ff (top-left n_free x n_free)
+    for (idx, (&row, &col)) in state.hess_rows.iter().zip(state.hess_cols.iter()).enumerate() {
+        let fr = orig_to_free[row];
+        let fc = orig_to_free[col];
+        if fr != usize::MAX && fc != usize::MAX {
+            kkt[fr * dim + fc] += state.hess_vals[idx];
+            if fr != fc {
+                kkt[fc * dim + fr] += state.hess_vals[idx];
+            }
+        }
+    }
+
+    // J_f (bottom-left m x n_free) and J_f^T (top-right n_free x m)
+    for (idx, (&row, &col)) in state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate() {
+        let fc = orig_to_free[col];
+        if fc != usize::MAX {
+            let r = n_free + row;
+            kkt[r * dim + fc] += state.jac_vals[idx];
+            kkt[fc * dim + r] += state.jac_vals[idx];
+        }
+    }
+
+    // RHS top: -grad_f for free variables
+    for k in 0..n_free {
+        rhs[k] = -state.grad_f[free_idx[k]];
+    }
+
+    // RHS bottom: g_target - g, picking the active side per constraint
+    for i in 0..m {
+        if (state.g_l[i] - state.g_u[i]).abs() < 1e-20 {
+            rhs[n_free + i] = state.g_l[i] - state.g[i];
+        } else if state.g[i] <= state.g_l[i] + 1e-10 {
+            rhs[n_free + i] = state.g_l[i] - state.g[i];
+        } else if state.g[i] >= state.g_u[i] - 1e-10 {
+            rhs[n_free + i] = state.g_u[i] - state.g[i];
+        } else {
+            rhs[n_free + i] = 0.0;
+        }
+    }
+
+    (kkt, rhs)
+}
+
 fn try_active_set_solve<P: NlpProblem>(
     state: &mut SolverState,
     problem: &P,
@@ -8473,62 +8535,9 @@ fn try_active_set_solve<P: NlpProblem>(
     // Re-evaluate at the snapped point
     let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
 
-    // Build reduced KKT system (dense):
-    // [ H_ff   J_f^T ] [ dx_f ]   [ -grad_f_f ]
-    // [ J_f    0     ] [ dy   ] = [ g_l/g_u - g ]
-    //
-    // where H_ff is the Hessian restricted to free-free, J_f is Jacobian cols for free vars.
-
-    let mut kkt = vec![0.0; dim * dim];
-    let mut rhs = vec![0.0; dim];
-
-    // Fill H_ff block (top-left n_free x n_free)
-    for (idx, (&row, &col)) in state.hess_rows.iter().zip(state.hess_cols.iter()).enumerate() {
-        let fr = orig_to_free[row];
-        let fc = orig_to_free[col];
-        if fr != usize::MAX && fc != usize::MAX {
-            kkt[fr * dim + fc] += state.hess_vals[idx];
-            if fr != fc {
-                kkt[fc * dim + fr] += state.hess_vals[idx]; // symmetric
-            }
-        }
-    }
-
-    // Fill J_f block (bottom-left m x n_free) and J_f^T (top-right n_free x m)
-    for (idx, (&row, &col)) in state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate() {
-        let fc = orig_to_free[col];
-        if fc != usize::MAX {
-            let r = n_free + row; // row in KKT
-            kkt[r * dim + fc] += state.jac_vals[idx];       // J_f block
-            kkt[fc * dim + r] += state.jac_vals[idx];       // J_f^T block
-        }
-    }
-
-    // RHS: top part = -grad_f for free variables
-    for k in 0..n_free {
-        rhs[k] = -state.grad_f[free_idx[k]];
-        // Subtract contribution of fixed active variables via Hessian
-        // (H * x_active terms absorbed into gradient already since we re-evaluated)
-    }
-
-    // RHS: bottom part = constraint target - g(x)
-    // For equality constraints (g_l == g_u): rhs = g_l - g
-    // For inequality constraints: use the active bound side
-    for i in 0..m {
-        if (state.g_l[i] - state.g_u[i]).abs() < 1e-20 {
-            // Equality
-            rhs[n_free + i] = state.g_l[i] - state.g[i];
-        } else if state.g[i] <= state.g_l[i] + 1e-10 {
-            rhs[n_free + i] = state.g_l[i] - state.g[i];
-        } else if state.g[i] >= state.g_u[i] - 1e-10 {
-            rhs[n_free + i] = state.g_u[i] - state.g[i];
-        } else {
-            // Inactive constraint: target is current value (no correction needed)
-            rhs[n_free + i] = 0.0;
-        }
-    }
-
-    // Solve the dense symmetric system via LDL^T (Bunch-Kaufman-like pivoting)
+    let (mut kkt, mut rhs) = build_reduced_kkt_dense(
+        state, &orig_to_free, &free_idx, n_free, m, dim,
+    );
     let solution = dense_symmetric_solve(dim, &mut kkt, &mut rhs);
     if solution.is_none() {
         // Singular system, restore and bail
