@@ -6136,15 +6136,18 @@ fn revert_to_best_du_iterate_if_better<P: NlpProblem>(
     linear_constraints: Option<&[bool]>,
     lbfgs_mode: bool,
 ) {
-    if let (Some(bdx), Some(bdy), Some(bdzl), Some(bdzu)) =
+    if let (Some(bdx), Some(_), Some(_), Some(_)) =
         (best_du_x, best_du_y, best_du_zl, best_du_zu)
     {
         if best_du_val < dual_inf * 0.1 {
-            state.x.copy_from_slice(bdx);
-            state.y.copy_from_slice(bdy);
-            state.z_l.copy_from_slice(bdzl);
-            state.z_u.copy_from_slice(bdzu);
-            let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+            // Pass &mut None for lbfgs_state — the stall path doesn't need to
+            // refresh the L-BFGS Hessian here (callers do it later if needed).
+            let mut no_lbfgs: Option<LbfgsIpmState> = None;
+            restore_best_du_iterate(
+                state, problem, &mut no_lbfgs, bdx,
+                best_du_y, best_du_zl, best_du_zu,
+                linear_constraints, lbfgs_mode,
+            );
             if options.print_level >= 3 {
                 rip_log!(
                     "ripopt: Reverting to best-du iterate (du: {:.2e} -> {:.2e}) before NumericalError exit",
