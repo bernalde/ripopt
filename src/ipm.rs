@@ -7860,6 +7860,70 @@ fn update_soc_latest_trial_c(
     }
 }
 
+/// Shared SOC iteration loop used by all three KKT variants.
+///
+/// `solve_dx` is a callable that takes the current `c_soc` accumulated
+/// constraint-residual target and returns `Some(dx_soc)` on success or
+/// `None` to abort the SOC loop. The three variants differ only in how
+/// they compute `dx_soc`; everything else (the c_soc accumulation,
+/// fraction-to-boundary, filter-based acceptance, latest-trial-c
+/// bookkeeping, and abort condition) is identical and lives here.
+///
+/// Mirrors Ipopt IpFilterLSAcceptor.cpp:555-620.
+#[allow(clippy::too_many_arguments)]
+fn run_soc_loop<P: NlpProblem, F: FnMut(&[f64]) -> Option<Vec<f64>>>(
+    state: &SolverState,
+    problem: &P,
+    options: &SolverOptions,
+    filter: &Filter,
+    g_trial: &[f64],
+    theta_current: f64,
+    phi_current: f64,
+    grad_phi_step: f64,
+    alpha: f64,
+    mut solve_dx: F,
+) -> Option<(Vec<f64>, f64, Vec<f64>, f64)> {
+    let n = state.n;
+    let m = state.m;
+    if m == 0 {
+        return None;
+    }
+
+    let kappa_soc = 0.99;
+    let tau = (1.0 - state.mu).max(options.tau_min);
+
+    let (mut c_soc, mut latest_trial_c) = init_soc_constraint_residuals(state, g_trial);
+    let mut alpha_primal_soc = alpha;
+    let mut theta_prev_soc = convergence::primal_infeasibility(g_trial, &state.g_l, &state.g_u);
+
+    for _soc_iter in 0..options.max_soc {
+        for i in 0..m {
+            c_soc[i] += alpha_primal_soc * latest_trial_c[i];
+        }
+
+        let dx_soc = solve_dx(&c_soc)?;
+
+        let (x_soc, alpha_primal_soc_new) = compute_soc_alpha_and_trial_x(state, &dx_soc, tau);
+        alpha_primal_soc = alpha_primal_soc_new;
+
+        match evaluate_soc_trial_and_check(
+            state, problem, options, filter, x_soc, n, m,
+            theta_current, phi_current, grad_phi_step, alpha,
+            kappa_soc, &mut theta_prev_soc,
+        ) {
+            SocTrialOutcome::Accepted { x_soc, obj_soc, g_soc } => {
+                return Some((x_soc, obj_soc, g_soc, alpha_primal_soc));
+            }
+            SocTrialOutcome::Abort => return None,
+            SocTrialOutcome::NotAccepted { g_soc } => {
+                update_soc_latest_trial_c(state, &g_soc, &mut latest_trial_c);
+            }
+        }
+    }
+
+    None
+}
+
 /// Attempt a second-order correction step.
 ///
 /// If the trial point has worse constraint violation than the current point,
@@ -7881,60 +7945,21 @@ fn attempt_soc<P: NlpProblem>(
 ) -> Option<(Vec<f64>, f64, Vec<f64>, f64)> {
     let n = state.n;
     let m = state.m;
-
-    if m == 0 {
-        return None;
-    }
-
-    let kappa_soc = 0.99;
-    let tau = (1.0 - state.mu).max(options.tau_min);
-
-    // c_soc starts at curr_c (constraint residual at current iterate) and
-    // accumulates alpha_primal_soc * trial_c each iter. Matches Ipopt
-    // IpFilterLSAcceptor.cpp:555-569.
-    let (mut c_soc, mut latest_trial_c) = init_soc_constraint_residuals(state, g_trial);
-
-    let mut alpha_primal_soc = alpha;
-    let mut theta_prev_soc = convergence::primal_infeasibility(g_trial, &state.g_l, &state.g_u);
-
-    for _soc_iter in 0..options.max_soc {
-        // Accumulate: c_soc += alpha_primal_soc * latest_trial_c
-        for i in 0..m {
-            c_soc[i] += alpha_primal_soc * latest_trial_c[i];
-        }
-
-        let mut rhs_soc = kkt.rhs.clone();
-        for i in 0..m {
-            rhs_soc[n + i] = -c_soc[i];
-        }
-
-        let mut sol_soc = vec![0.0; n + m];
-        if solver.solve(&rhs_soc, &mut sol_soc).is_err() {
-            return None;
-        }
-        let dx_soc = &sol_soc[..n];
-
-        // Fresh fraction-to-boundary alpha on dx_soc (Ipopt IpFilterLSAcceptor.cpp:617-620).
-        let (x_soc, alpha_primal_soc_new) = compute_soc_alpha_and_trial_x(state, dx_soc, tau);
-        alpha_primal_soc = alpha_primal_soc_new;
-
-        match evaluate_soc_trial_and_check(
-            state, problem, options, filter, x_soc, n, m,
-            theta_current, phi_current, grad_phi_step, alpha,
-            kappa_soc, &mut theta_prev_soc,
-        ) {
-            SocTrialOutcome::Accepted { x_soc, obj_soc, g_soc } => {
-                return Some((x_soc, obj_soc, g_soc, alpha_primal_soc));
+    run_soc_loop(
+        state, problem, options, filter, g_trial,
+        theta_current, phi_current, grad_phi_step, alpha,
+        |c_soc| {
+            let mut rhs_soc = kkt.rhs.clone();
+            for i in 0..m {
+                rhs_soc[n + i] = -c_soc[i];
             }
-            SocTrialOutcome::Abort => return None,
-            SocTrialOutcome::NotAccepted { g_soc } => {
-                // Update latest trial_c for next iter's accumulation.
-                update_soc_latest_trial_c(state, &g_soc, &mut latest_trial_c);
+            let mut sol_soc = vec![0.0; n + m];
+            if solver.solve(&rhs_soc, &mut sol_soc).is_err() {
+                return None;
             }
-        }
-    }
-
-    None
+            Some(sol_soc[..n].to_vec())
+        },
+    )
 }
 
 /// Attempt a second-order correction step using the condensed KKT system.
@@ -7956,50 +7981,11 @@ fn attempt_soc_condensed<P: NlpProblem>(
     alpha: f64,
     options: &SolverOptions,
 ) -> Option<(Vec<f64>, f64, Vec<f64>, f64)> {
-    let n = state.n;
-    let m = state.m;
-
-    if m == 0 {
-        return None;
-    }
-
-    let kappa_soc = 0.99;
-    let tau = (1.0 - state.mu).max(options.tau_min);
-
-    let (mut c_soc, mut latest_trial_c) = init_soc_constraint_residuals(state, g_trial);
-
-    let mut alpha_primal_soc = alpha;
-    let mut theta_prev_soc = convergence::primal_infeasibility(g_trial, &state.g_l, &state.g_u);
-
-    for _soc_iter in 0..options.max_soc {
-        for i in 0..m {
-            c_soc[i] += alpha_primal_soc * latest_trial_c[i];
-        }
-
-        let dx_soc = match kkt::solve_condensed_soc(condensed, solver, &c_soc) {
-            Ok(d) => d,
-            Err(_) => return None,
-        };
-
-        let (x_soc, alpha_primal_soc_new) = compute_soc_alpha_and_trial_x(state, &dx_soc, tau);
-        alpha_primal_soc = alpha_primal_soc_new;
-
-        match evaluate_soc_trial_and_check(
-            state, problem, options, filter, x_soc, n, m,
-            theta_current, phi_current, grad_phi_step, alpha,
-            kappa_soc, &mut theta_prev_soc,
-        ) {
-            SocTrialOutcome::Accepted { x_soc, obj_soc, g_soc } => {
-                return Some((x_soc, obj_soc, g_soc, alpha_primal_soc));
-            }
-            SocTrialOutcome::Abort => return None,
-            SocTrialOutcome::NotAccepted { g_soc } => {
-                update_soc_latest_trial_c(state, &g_soc, &mut latest_trial_c);
-            }
-        }
-    }
-
-    None
+    run_soc_loop(
+        state, problem, options, filter, g_trial,
+        theta_current, phi_current, grad_phi_step, alpha,
+        |c_soc| kkt::solve_condensed_soc(condensed, solver, c_soc).ok(),
+    )
 }
 
 /// SOC using sparse condensed KKT system.
@@ -8016,47 +8002,11 @@ fn attempt_soc_sparse_condensed<P: NlpProblem>(
     alpha: f64,
     options: &SolverOptions,
 ) -> Option<(Vec<f64>, f64, Vec<f64>, f64)> {
-    let n = state.n;
-    let m = state.m;
-    if m == 0 { return None; }
-
-    let kappa_soc = 0.99;
-    let tau = (1.0 - state.mu).max(options.tau_min);
-
-    let (mut c_soc, mut latest_trial_c) = init_soc_constraint_residuals(state, g_trial);
-
-    let mut alpha_primal_soc = alpha;
-    let mut theta_prev_soc = convergence::primal_infeasibility(g_trial, &state.g_l, &state.g_u);
-
-    for _soc_iter in 0..options.max_soc {
-        for i in 0..m {
-            c_soc[i] += alpha_primal_soc * latest_trial_c[i];
-        }
-
-        let dx_soc = match kkt::solve_sparse_condensed_soc(condensed, solver, &c_soc) {
-            Ok(d) => d,
-            Err(_) => return None,
-        };
-
-        let (x_soc, alpha_primal_soc_new) = compute_soc_alpha_and_trial_x(state, &dx_soc, tau);
-        alpha_primal_soc = alpha_primal_soc_new;
-
-        match evaluate_soc_trial_and_check(
-            state, problem, options, filter, x_soc, n, m,
-            theta_current, phi_current, grad_phi_step, alpha,
-            kappa_soc, &mut theta_prev_soc,
-        ) {
-            SocTrialOutcome::Accepted { x_soc, obj_soc, g_soc } => {
-                return Some((x_soc, obj_soc, g_soc, alpha_primal_soc));
-            }
-            SocTrialOutcome::Abort => return None,
-            SocTrialOutcome::NotAccepted { g_soc } => {
-                update_soc_latest_trial_c(state, &g_soc, &mut latest_trial_c);
-            }
-        }
-    }
-
-    None
+    run_soc_loop(
+        state, problem, options, filter, g_trial,
+        theta_current, phi_current, grad_phi_step, alpha,
+        |c_soc| kkt::solve_sparse_condensed_soc(condensed, solver, c_soc).ok(),
+    )
 }
 
 /// Reset bound multipliers after restoration, matching Ipopt
