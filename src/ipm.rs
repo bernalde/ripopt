@@ -5101,6 +5101,21 @@ fn update_barrier_parameter(
     }
 }
 
+/// Detect dual-infeasibility stagnation over the 3-element du window.
+/// Returns true when the most recent du is at least 90% of the oldest
+/// (i.e. has not improved meaningfully) AND du is still large
+/// relative to tol. Used by the Free-mode mu update to force a
+/// switch to Fixed mode even when consecutive_insufficient < 2.
+fn compute_du_stagnant_in_free_mode(mu_state: &MuState, options: &SolverOptions) -> bool {
+    if mu_state.dual_inf_window.len() < 3 {
+        return false;
+    }
+    let w = &mu_state.dual_inf_window;
+    let recent = w[w.len() - 1];
+    let oldest = w[w.len() - 3];
+    recent >= 0.9 * oldest && recent > options.tol * 100.0
+}
+
 /// Switch the mu strategy from Free to Fixed and seed the new mu.
 /// Triggered when Free mode shows insufficient progress for ≥2
 /// iterations or dual-infeasibility stagnation. Resets
@@ -5182,19 +5197,7 @@ fn update_barrier_parameter_free_mode(
         // the same low frequency as in Ipopt — not every iter.
         reset_filter_with_current_theta(state, filter);
     } else {
-        // Also check dual infeasibility stagnation: if du is not improving
-        // over 3 consecutive iterations, force the switch to Fixed mode
-        // even if consecutive_insufficient < 2.
-        let du_stagnant = if mu_state.dual_inf_window.len() >= 3 {
-            let w = &mu_state.dual_inf_window;
-            let recent = w[w.len()-1];
-            let oldest = w[w.len()-3];
-            // Stagnant if recent du is >=90% of oldest (not improving)
-            // and du is still large relative to tolerance
-            recent >= 0.9 * oldest && recent > options.tol * 100.0
-        } else {
-            false
-        };
+        let du_stagnant = compute_du_stagnant_in_free_mode(mu_state, options);
         mu_state.consecutive_insufficient += 1;
         if mu_state.consecutive_insufficient >= 2 || du_stagnant {
             switch_to_fixed_mode_with_adaptive_init(state, mu_state, filter, options);
