@@ -7596,30 +7596,9 @@ fn attempt_soc_sparse_condensed<P: NlpProblem>(
         if theta_soc >= kappa_soc * theta_prev_soc { return None; }
         theta_prev_soc = theta_soc;
 
-        let mut phi_soc = obj_soc;
-        for i in 0..n {
-            if state.x_l[i].is_finite() {
-                phi_soc -= state.mu * (x_soc[i] - state.x_l[i]).max(1e-20).ln();
-            }
-            if state.x_u[i].is_finite() {
-                phi_soc -= state.mu * (state.x_u[i] - x_soc[i]).max(1e-20).ln();
-            }
-        }
-        if options.constraint_slack_barrier {
-            for i in 0..m {
-                let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
-                    && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
-                if is_eq { continue; }
-                if state.g_l[i].is_finite() {
-                    let slack = g_soc[i] - state.g_l[i];
-                    if slack > state.mu * 1e-2 { phi_soc -= state.mu * slack.ln(); }
-                }
-                if state.g_u[i].is_finite() {
-                    let slack = state.g_u[i] - g_soc[i];
-                    if slack > state.mu * 1e-2 { phi_soc -= state.mu * slack.ln(); }
-                }
-            }
-        }
+        let phi_soc = compute_barrier_phi(
+            obj_soc, &x_soc, &g_soc, state, n, m, options.constraint_slack_barrier,
+        );
 
         let (acceptable, _) = filter.check_acceptability(
             theta_current, phi_current, theta_soc, phi_soc, grad_phi_step, alpha,
