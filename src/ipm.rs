@@ -5885,6 +5885,25 @@ fn handle_near_tolerance_stall(
     ) {
         return StallDecision::Continue;
     }
+    classify_near_tolerance_stall_outcome(
+        state, options, primal_inf, primal_inf_max, dual_inf, compl_inf, s_d_for_acc,
+    )
+}
+
+/// Final classification used after the μ-boost and forced-Fixed-decrease
+/// branches of handle_near_tolerance_stall did not fire. Returns
+/// `Acceptable` when both unscaled (1e-2) and scaled (1e-6 · s_d) gates
+/// pass on all three metrics; otherwise `NumericalError`.
+#[allow(clippy::too_many_arguments)]
+fn classify_near_tolerance_stall_outcome(
+    state: &SolverState,
+    options: &SolverOptions,
+    primal_inf: f64,
+    primal_inf_max: f64,
+    dual_inf: f64,
+    compl_inf: f64,
+    s_d_for_acc: f64,
+) -> StallDecision {
     let acc_pr_ok = primal_inf_max <= 1e-2;
     let acc_du_ok = dual_inf <= 1e10;
     let acc_co_ok = compl_inf <= 1e-2;
