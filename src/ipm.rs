@@ -615,19 +615,7 @@ impl SolverState {
 
         push_initial_point_from_bounds(&mut x, &x_l, &x_u, options);
 
-        // Initialize bound multipliers
-        let mut z_l = vec![0.0; n];
-        let mut z_u = vec![0.0; n];
-        for i in 0..n {
-            if x_l[i].is_finite() {
-                let slack = (x[i] - x_l[i]).max(1e-20);
-                z_l[i] = options.mu_init / slack;
-            }
-            if x_u[i].is_finite() {
-                let slack = (x_u[i] - x[i]).max(1e-20);
-                z_u[i] = options.mu_init / slack;
-            }
-        }
+        let (mut z_l, mut z_u) = init_bound_multipliers(&x, &x_l, &x_u, options.mu_init);
 
         let (jac_rows, jac_cols) = problem.jacobian_structure();
         let jac_nnz = jac_rows.len();
@@ -8194,6 +8182,33 @@ fn compute_ls_multiplier_rhs(
         b[row] -= jac_vals[idx] * rhs_grad[col];
     }
     b
+}
+
+/// Initialize bound multipliers from complementarity at mu_init:
+/// z_l[i] = mu / (x[i] - x_l[i]), z_u[i] = mu / (x_u[i] - x[i]).
+/// Multipliers stay at 0 for inactive (infinite) bounds. Slack is
+/// floored at 1e-20 to avoid division by zero in pathological cases
+/// where the bound-push didn't move x off the bound.
+fn init_bound_multipliers(
+    x: &[f64],
+    x_l: &[f64],
+    x_u: &[f64],
+    mu_init: f64,
+) -> (Vec<f64>, Vec<f64>) {
+    let n = x.len();
+    let mut z_l = vec![0.0; n];
+    let mut z_u = vec![0.0; n];
+    for i in 0..n {
+        if x_l[i].is_finite() {
+            let slack = (x[i] - x_l[i]).max(1e-20);
+            z_l[i] = mu_init / slack;
+        }
+        if x_u[i].is_finite() {
+            let slack = (x_u[i] - x[i]).max(1e-20);
+            z_u[i] = mu_init / slack;
+        }
+    }
+    (z_l, z_u)
 }
 
 /// Relax fixed variables (x_l == x_u) by widening bounds to a tiny
