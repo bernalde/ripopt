@@ -4258,6 +4258,61 @@ fn try_early_perturbation_recovery<P: NlpProblem>(
     false
 }
 
+/// Gradient-descent fallback with Armijo backtracking after a KKT
+/// factorization failure. Computes a steepest-descent direction (projected
+/// to satisfy bound feasibility) and bisects alpha up to 20 times until the
+/// objective decreases. On acceptance the state is re-evaluated and the
+/// L-BFGS Hessian updated; returns true so the caller can `continue` the
+/// IPM loop.
+fn try_gradient_descent_fallback<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    n: usize,
+    lbfgs_state: &mut Option<LbfgsIpmState>,
+    linear_constraints: Option<&[bool]>,
+    lbfgs_mode: bool,
+) -> bool {
+    let Some(fallback) = gradient_descent_fallback(state) else {
+        return false;
+    };
+    state.dx = fallback.0;
+    state.dy = fallback.1;
+    state.dz_l = vec![0.0; n];
+    state.dz_u = vec![0.0; n];
+
+    let mut alpha_fb = 1.0;
+    let obj_current = state.obj;
+    let mut fb_accepted = false;
+    for _ in 0..20 {
+        let mut x_trial = vec![0.0; n];
+        for i in 0..n {
+            x_trial[i] = state.x[i] + alpha_fb * state.dx[i];
+            if state.x_l[i].is_finite() {
+                x_trial[i] = x_trial[i].max(state.x_l[i] + 1e-14);
+            }
+            if state.x_u[i].is_finite() {
+                x_trial[i] = x_trial[i].min(state.x_u[i] - 1e-14);
+            }
+        }
+        let mut obj_trial = f64::INFINITY;
+        let obj_ok = problem.objective(&x_trial, true, &mut obj_trial);
+        if obj_ok && obj_trial.is_finite() && obj_trial < obj_current {
+            state.x = x_trial;
+            state.obj = obj_trial;
+            state.alpha_primal = alpha_fb;
+            fb_accepted = true;
+            break;
+        }
+        alpha_fb *= 0.5;
+    }
+    if fb_accepted {
+        let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+        update_lbfgs_hessian(lbfgs_state, state);
+        return true;
+    }
+    false
+}
+
 fn factor_kkt_with_recovery<P: NlpProblem>(
     state: &mut SolverState,
     problem: &P,
@@ -4339,42 +4394,10 @@ fn factor_kkt_with_recovery<P: NlpProblem>(
     }
 
     // Gradient descent fallback with Armijo backtracking.
-    if let Some(fallback) = gradient_descent_fallback(state) {
-        state.dx = fallback.0;
-        state.dy = fallback.1;
-        state.dz_l = vec![0.0; n];
-        state.dz_u = vec![0.0; n];
-
-        let mut alpha_fb = 1.0;
-        let obj_current = state.obj;
-        let mut fb_accepted = false;
-        for _ in 0..20 {
-            let mut x_trial = vec![0.0; n];
-            for i in 0..n {
-                x_trial[i] = state.x[i] + alpha_fb * state.dx[i];
-                if state.x_l[i].is_finite() {
-                    x_trial[i] = x_trial[i].max(state.x_l[i] + 1e-14);
-                }
-                if state.x_u[i].is_finite() {
-                    x_trial[i] = x_trial[i].min(state.x_u[i] - 1e-14);
-                }
-            }
-            let mut obj_trial = f64::INFINITY;
-            let obj_ok = problem.objective(&x_trial, true, &mut obj_trial);
-            if obj_ok && obj_trial.is_finite() && obj_trial < obj_current {
-                state.x = x_trial;
-                state.obj = obj_trial;
-                state.alpha_primal = alpha_fb;
-                fb_accepted = true;
-                break;
-            }
-            alpha_fb *= 0.5;
-        }
-        if fb_accepted {
-            let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-            update_lbfgs_hessian(lbfgs_state, state);
-            return FactorDecision::Continue;
-        }
+    if try_gradient_descent_fallback(
+        state, problem, n, lbfgs_state, linear_constraints, lbfgs_mode,
+    ) {
+        return FactorDecision::Continue;
     }
 
     // Restoration phase.
