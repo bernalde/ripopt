@@ -6805,38 +6805,62 @@ fn compute_nlp_scaling<P: NlpProblem>(
         1.0
     };
 
-    let mut gs = vec![1.0; m_sc];
-    if m_sc > 0 {
-        let mut g0_sc = vec![0.0; m_sc];
-        let constr_ok = problem.constraints(x0, false, &mut g0_sc);
-        let mut g_l_sc = vec![0.0; m_sc];
-        let mut g_u_sc = vec![0.0; m_sc];
-        problem.constraint_bounds(&mut g_l_sc, &mut g_u_sc);
-        let init_cv = if constr_ok {
-            convergence::primal_infeasibility(&g0_sc, &g_l_sc, &g_u_sc)
-        } else {
-            f64::INFINITY
-        };
+    let gs = compute_constraint_row_scaling(
+        problem, x0, jac_rows_sc, m_sc,
+        nlp_scaling_max_gradient, nlp_scaling_min_value,
+    );
+    (os, gs)
+}
 
-        if init_cv < 1e6 {
-            let mut jac_vals0 = vec![0.0; jac_rows_sc.len()];
-            if problem.jacobian_values(x0, false, &mut jac_vals0) {
-                let mut row_max = vec![0.0f64; m_sc];
-                for (idx, &row) in jac_rows_sc.iter().enumerate() {
-                    let v = jac_vals0[idx].abs();
-                    if v.is_finite() && v > row_max[row] {
-                        row_max[row] = v;
-                    }
-                }
-                for i in 0..m_sc {
-                    if row_max[i] > nlp_scaling_max_gradient {
-                        gs[i] = (nlp_scaling_max_gradient / row_max[i]).max(nlp_scaling_min_value);
-                    }
-                }
-            }
+/// Compute the per-constraint row scaling for gradient-based NLP
+/// scaling. Returns a length-`m_sc` vector of scale factors that map
+/// each constraint row to a per-row Jacobian Linf bounded by
+/// `max_gradient` (clamped below by `min_value`). Falls back to all
+/// 1.0 when constraints/Jacobian evaluation fails or the initial
+/// constraint violation exceeds `1e6` (Ipopt's threshold — at highly
+/// infeasible points the Jacobian carries no useful scaling signal).
+fn compute_constraint_row_scaling<P: NlpProblem>(
+    problem: &P,
+    x0: &[f64],
+    jac_rows_sc: &[usize],
+    m_sc: usize,
+    max_gradient: f64,
+    min_value: f64,
+) -> Vec<f64> {
+    let mut gs = vec![1.0; m_sc];
+    if m_sc == 0 {
+        return gs;
+    }
+    let mut g0_sc = vec![0.0; m_sc];
+    let constr_ok = problem.constraints(x0, false, &mut g0_sc);
+    let mut g_l_sc = vec![0.0; m_sc];
+    let mut g_u_sc = vec![0.0; m_sc];
+    problem.constraint_bounds(&mut g_l_sc, &mut g_u_sc);
+    let init_cv = if constr_ok {
+        convergence::primal_infeasibility(&g0_sc, &g_l_sc, &g_u_sc)
+    } else {
+        f64::INFINITY
+    };
+    if init_cv >= 1e6 {
+        return gs;
+    }
+    let mut jac_vals0 = vec![0.0; jac_rows_sc.len()];
+    if !problem.jacobian_values(x0, false, &mut jac_vals0) {
+        return gs;
+    }
+    let mut row_max = vec![0.0f64; m_sc];
+    for (idx, &row) in jac_rows_sc.iter().enumerate() {
+        let v = jac_vals0[idx].abs();
+        if v.is_finite() && v > row_max[row] {
+            row_max[row] = v;
         }
     }
-    (os, gs)
+    for i in 0..m_sc {
+        if row_max[i] > max_gradient {
+            gs[i] = (max_gradient / row_max[i]).max(min_value);
+        }
+    }
+    gs
 }
 
 /// Core IPM solver implementation.
