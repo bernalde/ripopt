@@ -169,6 +169,44 @@ struct WatchdogSavedState {
     phi: f64,
 }
 
+impl WatchdogSavedState {
+    /// Snapshot the full iterate plus the filter entries and the
+    /// (theta, phi) pair used as the watchdog's progress reference.
+    fn snapshot(state: &SolverState, filter: &Filter, theta: f64, phi: f64) -> Self {
+        Self {
+            x: state.x.clone(),
+            y: state.y.clone(),
+            z_l: state.z_l.clone(),
+            z_u: state.z_u.clone(),
+            v_l: state.v_l.clone(),
+            v_u: state.v_u.clone(),
+            mu: state.mu,
+            obj: state.obj,
+            g: state.g.clone(),
+            grad_f: state.grad_f.clone(),
+            filter_entries: filter.save_entries(),
+            theta,
+            phi,
+        }
+    }
+
+    /// Restore the snapshotted iterate fields into `state`. Filter
+    /// entry restoration is left to the caller (the watchdog augments
+    /// the filter after restore, which the helper would obscure).
+    fn restore(&self, state: &mut SolverState) {
+        state.x = self.x.clone();
+        state.y = self.y.clone();
+        state.z_l = self.z_l.clone();
+        state.z_u = self.z_u.clone();
+        state.v_l = self.v_l.clone();
+        state.v_u = self.v_u.clone();
+        state.mu = self.mu;
+        state.obj = self.obj;
+        state.g = self.g.clone();
+        state.grad_f = self.grad_f.clone();
+    }
+}
+
 /// Central state struct for the IPM solver.
 pub(crate) struct SolverState {
     /// Current primal variables.
@@ -3021,21 +3059,7 @@ fn try_activate_watchdog(
     *watchdog_trial_count = 0;
     let wd_theta = state.constraint_violation();
     let wd_phi = state.barrier_objective(options);
-    *watchdog_saved = Some(WatchdogSavedState {
-        x: state.x.clone(),
-        y: state.y.clone(),
-        z_l: state.z_l.clone(),
-        z_u: state.z_u.clone(),
-        v_l: state.v_l.clone(),
-        v_u: state.v_u.clone(),
-        mu: state.mu,
-        obj: state.obj,
-        g: state.g.clone(),
-        grad_f: state.grad_f.clone(),
-        filter_entries: filter.save_entries(),
-        theta: wd_theta,
-        phi: wd_phi,
-    });
+    *watchdog_saved = Some(WatchdogSavedState::snapshot(state, filter, wd_theta, wd_phi));
     *consecutive_shortened = 0;
     log::debug!(
         "Watchdog activated at iteration {} (theta={:.2e}, phi={:.2e})",
@@ -3094,16 +3118,7 @@ fn process_watchdog_trial<P: NlpProblem>(
         filter.restore_entries(saved.filter_entries.clone());
         filter.add(theta_now, phi_now);
 
-        state.x = saved.x.clone();
-        state.y = saved.y.clone();
-        state.z_l = saved.z_l.clone();
-        state.z_u = saved.z_u.clone();
-        state.v_l = saved.v_l.clone();
-        state.v_u = saved.v_u.clone();
-        state.mu = saved.mu;
-        state.obj = saved.obj;
-        state.g = saved.g.clone();
-        state.grad_f = saved.grad_f.clone();
+        saved.restore(state);
         let _ = evaluate_and_refresh_lbfgs(state, problem, lbfgs_state, linear_constraints, lbfgs_mode);
 
         *watchdog_active = false;
