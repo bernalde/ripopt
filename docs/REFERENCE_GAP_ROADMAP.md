@@ -62,13 +62,25 @@ where a reader short on time should start.
    Regression covered by
    `test_redundancy_guard_bound_wedged_variable`.
 9. ~~**ripopt: `user_x_scaling` option is declared but not applied**~~
-   **DONE (guardrail).** `solve()` now refuses calls with
-   `Some(user_x_scaling)` and returns `SolveStatus::InternalError`
-   with a log message, rather than silently returning the unscaled
-   solution. The full x-scaling NLP wrapper (Ipopt's `IpScaledNLP`)
-   remains a feature gap to land in v0.9; the docstring on
-   `SolverOptions::user_x_scaling` is updated to advertise this.
-   Regression: `user_x_scaling_is_rejected`.
+   **DONE (full IpScaledNLP-equivalent wrapper).** `solve()` now
+   wraps the user's NLP with `XScaledProblem` (`src/ipm.rs:194`) when
+   `user_x_scaling` is provided, runs the IPM in the internal
+   `x' = D_x · x` coordinate system, and unscales the
+   [`SolveResult`] on return (`x_user = x' / D_x`,
+   `z_L_user = D_x · z_L_internal`, `z_U_user = D_x · z_U_internal`,
+   constraint multipliers and constraint values unchanged). Mirrors
+   Ipopt 3.14 `IpNLPScaling.cpp` / `IpStandardScalingBase.cpp` /
+   `IpScaledMatrix.cpp` / `IpSymScaledMatrix.cpp` restricted to
+   x-scaling (objective and constraint scaling continue to flow
+   through `ScaledProblem`). Invalid input (wrong length, non-finite,
+   non-positive entries) returns `InternalError` — Ipopt-compatible
+   "user is responsible for strictly positive dx" contract, no
+   clamping. Regressions:
+   `user_x_scaling_matches_unscaled_solution`,
+   `user_x_scaling_matches_unscaled_constrained` (HS071),
+   `user_x_scaling_empty_is_passthrough`,
+   `user_x_scaling_rejects_non_positive`,
+   `user_x_scaling_rejects_wrong_length`.
 10. **rmumps: unify the two pivot-search paths.** The classic-BK code
     path runs when `pivot_threshold = 0.0` and cannot emit delayed
     pivots at all. Callers who disable thresholding think they are
@@ -185,7 +197,7 @@ equivalent.
 | eta = resto_proximity_weight * mu^kappa_eta (kappa_eta=0.5) | Faithful (`eta = eta_f * sqrt(mu_entry)`) | `src/restoration_nlp.rs:56` | `IpRestoIpoptNLP.cpp:34,763` |
 | p/n closed-form init from `p_i * n_i = mu`, `p_i - n_i = c_i` | Faithful | `src/restoration_nlp.rs:108-138` | `IpRestoIterateInitializer.cpp:79-97` |
 | Restoration convergence check (`RestoFilterConvCheck`) | **Partial / ad hoc** | `src/restoration.rs:42-...`, post-hoc hand-off in `src/ipm.rs:5996-6157` | `IpRestoFilterConvCheck.cpp` |
-| User scaling (`user_obj_scaling`, `user_g_scaling`, `user_x_scaling`) | obj and g supported; **x_scaling not applied in IPM** | `src/ipm.rs:2105-2108` | `IpNLPScaling.cpp`, `IpUserScaling.cpp` |
+| User scaling (`user_obj_scaling`, `user_g_scaling`, `user_x_scaling`) | Faithful (obj and g via `ScaledProblem`; x via `XScaledProblem`, full IpScaledNLP-equivalent transformations on bounds, gradient, Jacobian, Hessian, and bound multipliers) | `src/ipm.rs:194-322` (`XScaledProblem`), `src/ipm.rs:2079` (wiring) | `IpNLPScaling.cpp`, `IpStandardScalingBase.cpp`, `IpScaledMatrix.cpp`, `IpSymScaledMatrix.cpp` |
 | Gradient-based scaling (`nlp_scaling_max_gradient=100`, `min_value=1e-2`) | Faithful constants | `src/ipm.rs:2111-2158` | `IpGradientScaling.cpp` |
 | Equilibration / MC19 scaling | Absent (only Ruiz on the KKT matrix, `src/kkt.rs:297-351`) | | `IpEquilibrationScaling.cpp` |
 | Scaled-KKT error via s_d, s_c denominators | **Divergent formula** | `src/convergence.rs:51-64` (single `s_d`, no `s_c`) | `IpIpoptCalculatedQuantities.cpp:3078-3099, 3663-3700` |
@@ -288,10 +300,11 @@ separate them. Ipopt uses MA28/Mumps-based dependency detection on the
 full symbolic Jacobian, which does not have this false-positive mode.
 Preprocessing is enabled by default and is invisible.
 
-**D7. `user_x_scaling` accepted but not applied.**
-`src/options.rs:188` declares the option but `src/ipm.rs:2094-2170`
-only uses `user_obj_scaling` and `user_g_scaling`. Users supplying
-x-scaling silently get no scaling.
+**D7. ~~`user_x_scaling` accepted but not applied.~~ DONE.**
+`solve()` now wraps the NLP with `XScaledProblem` (`src/ipm.rs:194`)
+and runs the IPM in `x' = D_x · x` coordinates, unscaling the result
+on return. Mirrors Ipopt 3.14 `IpScaledNLP` / `IpStandardScalingBase`
+restricted to x-scaling.
 
 **D8. No `soft_resto` intermediate phase.** When a step fails the
 filter, ripopt jumps directly to full restoration NLP
@@ -397,11 +410,20 @@ recommendations section.
    Ported `IpBacktrackingLineSearch.cpp:1113-1217` (filter OR averaged
    1-norm `E_μ` reduction; cap 10 consecutive accepts).
 
-6. ~~**Fix `user_x_scaling` application.**~~ DONE (commit b321ae3,
-   re-scoped). The silent no-op is now a loud `InternalError` rejection.
-   Full IpScaledNLP-equivalent x-wrapping is deferred to v0.9; until
-   then refusing the request is the only honest behavior matching
-   Ipopt's `nlp_scaling_method` semantics.
+6. ~~**Fix `user_x_scaling` application.**~~ DONE — full
+   IpScaledNLP-equivalent wrapper (commit pending; supersedes the
+   prior b321ae3 InternalError guardrail). `solve()` wraps the NLP
+   with `XScaledProblem` (`src/ipm.rs:194`) which presents
+   `x' = D_x · x` to the IPM, transforms gradient by `1/D_x`,
+   Jacobian columns by `1/D_x`, Hessian symmetrically by
+   `D_x^-1 · H · D_x^-1`, and bounds / initial point / initial
+   bound multipliers consistently. The result is unscaled on return:
+   `x_user = x' / D_x`, `z_L_user = D_x · z_L_internal`,
+   `z_U_user = D_x · z_U_internal`. Constraint multipliers and
+   constraint values are invariant. Invalid input (wrong length,
+   non-finite, non-positive entries) returns `InternalError` —
+   matches Ipopt's "user is responsible for strictly positive dx"
+   contract.
 
 7. ~~**Guard preprocessing redundancy detection.**~~ DONE (commit
    77a37ce). The `src/preprocessing.rs` redundancy phase aborts when
@@ -421,7 +443,12 @@ recommendations section.
 10. ~~**Expose `warm_start_target_mu`.**~~ DONE (commit c2e4f1a). The
     initial barrier parameter is overridden at warm-start when
     `SolverOptions::warm_start_target_mu` is set. Per-component
-    `warm_start_bound_push` remains a v0.9 follow-up.
+    `warm_start_bound_push` is **not** an Ipopt-parity feature: Ipopt
+    3.14 `IpWarmStartIterateInitializer.cpp:30-34` registers
+    `warm_start_bound_push` and its companions as
+    `AddLowerBoundedNumberOption` (single scalar, not a vector). A
+    per-component API would be a ripopt extension that diverges from
+    upstream; intentionally skipped.
 
 **Not recommended** (acceptable simplifications for ripopt's scope):
 full MA28-style dependency detection (recommendation 7 is sufficient);

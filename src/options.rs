@@ -200,12 +200,19 @@ pub struct SolverOptions {
     /// User-provided constraint scaling factors (length m). When `Some`, bypasses
     /// automatic gradient-based constraint scaling.
     pub user_g_scaling: Option<Vec<f64>>,
-    /// User-provided variable scaling factors (length n). **NOT YET
-    /// IMPLEMENTED.** The solver currently rejects calls with
-    /// `Some(...)` here and returns `SolveStatus::InternalError`,
-    /// rather than silently ignoring the request. Set this to `None`
-    /// (the default) to proceed with automatic gradient-based
-    /// scaling. Tracked as roadmap item #9.
+    /// User-provided variable scaling factors (length n). When
+    /// `Some(dx)`, the solver wraps the NLP with `XScaledProblem` and
+    /// runs the IPM in the internal coordinate `x' = D_x · x` (where
+    /// `D_x = diag(dx)`), then unscales the result on return
+    /// (`x_user = x' / dx`, `z_L_user = dx · z_L_internal`,
+    /// `z_U_user = dx · z_U_internal`; constraint multipliers and
+    /// constraint values are invariant). Mirrors Ipopt 3.14
+    /// `IpScaledNLP` / `IpStandardScalingBase` restricted to
+    /// x-scaling; objective and constraint scaling are independent
+    /// (see `user_obj_scaling`, `user_g_scaling`). Entries must be
+    /// strictly positive and finite; invalid input returns
+    /// `SolveStatus::InternalError`. `None` or `Some(vec![])` is a
+    /// pass-through (use automatic gradient-based scaling).
     pub user_x_scaling: Option<Vec<f64>>,
     /// Initial constraint multipliers for warm starting.
     pub warm_start_y: Option<Vec<f64>>,

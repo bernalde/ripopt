@@ -1955,14 +1955,114 @@ fn warm_start_target_mu_sets_initial_mu() {
         r_small.iterations, r_large.iterations);
 }
 
-/// Roadmap item #9 guardrail: user_x_scaling is not implemented yet, so
-/// the solver must refuse the call rather than silently solving the
-/// unscaled problem and pretending the scaling was applied.
+/// Roadmap item #6: `user_x_scaling` should yield the same primal
+/// solution as the unscaled solve (modulo IPM rounding) — the wrapper
+/// runs in `x' = D_x · x` coordinates and unscales `x_user = x' / D_x`
+/// on output.
 #[test]
-fn user_x_scaling_is_rejected() {
+fn user_x_scaling_matches_unscaled_solution() {
+    let opts_unscaled = SolverOptions {
+        print_level: 0,
+        ..SolverOptions::default()
+    };
+    let r_unscaled = ripopt::solve(&Rosenbrock, &opts_unscaled);
+    assert_eq!(r_unscaled.status, SolveStatus::Optimal);
+
+    let opts_scaled = SolverOptions {
+        print_level: 0,
+        user_x_scaling: Some(vec![2.0, 0.5]),
+        ..SolverOptions::default()
+    };
+    let r_scaled = ripopt::solve(&Rosenbrock, &opts_scaled);
+    assert_eq!(r_scaled.status, SolveStatus::Optimal);
+
+    for i in 0..2 {
+        assert!(
+            (r_scaled.x[i] - r_unscaled.x[i]).abs() < 1e-6,
+            "user_x_scaling x[{}] mismatch: scaled={:.9e} unscaled={:.9e}",
+            i, r_scaled.x[i], r_unscaled.x[i]
+        );
+    }
+    assert!((r_scaled.objective - r_unscaled.objective).abs() < 1e-8);
+}
+
+/// Empty / trivial `user_x_scaling = Some(vec![])` is treated as no
+/// scaling (skip the wrapper entirely).
+#[test]
+fn user_x_scaling_empty_is_passthrough() {
     let opts = SolverOptions {
         print_level: 0,
-        user_x_scaling: Some(vec![2.0, 2.0]),
+        user_x_scaling: Some(vec![]),
+        ..SolverOptions::default()
+    };
+    let result = ripopt::solve(&Rosenbrock, &opts);
+    assert_eq!(result.status, SolveStatus::Optimal);
+}
+
+/// Invalid scaling input (non-positive entry) returns InternalError —
+/// matches Ipopt's "user is responsible for strictly positive dx"
+/// contract (no clamping, no silent fallback).
+#[test]
+fn user_x_scaling_rejects_non_positive() {
+    let opts = SolverOptions {
+        print_level: 0,
+        user_x_scaling: Some(vec![1.0, -1.0]),
+        ..SolverOptions::default()
+    };
+    let result = ripopt::solve(&Rosenbrock, &opts);
+    assert_eq!(result.status, SolveStatus::InternalError);
+}
+
+/// HS071 is a small constrained NLP; with `user_x_scaling` the
+/// Jacobian and Hessian are also transformed, so this exercises the
+/// full IpScaledNLP-equivalent pipeline (not just bounds + grad).
+#[test]
+fn user_x_scaling_matches_unscaled_constrained() {
+    let opts_unscaled = SolverOptions {
+        print_level: 0,
+        ..SolverOptions::default()
+    };
+    let r_unscaled = ripopt::solve(&HS071, &opts_unscaled);
+    assert_eq!(r_unscaled.status, SolveStatus::Optimal);
+
+    let opts_scaled = SolverOptions {
+        print_level: 0,
+        user_x_scaling: Some(vec![2.0, 0.5, 1.5, 0.25]),
+        ..SolverOptions::default()
+    };
+    let r_scaled = ripopt::solve(&HS071, &opts_scaled);
+    assert_eq!(r_scaled.status, SolveStatus::Optimal);
+
+    for i in 0..4 {
+        assert!(
+            (r_scaled.x[i] - r_unscaled.x[i]).abs() < 1e-5,
+            "HS071 scaled x[{}]={:.9e} differs from unscaled {:.9e}",
+            i, r_scaled.x[i], r_unscaled.x[i]
+        );
+    }
+    assert!(
+        (r_scaled.objective - r_unscaled.objective).abs() < 1e-5,
+        "HS071 scaled obj={:.9e} differs from unscaled {:.9e}",
+        r_scaled.objective, r_unscaled.objective
+    );
+    // Constraint multipliers (lam_g) are invariant under x-scaling.
+    for i in 0..r_unscaled.constraint_multipliers.len() {
+        assert!(
+            (r_scaled.constraint_multipliers[i]
+                - r_unscaled.constraint_multipliers[i]).abs() < 1e-4,
+            "HS071 lam_g[{}]={:.6e} differs from unscaled {:.6e}",
+            i, r_scaled.constraint_multipliers[i],
+            r_unscaled.constraint_multipliers[i]
+        );
+    }
+}
+
+/// Wrong-length scaling vector is rejected.
+#[test]
+fn user_x_scaling_rejects_wrong_length() {
+    let opts = SolverOptions {
+        print_level: 0,
+        user_x_scaling: Some(vec![1.0, 1.0, 1.0]),
         ..SolverOptions::default()
     };
     let result = ripopt::solve(&Rosenbrock, &opts);

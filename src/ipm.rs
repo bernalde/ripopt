@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::time::{Duration, Instant};
 
 use crate::convergence::{self, check_convergence, ConvergenceInfo, ConvergenceStatus};
@@ -156,6 +157,179 @@ impl<P: NlpProblem> NlpProblem for ScaledProblem<'_, P> {
             .collect();
         self.inner
             .hessian_values(x, _new_x, obj_factor * self.obj_scaling, &scaled_lambda, vals)
+    }
+}
+
+/// NLP problem wrapper that applies user-supplied primal scaling
+/// (`options.user_x_scaling`).
+///
+/// The wrapper presents an *internal* variable `x' = D_x · x` to the
+/// solver, where `D_x = diag(dx)` and `dx` is the user-provided
+/// strictly-positive scaling vector. It mirrors Ipopt's
+/// `IpScaledNLP` / `UserScaling` pipeline restricted to x-scaling
+/// (objective and constraint scaling are left to `ScaledProblem`).
+///
+/// Per-quantity transformations (with `df = 1`, `dc = I`):
+///   * `bounds`:           `x_L' = D_x · x_L`,  `x_U' = D_x · x_U`
+///   * `initial_point`:    `x0'  = D_x · x0`
+///   * `initial_mult`:     `z_L' = z_L / dx`,   `z_U' = z_U / dx`,
+///                         `lam_g` unchanged
+///   * `objective(x')`:    inner.objective(x' / dx)
+///   * `gradient(x')`:     `∇f' = ∇f / dx` (componentwise)
+///   * `constraints(x')`:  inner.constraints(x' / dx)
+///   * `jacobian_values`:  `J'[i,j] = J[i,j] / dx[j]`
+///   * `hessian_values`:   `H'[i,j] = H[i,j] / (dx[i] * dx[j])`
+///
+/// Sparsity structure is unchanged — only values are scaled.
+///
+/// On output the IPM driver must apply the inverse map:
+///   `x_user      = x'      / dx`
+///   `z_L_user    = dx      · z_L_internal`
+///   `z_U_user    = dx      · z_U_internal`
+///   `lam_g_user  = lam_g_internal`
+///
+/// References: Ipopt 3.14 `IpNLPScaling.cpp`,
+/// `IpStandardScalingBase.cpp::apply_vector_scaling_x`,
+/// `IpScaledMatrix.cpp` (post-multiply by `D_x^-1`),
+/// `IpSymScaledMatrix.cpp` (`D_x^-1 H D_x^-1`).
+struct XScaledProblem<'a, P: NlpProblem> {
+    inner: &'a P,
+    dx: Vec<f64>,
+    inv_dx: Vec<f64>,
+    jac_cols: Vec<usize>,
+    hess_rows: Vec<usize>,
+    hess_cols: Vec<usize>,
+    scratch_x: RefCell<Vec<f64>>,
+}
+
+impl<'a, P: NlpProblem> XScaledProblem<'a, P> {
+    fn new(inner: &'a P, dx: Vec<f64>) -> Self {
+        let n = inner.num_variables();
+        debug_assert_eq!(dx.len(), n);
+        let inv_dx: Vec<f64> = dx.iter().map(|&d| 1.0 / d).collect();
+        let (_, jac_cols) = inner.jacobian_structure();
+        let (hess_rows, hess_cols) = inner.hessian_structure();
+        Self {
+            inner,
+            dx,
+            inv_dx,
+            jac_cols,
+            hess_rows,
+            hess_cols,
+            scratch_x: RefCell::new(vec![0.0; n]),
+        }
+    }
+
+    /// Fill `scratch_x` with `x / dx` (unscale solver-side `x'`
+    /// before passing to inner). Returns the borrow.
+    fn unscale_x<'b>(&'b self, x: &[f64]) -> std::cell::Ref<'b, Vec<f64>> {
+        {
+            let mut buf = self.scratch_x.borrow_mut();
+            for i in 0..x.len() {
+                buf[i] = x[i] * self.inv_dx[i];
+            }
+        }
+        self.scratch_x.borrow()
+    }
+}
+
+impl<P: NlpProblem> NlpProblem for XScaledProblem<'_, P> {
+    fn num_variables(&self) -> usize {
+        self.inner.num_variables()
+    }
+    fn num_constraints(&self) -> usize {
+        self.inner.num_constraints()
+    }
+    fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+        self.inner.bounds(x_l, x_u);
+        for i in 0..x_l.len() {
+            if x_l[i].is_finite() {
+                x_l[i] *= self.dx[i];
+            }
+            if x_u[i].is_finite() {
+                x_u[i] *= self.dx[i];
+            }
+        }
+    }
+    fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+        self.inner.constraint_bounds(g_l, g_u);
+    }
+    fn initial_point(&self, x0: &mut [f64]) {
+        self.inner.initial_point(x0);
+        for i in 0..x0.len() {
+            x0[i] *= self.dx[i];
+        }
+    }
+    fn initial_multipliers(
+        &self,
+        lam_g: &mut [f64],
+        z_l: &mut [f64],
+        z_u: &mut [f64],
+    ) -> bool {
+        if !self.inner.initial_multipliers(lam_g, z_l, z_u) {
+            return false;
+        }
+        for i in 0..z_l.len() {
+            z_l[i] *= self.inv_dx[i];
+            z_u[i] *= self.inv_dx[i];
+        }
+        true
+    }
+    fn objective(&self, x: &[f64], new_x: bool, obj: &mut f64) -> bool {
+        let x_user = self.unscale_x(x);
+        self.inner.objective(&x_user, new_x, obj)
+    }
+    fn gradient(&self, x: &[f64], new_x: bool, grad: &mut [f64]) -> bool {
+        let x_user = self.unscale_x(x);
+        if !self.inner.gradient(&x_user, new_x, grad) {
+            return false;
+        }
+        for i in 0..grad.len() {
+            grad[i] *= self.inv_dx[i];
+        }
+        true
+    }
+    fn constraints(&self, x: &[f64], new_x: bool, g: &mut [f64]) -> bool {
+        let x_user = self.unscale_x(x);
+        self.inner.constraints(&x_user, new_x, g)
+    }
+    fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+        self.inner.jacobian_structure()
+    }
+    fn jacobian_values(&self, x: &[f64], new_x: bool, vals: &mut [f64]) -> bool {
+        let x_user = self.unscale_x(x);
+        if !self.inner.jacobian_values(&x_user, new_x, vals) {
+            return false;
+        }
+        for (idx, &col) in self.jac_cols.iter().enumerate() {
+            vals[idx] *= self.inv_dx[col];
+        }
+        true
+    }
+    fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+        self.inner.hessian_structure()
+    }
+    fn hessian_values(
+        &self,
+        x: &[f64],
+        new_x: bool,
+        obj_factor: f64,
+        lambda: &[f64],
+        vals: &mut [f64],
+    ) -> bool {
+        let x_user = self.unscale_x(x);
+        if !self.inner.hessian_values(&x_user, new_x, obj_factor, lambda, vals) {
+            return false;
+        }
+        for (idx, (&r, &c)) in self
+            .hess_rows
+            .iter()
+            .zip(self.hess_cols.iter())
+            .enumerate()
+        {
+            vals[idx] *= self.inv_dx[r] * self.inv_dx[c];
+        }
+        true
     }
 }
 
@@ -1890,40 +2064,67 @@ fn try_ne_to_ls_reformulation<P: NlpProblem>(
 }
 
 /// Solve the NLP using the interior point method.
+///
+/// When `options.user_x_scaling` is `Some(non_empty)`, the user-supplied
+/// strictly-positive `dx` vector is applied via [`XScaledProblem`]: the
+/// IPM driver runs in the internal coordinate system `x' = D_x · x`, and
+/// the returned [`SolveResult`] is unscaled back to the user's
+/// coordinates (`x_user = x' / dx`, `z_L_user = dx · z_L_internal`,
+/// `z_U_user = dx · z_U_internal`, multipliers and constraint values
+/// unchanged). This mirrors Ipopt 3.14's `IpScaledNLP` /
+/// `UserScaling` pipeline restricted to x-scaling.
 pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult {
     let solve_start = Instant::now();
 
-    // Roadmap item #9: `options.user_x_scaling` is documented to scale
-    // primal variables, but the solver does not yet wrap the NLP with
-    // an x-scaling adapter. Returning silently with the unscaled
-    // solution would let the caller believe their scaling was applied;
-    // refuse the request loudly instead so the user can either remove
-    // the field or wait for the wrapper. Mirrors Ipopt's behavior of
-    // honoring `nlp_scaling_method = user-scaling` only when the full
-    // user-scaling path is wired (`IpScaledNLP`); a partial wiring
-    // there returns an error rather than ignoring the input.
+    // Roadmap item #6: `options.user_x_scaling`. If a non-empty,
+    // strictly-positive scaling vector is provided, wrap the NLP with
+    // `XScaledProblem` and run the IPM in scaled coordinates, then
+    // unscale the result. Invalid input (wrong length, non-positive,
+    // non-finite entries) returns `InternalError` — same posture as
+    // the previous "not yet implemented" guardrail.
     if let Some(ref xs) = options.user_x_scaling {
         if !xs.is_empty() {
-            rip_log!(
-                "ripopt: user_x_scaling was provided ({} entries) but variable \
-                 scaling is not yet implemented; returning InternalError. Clear \
-                 options.user_x_scaling to proceed with automatic scaling.",
-                xs.len()
-            );
-            return SolveResult {
-                x: vec![0.0; problem.num_variables()],
-                objective: f64::NAN,
-                constraint_multipliers: vec![0.0; problem.num_constraints()],
-                bound_multipliers_lower: vec![0.0; problem.num_variables()],
-                bound_multipliers_upper: vec![0.0; problem.num_variables()],
-                constraint_values: vec![0.0; problem.num_constraints()],
-                status: SolveStatus::InternalError,
-                iterations: 0,
-                diagnostics: SolverDiagnostics::default(),
-            };
+            let n = problem.num_variables();
+            if xs.len() != n || xs.iter().any(|&v| !v.is_finite() || v <= 0.0) {
+                rip_log!(
+                    "ripopt: user_x_scaling rejected (len={}, expected n={}, \
+                     all entries must be strictly positive and finite); \
+                     returning InternalError.",
+                    xs.len(), n
+                );
+                return SolveResult {
+                    x: vec![0.0; n],
+                    objective: f64::NAN,
+                    constraint_multipliers: vec![0.0; problem.num_constraints()],
+                    bound_multipliers_lower: vec![0.0; n],
+                    bound_multipliers_upper: vec![0.0; n],
+                    constraint_values: vec![0.0; problem.num_constraints()],
+                    status: SolveStatus::InternalError,
+                    iterations: 0,
+                    diagnostics: SolverDiagnostics::default(),
+                };
+            }
+            let wrapped = XScaledProblem::new(problem, xs.clone());
+            let mut inner_options = options.clone();
+            inner_options.user_x_scaling = None;
+            let mut result = solve_inner(&wrapped, &inner_options, solve_start);
+            for i in 0..n {
+                result.x[i] *= wrapped.inv_dx[i];
+                result.bound_multipliers_lower[i] *= wrapped.dx[i];
+                result.bound_multipliers_upper[i] *= wrapped.dx[i];
+            }
+            return result;
         }
     }
 
+    solve_inner(problem, options, solve_start)
+}
+
+fn solve_inner<P: NlpProblem>(
+    problem: &P,
+    options: &SolverOptions,
+    solve_start: Instant,
+) -> SolveResult {
     // Capture initial objective and feasibility for slow-optimal detection.
     // NOTE: disabled -- extra problem evaluations here change CUTEst FP state and cause regressions.
     let (initial_obj, initial_feasible) = (f64::INFINITY, false);
