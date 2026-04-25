@@ -659,30 +659,9 @@ impl SolverState {
         };
         let hess_nnz = hess_rows.len();
 
-        // Initialize constraint multipliers via least-squares estimate if enabled.
-        // Solves min ||∇f + J^T y||^2  ⟹  (J J^T) y = -J ∇f
-        // LS mult init: use dense path for small problems only.
-        // Large problems skip init LS (sparse J*J^T is expensive and initial point
-        // is often far from feasible where LS multipliers are meaningless).
-        // The sparse LS path is available for post-restoration recovery.
-        let mut y = if options.least_squares_mult_init && m > 0 && m <= 500 {
-            let mut grad_f_init = vec![0.0; n];
-            let grad_ok = problem.gradient(&x, true, &mut grad_f_init);
-
-            let mut jac_vals_init = vec![0.0; jac_nnz];
-            let jac_ok = problem.jacobian_values(&x, false, &mut jac_vals_init);
-            if !grad_ok || !jac_ok {
-                // Evaluation failed during LS mult init; skip and use default multipliers
-                vec![0.0; m]
-            } else {
-                compute_ls_multiplier_estimate(
-                    &grad_f_init, &jac_rows, &jac_cols, &jac_vals_init,
-                    &g_l, &g_u, n, m, options.constr_mult_init_max,
-                ).unwrap_or_else(|| vec![0.0; m])
-            }
-        } else {
-            vec![0.0; m]
-        };
+        let mut y = compute_initial_y_with_ls(
+            problem, options, &x, &jac_rows, &jac_cols, &g_l, &g_u, n, m, jac_nnz,
+        );
 
         // Warm-start override: when warm_start is enabled and the problem
         // supplies initial multipliers, overwrite the defaults computed
@@ -8236,6 +8215,46 @@ fn compute_ls_multiplier_rhs(
         b[row] -= jac_vals[idx] * rhs_grad[col];
     }
     b
+}
+
+/// Compute initial constraint multipliers via least-squares estimate when
+/// enabled and the problem is small enough (m <= 500). Returns vec![0.0; m]
+/// when LS init is disabled, m == 0, m > 500, or evaluation fails.
+#[allow(clippy::too_many_arguments)]
+fn compute_initial_y_with_ls<P: NlpProblem>(
+    problem: &P,
+    options: &SolverOptions,
+    x: &[f64],
+    jac_rows: &[usize],
+    jac_cols: &[usize],
+    g_l: &[f64],
+    g_u: &[f64],
+    n: usize,
+    m: usize,
+    jac_nnz: usize,
+) -> Vec<f64> {
+    if !(options.least_squares_mult_init && m > 0 && m <= 500) {
+        return vec![0.0; m];
+    }
+    let mut grad_f_init = vec![0.0; n];
+    let grad_ok = problem.gradient(x, true, &mut grad_f_init);
+    let mut jac_vals_init = vec![0.0; jac_nnz];
+    let jac_ok = problem.jacobian_values(x, false, &mut jac_vals_init);
+    if !grad_ok || !jac_ok {
+        return vec![0.0; m];
+    }
+    compute_ls_multiplier_estimate(
+        &grad_f_init,
+        jac_rows,
+        jac_cols,
+        &jac_vals_init,
+        g_l,
+        g_u,
+        n,
+        m,
+        options.constr_mult_init_max,
+    )
+    .unwrap_or_else(|| vec![0.0; m])
 }
 
 /// Compute least-squares multiplier estimate: min ||grad_f + J^T y||^2.
