@@ -7603,6 +7603,54 @@ fn reset_bound_multipliers_after_restoration(state: &mut SolverState, n: usize) 
     nuclear_reset
 }
 
+/// Recompute y at the restored point via the augmented-saddle-point
+/// least-squares multiplier estimate, INCLUDING the reset z_L/z_U
+/// contribution. Otherwise any deviation between z_true = mu/slack
+/// (huge at tight slack) and the reset value (1.0) appears entirely
+/// in inf_du, driving a bad first Newton step.
+///
+/// Uses the Ipopt-exact augmented saddle-point system
+///   [ I   J^T ] [ r ] = [ grad_f - z_L + z_U ]
+///   [ J    0  ] [ y ]   [ 0                   ]
+/// (matches IpLeastSquareMults::CalculateMultipliers with W=0, δ=0).
+/// This is far better conditioned than the normal equations
+/// J*J^T*y = rhs when J is nearly rank-deficient (as happens on
+/// AC-OPF with gauge freedom — case30_ieee hits this at a
+/// post-restoration feasible iterate).
+///
+/// If the augmented solve fails or the result exceeds
+/// `constr_mult_init_max` (matching Ipopt
+/// DefaultIterateInitializer::least_square_mults), zero out y.
+fn recompute_y_after_restoration(
+    state: &mut SolverState,
+    options: &SolverOptions,
+    n: usize,
+    m: usize,
+) {
+    if m == 0 {
+        return;
+    }
+    let y_ls_result = compute_ls_multiplier_estimate_augmented(
+        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+        &state.g_l, &state.g_u, n, m,
+        Some(&state.z_l), Some(&state.z_u),
+    );
+    let y_accepted = match y_ls_result {
+        Some(y_ls) => {
+            let max_abs = y_ls.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+            if max_abs > options.constr_mult_init_max { None } else { Some(y_ls) }
+        }
+        None => None,
+    };
+    if let Some(y_ls) = y_accepted {
+        state.y.copy_from_slice(&y_ls);
+    } else {
+        for i in 0..m {
+            state.y[i] = 0.0;
+        }
+    }
+}
+
 /// Apply post-restoration success handling: update state, reset multipliers, filter, and mu.
 fn apply_restoration_success<P: NlpProblem>(
     state: &mut SolverState,
@@ -7624,45 +7672,7 @@ fn apply_restoration_success<P: NlpProblem>(
     update_lbfgs_hessian(lbfgs_state, state);
 
     let nuclear_reset = reset_bound_multipliers_after_restoration(state, n);
-    // Compute least-squares multiplier estimate at the restored point,
-    // INCLUDING the reset z_L/z_U contribution. Otherwise any deviation
-    // between z_true = mu/slack (huge at tight slack) and the reset value
-    // (1.0) appears entirely in inf_du, driving a bad first Newton step.
-    //
-    // Uses the Ipopt-exact augmented saddle-point system
-    //   [ I   J^T ] [ r ] = [ grad_f - z_L + z_U ]
-    //   [ J    0  ] [ y ]   [ 0                   ]
-    // (matches IpLeastSquareMults::CalculateMultipliers with W=0, δ=0).
-    // This is far better conditioned than the normal equations J*J^T*y = rhs
-    // when J is nearly rank-deficient (as happens on AC-OPF with gauge
-    // freedom — case30_ieee hits this at a post-restoration feasible iterate).
-    if m > 0 {
-        let y_ls_result = compute_ls_multiplier_estimate_augmented(
-            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-            &state.g_l, &state.g_u, n, m,
-            Some(&state.z_l), Some(&state.z_u),
-        );
-        // Apply the constr_mult_init_max cap externally (matches Ipopt
-        // DefaultIterateInitializer::least_square_mults, IpDefaultIterateInitializer.cpp:722-727).
-        let y_accepted = match y_ls_result {
-            Some(y_ls) => {
-                let max_abs = y_ls.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
-                if max_abs > options.constr_mult_init_max { None } else { Some(y_ls) }
-            }
-            None => None,
-        };
-        if let Some(y_ls) = y_accepted {
-            state.y.copy_from_slice(&y_ls);
-        } else {
-            for i in 0..m {
-                state.y[i] = 0.0;
-            }
-        }
-    } else {
-        for i in 0..m {
-            state.y[i] = 0.0;
-        }
-    }
+    recompute_y_after_restoration(state, options, n, m);
 
     // Reset constraint slack barrier multipliers v_l, v_u, mirroring the
     // nuclear-reset semantics above. If bound multipliers triggered the
