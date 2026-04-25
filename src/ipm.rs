@@ -3659,6 +3659,33 @@ fn solve_dense_condensed_direction<P: NlpProblem>(
 /// ownership of the freshly built `KktSystem` into `kkt_system_opt` so
 /// downstream consumers (line search, SOC) see the same matrix.
 #[allow(clippy::too_many_arguments)]
+/// Run `restore_after_solve_failure` and convert the resulting
+/// `SolveRestoreOutcome` into a `CondensedDirectionOutcome`. Used at
+/// every KKT-failure exit on the condensed-fallback path so the
+/// `Continue` / `Return` mapping isn't duplicated at each call site.
+#[allow(clippy::too_many_arguments)]
+fn apply_solve_failure_restoration<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    options: &SolverOptions,
+    n: usize,
+    m: usize,
+    filter: &Filter,
+    restoration: &mut RestorationPhase,
+    lbfgs_state: &mut Option<LbfgsIpmState>,
+    lbfgs_mode: bool,
+    linear_constraints: Option<&[bool]>,
+    deadline: Option<Instant>,
+) -> CondensedDirectionOutcome {
+    match restore_after_solve_failure(
+        state, problem, options, n, m, filter, restoration,
+        lbfgs_state, lbfgs_mode, linear_constraints, deadline,
+    ) {
+        SolveRestoreOutcome::Continue => CondensedDirectionOutcome::Continue,
+        SolveRestoreOutcome::Return(r) => CondensedDirectionOutcome::Return(r),
+    }
+}
+
 fn fall_back_to_full_kkt_after_condensed_failure<P: NlpProblem>(
     state: &mut SolverState,
     problem: &P,
@@ -3690,13 +3717,10 @@ fn fall_back_to_full_kkt_after_condensed_failure<P: NlpProblem>(
         &mut kkt, lin_solver, inertia_params,
     );
     if fb_ic.is_err() {
-        return match restore_after_solve_failure(
+        return apply_solve_failure_restoration(
             state, problem, options, n, m, filter, restoration,
             lbfgs_state, lbfgs_mode, linear_constraints, deadline,
-        ) {
-            SolveRestoreOutcome::Continue => CondensedDirectionOutcome::Continue,
-            SolveRestoreOutcome::Return(r) => CondensedDirectionOutcome::Return(r),
-        };
+        );
     }
     let (fb_dw, fb_dc) = fb_ic.unwrap();
     match kkt::solve_for_direction(&kkt, lin_solver, fb_dw, fb_dc) {
@@ -3710,13 +3734,10 @@ fn fall_back_to_full_kkt_after_condensed_failure<P: NlpProblem>(
         }
         Err(e) => {
             log::warn!("KKT solve failed: {}", e);
-            match restore_after_solve_failure(
+            apply_solve_failure_restoration(
                 state, problem, options, n, m, filter, restoration,
                 lbfgs_state, lbfgs_mode, linear_constraints, deadline,
-            ) {
-                SolveRestoreOutcome::Continue => CondensedDirectionOutcome::Continue,
-                SolveRestoreOutcome::Return(r) => CondensedDirectionOutcome::Return(r),
-            }
+            )
         }
     }
 }
