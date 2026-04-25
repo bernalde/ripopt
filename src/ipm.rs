@@ -9386,7 +9386,7 @@ fn dense_symmetric_solve(dim: usize, a: &mut [f64], b: &mut [f64]) -> Option<Vec
 fn gradient_descent_fallback(state: &SolverState) -> Option<(Vec<f64>, Vec<f64>)> {
     let n = state.n;
     let m = state.m;
-    let grad_norm: f64 = state.grad_f.iter().map(|g| g * g).sum::<f64>().sqrt();
+    let grad_norm = l2_norm(&state.grad_f);
     if grad_norm < 1e-20 {
         return None;
     }
