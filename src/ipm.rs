@@ -1228,6 +1228,33 @@ fn is_strictly_better(current: &SolveResult, candidate: &SolveResult) -> bool {
     }
 }
 
+/// If `candidate` is strictly better than `result`, adopt it and tag
+/// `diagnostics.fallback_used = tag`; otherwise log "did not improve".
+/// Centralises the success/no-improvement reporting for the four
+/// solve-then-compare fallback paths (L-BFGS Hessian, AL, SQP, plain
+/// IPM retry). `label` appears in the log line — e.g. "L-BFGS Hessian
+/// fallback", "AL fallback", "SQP fallback", "Plain IPM retry".
+fn adopt_candidate_if_better(
+    result: &mut SolveResult,
+    candidate: SolveResult,
+    options: &SolverOptions,
+    label: &str,
+    tag: &str,
+) {
+    if is_strictly_better(result, &candidate) {
+        if options.print_level >= 5 {
+            rip_log!(
+                "ripopt: {} succeeded ({:?}, obj={:.6e})",
+                label, candidate.status, candidate.objective
+            );
+        }
+        *result = candidate;
+        result.diagnostics.fallback_used = Some(tag.into());
+    } else if options.print_level >= 5 {
+        rip_log!("ripopt: {} did not improve ({:?})", label, candidate.status);
+    }
+}
+
 /// Prepare options for a fallback solve: cap iterations and set remaining time budget.
 /// Returns `None` if there is no time budget remaining.
 fn prepare_fallback_opts(options: &SolverOptions, solve_start: &Instant) -> Option<SolverOptions> {
@@ -1265,18 +1292,7 @@ fn try_lbfgs_hessian_fallback<P: NlpProblem>(
         rip_log!("ripopt: Trying L-BFGS Hessian fallback ({:?})", diagnosis);
     }
     let candidate = solve_ipm(problem, &opts);
-    if is_strictly_better(result, &candidate) {
-        if options.print_level >= 5 {
-            rip_log!(
-                "ripopt: L-BFGS Hessian fallback succeeded ({:?}, obj={:.6e})",
-                candidate.status, candidate.objective
-            );
-        }
-        *result = candidate;
-        result.diagnostics.fallback_used = Some("lbfgs_hessian".into());
-    } else if options.print_level >= 5 {
-        rip_log!("ripopt: L-BFGS Hessian fallback did not improve ({:?})", candidate.status);
-    }
+    adopt_candidate_if_better(result, candidate, options, "L-BFGS Hessian fallback", "lbfgs_hessian");
 }
 
 /// Augmented Lagrangian fallback: solve via `crate::augmented_lagrangian`.
@@ -1298,18 +1314,7 @@ fn try_al_fallback<P: NlpProblem>(
         rip_log!("ripopt: Trying AL fallback ({:?})", diagnosis);
     }
     let candidate = crate::augmented_lagrangian::solve(problem, &opts);
-    if is_strictly_better(result, &candidate) {
-        if options.print_level >= 5 {
-            rip_log!(
-                "ripopt: AL fallback succeeded ({:?}, obj={:.6e})",
-                candidate.status, candidate.objective
-            );
-        }
-        *result = candidate;
-        result.diagnostics.fallback_used = Some("augmented_lagrangian".into());
-    } else if options.print_level >= 5 {
-        rip_log!("ripopt: AL fallback did not improve ({:?})", candidate.status);
-    }
+    adopt_candidate_if_better(result, candidate, options, "AL fallback", "augmented_lagrangian");
 }
 
 /// SQP fallback: solve via `crate::sqp`. Only fires for constrained
@@ -1331,18 +1336,7 @@ fn try_sqp_fallback<P: NlpProblem>(
         rip_log!("ripopt: Trying SQP fallback ({:?})", diagnosis);
     }
     let candidate = crate::sqp::solve(problem, &opts);
-    if is_strictly_better(result, &candidate) {
-        if options.print_level >= 5 {
-            rip_log!(
-                "ripopt: SQP fallback succeeded ({:?}, obj={:.6e})",
-                candidate.status, candidate.objective
-            );
-        }
-        *result = candidate;
-        result.diagnostics.fallback_used = Some("sqp".into());
-    } else if options.print_level >= 5 {
-        rip_log!("ripopt: SQP fallback did not improve ({:?})", candidate.status);
-    }
+    adopt_candidate_if_better(result, candidate, options, "SQP fallback", "sqp");
 }
 
 /// Slack reformulation fallback: re-run IPM on `SlackFormulation::new`,
@@ -1418,18 +1412,7 @@ fn try_plain_ipm_retry<P: NlpProblem>(
         rip_log!("ripopt: Trying plain IPM retry (no corrections) for DualDivergence");
     }
     let candidate = solve_ipm(problem, &opts);
-    if is_strictly_better(result, &candidate) {
-        if options.print_level >= 5 {
-            rip_log!(
-                "ripopt: Plain IPM retry succeeded ({:?}, obj={:.6e})",
-                candidate.status, candidate.objective
-            );
-        }
-        *result = candidate;
-        result.diagnostics.fallback_used = Some("plain_ipm".into());
-    } else if options.print_level >= 5 {
-        rip_log!("ripopt: Plain IPM retry did not improve ({:?})", candidate.status);
-    }
+    adopt_candidate_if_better(result, candidate, options, "Plain IPM retry", "plain_ipm");
 }
 
 /// Dispatch failure-recovery fallbacks based on the diagnosis. Returns
