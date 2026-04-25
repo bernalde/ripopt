@@ -3703,6 +3703,81 @@ enum RestorationCascadeDecision {
     Return(SolveResult),
 }
 
+/// Adjust mu / mu-mode and (on attempt 3+) jitter x to escape the current
+/// basin after restoration failed but the cascade has not exhausted its
+/// retry budget. fail_count == 1 switches Free → Fixed mode (or applies
+/// the standard mu_linear/superlinear decrease in Fixed mode); subsequent
+/// attempts cycle through the perturbation sequence ×10, ×0.1, ×100,
+/// ×0.01, ×1000, ×0.001. The filter is reset and inertia δ_w cleared.
+#[allow(clippy::too_many_arguments)]
+fn apply_restoration_recovery_strategy<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    options: &SolverOptions,
+    filter: &mut Filter,
+    mu_state: &mut MuState,
+    inertia_params: &mut InertiaCorrectionParams,
+    lbfgs_state: &mut Option<LbfgsIpmState>,
+    lbfgs_mode: bool,
+    linear_constraints: Option<&[bool]>,
+    fail_count: usize,
+    n: usize,
+) {
+    log::debug!("Restoration failed (attempt #{}), trying recovery", fail_count);
+    let mu_factors: [f64; 6] = [10.0, 0.1, 100.0, 0.01, 1000.0, 0.001];
+
+    match fail_count {
+        1 => {
+            if mu_state.mode == MuMode::Free {
+                state.diagnostics.mu_mode_switches += 1;
+                mu_state.mode = MuMode::Fixed;
+                mu_state.first_iter_in_mode = true;
+                let avg_compl = compute_avg_complementarity(state);
+                if avg_compl > 0.0 {
+                    state.mu = (options.adaptive_mu_monotone_init_factor * avg_compl)
+                        .clamp(options.mu_min, 1e5);
+                } else {
+                    state.mu = (options.mu_linear_decrease_factor * state.mu)
+                        .max(options.mu_min);
+                }
+            } else {
+                let new_mu = (options.mu_linear_decrease_factor * state.mu)
+                    .min(state.mu.powf(options.mu_superlinear_decrease_power))
+                    .max(options.mu_min);
+                state.mu = new_mu;
+            }
+        }
+        _ => {
+            let factor = mu_factors[(fail_count - 2) % mu_factors.len()];
+            state.mu = (state.mu * factor).max(options.mu_min).min(1e5);
+        }
+    }
+    filter.reset();
+    let theta_now = state.constraint_violation();
+    filter.set_theta_min_from_initial(theta_now);
+    inertia_params.delta_w_last = 0.0;
+
+    if fail_count >= 3 {
+        for i in 0..n {
+            let range = if state.x_l[i].is_finite() && state.x_u[i].is_finite() {
+                state.x_u[i] - state.x_l[i]
+            } else {
+                state.x[i].abs().max(1.0)
+            };
+            let sign = if (i * 7 + fail_count * 13) % 3 == 0 { -1.0 } else { 1.0 };
+            state.x[i] += sign * 1e-4 * range;
+            if state.x_l[i].is_finite() {
+                state.x[i] = state.x[i].max(state.x_l[i] + 1e-14);
+            }
+            if state.x_u[i].is_finite() {
+                state.x[i] = state.x[i].min(state.x_u[i] - 1e-14);
+            }
+        }
+        let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+        update_lbfgs_hessian(lbfgs_state, state);
+    }
+}
+
 /// Classify the terminal status when the restoration cascade has exhausted its
 /// retry budget. Returns LocalInfeasibility when the constraint-violation
 /// gradient is near-stationary at an infeasible point, Infeasible when theta
@@ -3893,61 +3968,10 @@ fn run_post_ls_restoration_cascade<P: NlpProblem>(
         ));
     }
 
-    // Recovery strategies: cycle through mode switches and mu perturbations.
-    log::debug!("Restoration failed (attempt #{}), trying recovery", fail_count);
-    let mu_factors: [f64; 6] = [10.0, 0.1, 100.0, 0.01, 1000.0, 0.001];
-
-    match fail_count {
-        1 => {
-            if mu_state.mode == MuMode::Free {
-                state.diagnostics.mu_mode_switches += 1;
-                mu_state.mode = MuMode::Fixed;
-                mu_state.first_iter_in_mode = true;
-                let avg_compl = compute_avg_complementarity(state);
-                if avg_compl > 0.0 {
-                    state.mu = (options.adaptive_mu_monotone_init_factor * avg_compl)
-                        .clamp(options.mu_min, 1e5);
-                } else {
-                    state.mu = (options.mu_linear_decrease_factor * state.mu)
-                        .max(options.mu_min);
-                }
-            } else {
-                let new_mu = (options.mu_linear_decrease_factor * state.mu)
-                    .min(state.mu.powf(options.mu_superlinear_decrease_power))
-                    .max(options.mu_min);
-                state.mu = new_mu;
-            }
-        }
-        _ => {
-            let factor = mu_factors[(fail_count - 2) % mu_factors.len()];
-            state.mu = (state.mu * factor).max(options.mu_min).min(1e5);
-        }
-    }
-    filter.reset();
-    let theta_now = state.constraint_violation();
-    filter.set_theta_min_from_initial(theta_now);
-    inertia_params.delta_w_last = 0.0;
-
-    // On attempts 3+: also perturb x to escape current basin.
-    if fail_count >= 3 {
-        for i in 0..n {
-            let range = if state.x_l[i].is_finite() && state.x_u[i].is_finite() {
-                state.x_u[i] - state.x_l[i]
-            } else {
-                state.x[i].abs().max(1.0)
-            };
-            let sign = if (i * 7 + fail_count * 13) % 3 == 0 { -1.0 } else { 1.0 };
-            state.x[i] += sign * 1e-4 * range;
-            if state.x_l[i].is_finite() {
-                state.x[i] = state.x[i].max(state.x_l[i] + 1e-14);
-            }
-            if state.x_u[i].is_finite() {
-                state.x[i] = state.x[i].min(state.x_u[i] - 1e-14);
-            }
-        }
-        let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-        update_lbfgs_hessian(lbfgs_state, state);
-    }
+    apply_restoration_recovery_strategy(
+        state, problem, options, filter, mu_state, inertia_params,
+        lbfgs_state, lbfgs_mode, linear_constraints, fail_count, n,
+    );
 
     RestorationCascadeDecision::Continue
 }
