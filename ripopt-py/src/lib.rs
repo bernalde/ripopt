@@ -383,9 +383,13 @@ const KNOWN_OPTIONS: &[&str] = &[
     "warm_start_bound_push",
     "warm_start_bound_frac",
     "warm_start_mult_bound_push",
+    "warm_start_target_mu",
     "hessian_approximation",
     "bound_push",
     "bound_frac",
+    "user_obj_scaling",
+    "mu_oracle_quality_function",
+    "quality_function_centrality",
     "sb",
     // accepted-and-ignored (with a stderr warning) for cyipopt option-dict
     // compatibility — these keys are common in cyipopt tutorials but ripopt
@@ -465,8 +469,20 @@ fn build_options(options: &Bound<'_, PyDict>) -> PyResult<SolverOptions> {
             "warm_start_mult_bound_push" => {
                 opts.warm_start_mult_bound_push = v.extract()?
             }
+            "warm_start_target_mu" => {
+                opts.warm_start_target_mu = Some(v.extract()?);
+            }
             "bound_push" => opts.bound_push = v.extract()?,
             "bound_frac" => opts.bound_frac = v.extract()?,
+            "user_obj_scaling" => {
+                opts.user_obj_scaling = Some(v.extract()?);
+            }
+            "mu_oracle_quality_function" => {
+                opts.mu_oracle_quality_function = extract_yes_no("mu_oracle_quality_function", &v)?;
+            }
+            "quality_function_centrality" => {
+                opts.quality_function_centrality = extract_yes_no("quality_function_centrality", &v)?;
+            }
             "hessian_approximation" => {
                 let s: String = v.extract()?;
                 match s.as_str() {

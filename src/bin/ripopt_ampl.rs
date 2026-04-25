@@ -166,6 +166,7 @@ fn print_help() {
     println!("    warm_start_bound_push=<float>        Warm-start bound push [1e-3]");
     println!("    warm_start_bound_frac=<float>        Warm-start bound fraction [1e-3]");
     println!("    warm_start_mult_bound_push=<float>   Warm-start multiplier bound push [1e-3]");
+    println!("    warm_start_target_mu=<float>         Override cold-start mu ramp at warm start [unset]");
     println!();
     println!("  Multiplier Initialization");
     println!("    least_squares_mult_init=<bool>       Least-squares multiplier init [yes]");
@@ -436,6 +437,19 @@ fn apply_option(opts: &mut SolverOptions, key: &str, value: &str) {
         }
         "mu_oracle_quality_function" => {
             opts.mu_oracle_quality_function = value == "yes" || value == "true" || value == "1";
+        }
+        "quality_function_centrality" => {
+            opts.quality_function_centrality = value == "yes" || value == "true" || value == "1";
+        }
+        "warm_start_target_mu" => {
+            if let Ok(v) = value.parse() {
+                opts.warm_start_target_mu = Some(v);
+            }
+        }
+        "user_obj_scaling" => {
+            if let Ok(v) = value.parse() {
+                opts.user_obj_scaling = Some(v);
+            }
         }
         _ => {
             eprintln!("Warning: unknown option '{}'", key);

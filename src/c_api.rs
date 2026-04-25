@@ -469,6 +469,8 @@ pub unsafe extern "C" fn ripopt_add_num_option(
         "max_wall_time" => p.options.max_wall_time = val,
         "barrier_tol_factor" => p.options.barrier_tol_factor = val,
         "adaptive_mu_monotone_init_factor" => p.options.adaptive_mu_monotone_init_factor = val,
+        "warm_start_target_mu" => p.options.warm_start_target_mu = Some(val),
+        "user_obj_scaling" => p.options.user_obj_scaling = Some(val),
         _ => return 0,
     }
     1
@@ -580,6 +582,12 @@ pub unsafe extern "C" fn ripopt_add_str_option(
         }
         "proactive_infeasibility_detection" => {
             p.options.proactive_infeasibility_detection = value == "yes";
+        }
+        "mu_oracle_quality_function" => {
+            p.options.mu_oracle_quality_function = value == "yes";
+        }
+        "quality_function_centrality" => {
+            p.options.quality_function_centrality = value == "yes";
         }
         _ => return 0,
     }
