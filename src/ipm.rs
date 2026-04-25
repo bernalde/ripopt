@@ -7871,20 +7871,36 @@ fn attempt_nlp_restoration<P: NlpProblem>(
     }
 
     let inner_converged = result.status == SolveStatus::Optimal;
+    let outcome = classify_restoration_outcome(
+        filter, options, theta_current, theta_new, phi_new, inner_converged,
+    );
+    (x_nlp, outcome)
+}
 
-    // Check success criteria — require meaningful improvement
+/// Classify the outcome of a completed restoration solve. Decision tree:
+/// 1. theta_new < constr_viol_tol → Success (achieved feasibility).
+/// 2. theta_new ≤ 0.5*theta_current → Success (50% reduction, stricter than
+///    Gauss-Newton's 10% to avoid marginal "success" that prevents recovery
+///    mechanisms from engaging).
+/// 3. theta_new < 0.9*theta_current AND filter-acceptable → Success.
+/// 4. inner_converged but no feasibility improvement → LocalInfeasibility
+///    (the restoration NLP itself reached a stationary point of the
+///    L1-feasibility objective with positive residual).
+/// 5. Otherwise → Failed.
+fn classify_restoration_outcome(
+    filter: &Filter,
+    options: &SolverOptions,
+    theta_current: f64,
+    theta_new: f64,
+    phi_new: f64,
+    inner_converged: bool,
+) -> RestorationOutcome {
     if theta_new < options.constr_viol_tol {
-        // Achieved feasibility
-        return (x_nlp, RestorationOutcome::Success);
+        return RestorationOutcome::Success;
     }
-
-    // Require >=50% reduction for non-feasible improvement (stricter than GN's 10%)
-    // to avoid marginal "success" that prevents recovery mechanisms from engaging.
     if theta_new <= 0.5 * theta_current {
-        return (x_nlp, RestorationOutcome::Success);
+        return RestorationOutcome::Success;
     }
-
-    // Check if acceptable to outer filter AND has meaningful reduction
     if theta_new < 0.9 * theta_current {
         let filter_acceptable = {
             let entries = filter.entries();
@@ -7907,18 +7923,14 @@ fn attempt_nlp_restoration<P: NlpProblem>(
                 ok
             }
         };
-
         if filter_acceptable {
-            return (x_nlp, RestorationOutcome::Success);
+            return RestorationOutcome::Success;
         }
     }
-
-    // Inner solve converged but didn't improve feasibility → locally infeasible
     if inner_converged {
-        return (x_nlp, RestorationOutcome::LocalInfeasibility);
+        return RestorationOutcome::LocalInfeasibility;
     }
-
-    (x_nlp, RestorationOutcome::Failed)
+    RestorationOutcome::Failed
 }
 
 /// Compute average complementarity for recomputing mu after restoration.
