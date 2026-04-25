@@ -1544,6 +1544,136 @@ fn try_preprocessed_solve<P: NlpProblem>(
     None
 }
 
+/// Gauss–Newton polish of an LS solution against the original constraint
+/// system. Runs only when the current `theta` is above `options.tol` but
+/// below `1e-2` — the regime where a few Newton steps on `g(x) = target`
+/// can plausibly drive feasibility under the tolerance. Mutates
+/// `polished_x`, `theta`, and `g_final` in place.
+fn polish_ls_solution_with_newton<P: NlpProblem>(
+    problem: &P,
+    options: &SolverOptions,
+    polished_x: &mut [f64],
+    theta: &mut f64,
+    g_final: &mut [f64],
+    g_l: &[f64],
+    g_u: &[f64],
+    n: usize,
+    m: usize,
+) {
+    if !(*theta > options.tol && *theta < 1e-2) {
+        return;
+    }
+    let mut x_l_var = vec![0.0; n];
+    let mut x_u_var = vec![0.0; n];
+    problem.bounds(&mut x_l_var, &mut x_u_var);
+    let (jac_rows, jac_cols) = problem.jacobian_structure();
+    let nnz = jac_rows.len();
+
+    let target: Vec<f64> = (0..m).map(|i| {
+        if (g_u[i] - g_l[i]).abs() < 1e-15 { g_l[i] } else { 0.5 * (g_l[i] + g_u[i]) }
+    }).collect();
+
+    let max_newton_iters = 20;
+    for newton_iter in 0..max_newton_iters {
+        let r: Vec<f64> = (0..m).map(|i| g_final[i] - target[i]).collect();
+
+        let mut jac_vals = vec![0.0; nnz];
+        if !problem.jacobian_values(polished_x, true, &mut jac_vals) {
+            break;
+        }
+
+        let mut j_dense = vec![0.0; m * n];
+        for k in 0..nnz {
+            j_dense[jac_rows[k] * n + jac_cols[k]] += jac_vals[k];
+        }
+
+        // Solve for dx using normal equations: (J^T J) dx = -J^T r
+        let mut jtj = vec![0.0; n * n];
+        let mut jtr = vec![0.0; n];
+        for i in 0..n {
+            for j in 0..n {
+                let mut s = 0.0;
+                for k in 0..m {
+                    s += j_dense[k * n + i] * j_dense[k * n + j];
+                }
+                jtj[i * n + j] = s;
+            }
+            let mut s = 0.0;
+            for k in 0..m {
+                s += j_dense[k * n + i] * r[k];
+            }
+            jtr[i] = s;
+        }
+
+        for i in 0..n {
+            jtj[i * n + i] += 1e-14;
+        }
+
+        let dx = match dense_cholesky_solve(&jtj, &jtr, n) {
+            Some(dx) => dx,
+            None => break,
+        };
+
+        // Fraction-to-boundary line search on variable bounds
+        let mut alpha = 1.0;
+        let tau = 0.995;
+        for i in 0..n {
+            if dx[i] < 0.0 && x_l_var[i].is_finite() {
+                let max_step = -tau * (polished_x[i] - x_l_var[i]) / dx[i];
+                if max_step < alpha { alpha = max_step; }
+            }
+            if dx[i] > 0.0 && x_u_var[i].is_finite() {
+                let max_step = tau * (x_u_var[i] - polished_x[i]) / dx[i];
+                if max_step < alpha { alpha = max_step; }
+            }
+        }
+        alpha = alpha.max(0.0).min(1.0);
+
+        let mut trial_x = vec![0.0; n];
+        let mut trial_g = vec![0.0; m];
+        let mut best_alpha = alpha;
+        let mut best_theta = *theta;
+        for _ in 0..10 {
+            for i in 0..n {
+                trial_x[i] = polished_x[i] - best_alpha * dx[i];
+            }
+            if !problem.constraints(&trial_x, true, &mut trial_g) {
+                best_alpha *= 0.5;
+                continue;
+            }
+            let trial_theta = convergence::primal_infeasibility(&trial_g, g_l, g_u);
+            if trial_theta < *theta {
+                best_theta = trial_theta;
+                break;
+            }
+            best_alpha *= 0.5;
+        }
+
+        if best_theta >= *theta * 0.999 {
+            break;
+        }
+
+        for i in 0..n {
+            polished_x[i] -= best_alpha * dx[i];
+        }
+        if !problem.constraints(polished_x, true, g_final) {
+            break;
+        }
+        *theta = best_theta;
+
+        if options.print_level >= 5 {
+            rip_log!(
+                "ripopt: Newton polish iter {}: theta={:.2e}, alpha={:.4}",
+                newton_iter + 1, *theta, best_alpha,
+            );
+        }
+
+        if *theta < options.tol {
+            break;
+        }
+    }
+}
+
 /// Detect an overdetermined nonlinear equation problem (f ≡ 0, all equalities,
 /// m ≥ n) and, if detected, solve it by reformulating as the unconstrained
 /// least-squares problem `min 0.5·||g(x) − target||²` via
@@ -1604,117 +1734,11 @@ fn try_ne_to_ls_reformulation<P: NlpProblem>(
     // Gauss-Newton steps on the original system g(x) = target to drive
     // constraint violation below tol.
     let mut polished_x = ls_result.x.clone();
-    if theta > options.tol && theta < 1e-2 {
-        let mut x_l_var = vec![0.0; n];
-        let mut x_u_var = vec![0.0; n];
-        problem.bounds(&mut x_l_var, &mut x_u_var);
-        let (jac_rows, jac_cols) = problem.jacobian_structure();
-        let nnz = jac_rows.len();
-
-        let target: Vec<f64> = (0..m).map(|i| {
-            if (g_u[i] - g_l[i]).abs() < 1e-15 { g_l[i] } else { 0.5 * (g_l[i] + g_u[i]) }
-        }).collect();
-
-        let max_newton_iters = 20;
-        for newton_iter in 0..max_newton_iters {
-            let r: Vec<f64> = (0..m).map(|i| g_final[i] - target[i]).collect();
-
-            let mut jac_vals = vec![0.0; nnz];
-            if !problem.jacobian_values(&polished_x, true, &mut jac_vals) {
-                break;
-            }
-
-            let mut j_dense = vec![0.0; m * n];
-            for k in 0..nnz {
-                j_dense[jac_rows[k] * n + jac_cols[k]] += jac_vals[k];
-            }
-
-            // Solve for dx using normal equations: (J^T J) dx = -J^T r
-            let mut jtj = vec![0.0; n * n];
-            let mut jtr = vec![0.0; n];
-            for i in 0..n {
-                for j in 0..n {
-                    let mut s = 0.0;
-                    for k in 0..m {
-                        s += j_dense[k * n + i] * j_dense[k * n + j];
-                    }
-                    jtj[i * n + j] = s;
-                }
-                let mut s = 0.0;
-                for k in 0..m {
-                    s += j_dense[k * n + i] * r[k];
-                }
-                jtr[i] = s;
-            }
-
-            for i in 0..n {
-                jtj[i * n + i] += 1e-14;
-            }
-
-            let dx = match dense_cholesky_solve(&jtj, &jtr, n) {
-                Some(dx) => dx,
-                None => break,
-            };
-
-            // Fraction-to-boundary line search on variable bounds
-            let mut alpha = 1.0;
-            let tau = 0.995;
-            for i in 0..n {
-                if dx[i] < 0.0 && x_l_var[i].is_finite() {
-                    let max_step = -tau * (polished_x[i] - x_l_var[i]) / dx[i];
-                    if max_step < alpha { alpha = max_step; }
-                }
-                if dx[i] > 0.0 && x_u_var[i].is_finite() {
-                    let max_step = tau * (x_u_var[i] - polished_x[i]) / dx[i];
-                    if max_step < alpha { alpha = max_step; }
-                }
-            }
-            alpha = alpha.max(0.0).min(1.0);
-
-            let mut trial_x = vec![0.0; n];
-            let mut trial_g = vec![0.0; m];
-            let mut best_alpha = alpha;
-            let mut best_theta = theta;
-            for _ in 0..10 {
-                for i in 0..n {
-                    trial_x[i] = polished_x[i] - best_alpha * dx[i];
-                }
-                if !problem.constraints(&trial_x, true, &mut trial_g) {
-                    best_alpha *= 0.5;
-                    continue;
-                }
-                let trial_theta = convergence::primal_infeasibility(&trial_g, &g_l, &g_u);
-                if trial_theta < theta {
-                    best_theta = trial_theta;
-                    break;
-                }
-                best_alpha *= 0.5;
-            }
-
-            if best_theta >= theta * 0.999 {
-                break;
-            }
-
-            for i in 0..n {
-                polished_x[i] -= best_alpha * dx[i];
-            }
-            if !problem.constraints(&polished_x, true, &mut g_final) {
-                break;
-            }
-            theta = best_theta;
-
-            if options.print_level >= 5 {
-                rip_log!(
-                    "ripopt: Newton polish iter {}: theta={:.2e}, alpha={:.4}",
-                    newton_iter + 1, theta, best_alpha,
-                );
-            }
-
-            if theta < options.tol {
-                break;
-            }
-        }
-    }
+    polish_ls_solution_with_newton(
+        problem, options,
+        &mut polished_x, &mut theta, &mut g_final,
+        &g_l, &g_u, n, m,
+    );
 
     let g_out = g_final;
 
