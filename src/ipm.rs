@@ -4058,24 +4058,7 @@ fn apply_restoration_recovery_strategy<P: NlpProblem>(
     let mu_factors: [f64; 6] = [10.0, 0.1, 100.0, 0.01, 1000.0, 0.001];
 
     match fail_count {
-        1 => {
-            if mu_state.mode == MuMode::Free {
-                switch_mu_mode(state, mu_state, MuMode::Fixed);
-                let avg_compl = compute_avg_complementarity(state);
-                if avg_compl > 0.0 {
-                    state.mu = (options.adaptive_mu_monotone_init_factor * avg_compl)
-                        .clamp(options.mu_min, 1e5);
-                } else {
-                    state.mu = (options.mu_linear_decrease_factor * state.mu)
-                        .max(options.mu_min);
-                }
-            } else {
-                let new_mu = (options.mu_linear_decrease_factor * state.mu)
-                    .min(state.mu.powf(options.mu_superlinear_decrease_power))
-                    .max(options.mu_min);
-                state.mu = new_mu;
-            }
-        }
+        1 => apply_first_restoration_failure_mu_update(state, mu_state, options),
         _ => {
             let factor = mu_factors[(fail_count - 2) % mu_factors.len()];
             state.mu = (state.mu * factor).max(options.mu_min).min(1e5);
@@ -4089,6 +4072,35 @@ fn apply_restoration_recovery_strategy<P: NlpProblem>(
             state, problem, lbfgs_state, fail_count, n,
             linear_constraints, lbfgs_mode,
         );
+    }
+}
+
+/// First-restoration-failure μ update. In Free mode, switch to
+/// Fixed and seed μ from `adaptive_mu_monotone_init_factor·avg_compl`
+/// (clamped to `[μ_min, 1e5]`), or fall back to a linear decrease
+/// when no active complementarity products exist. In Fixed mode,
+/// drop μ by `min(linear, superlinear)` rate. Subsequent failures
+/// use the cycling `mu_factors` table in the parent.
+fn apply_first_restoration_failure_mu_update(
+    state: &mut SolverState,
+    mu_state: &mut MuState,
+    options: &SolverOptions,
+) {
+    if mu_state.mode == MuMode::Free {
+        switch_mu_mode(state, mu_state, MuMode::Fixed);
+        let avg_compl = compute_avg_complementarity(state);
+        if avg_compl > 0.0 {
+            state.mu = (options.adaptive_mu_monotone_init_factor * avg_compl)
+                .clamp(options.mu_min, 1e5);
+        } else {
+            state.mu = (options.mu_linear_decrease_factor * state.mu)
+                .max(options.mu_min);
+        }
+    } else {
+        let new_mu = (options.mu_linear_decrease_factor * state.mu)
+            .min(state.mu.powf(options.mu_superlinear_decrease_power))
+            .max(options.mu_min);
+        state.mu = new_mu;
     }
 }
 
