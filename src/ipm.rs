@@ -3905,14 +3905,7 @@ fn track_post_step_acceptable(state: &mut SolverState, options: &SolverOptions) 
         &state.x, &state.x_l, &state.x_u, &post_zl_opt, &post_zu_opt, 0.0,
     );
     let post_compl_best = post_compl.min(post_compl_opt);
-    let post_mult_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
-        + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
-        + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
-    let post_sd = if (m + 2 * n) > 0 {
-        ((100.0f64.max(post_mult_sum / (m + 2 * n) as f64)) / 100.0).min(1e4)
-    } else {
-        1.0
-    };
+    let post_sd = compute_s_d_scaling(compute_multiplier_sum(state), m + 2 * n);
     let post_near_scaled = post_primal <= 100.0 * options.tol
         && post_du <= 100.0 * options.tol * post_sd
         && post_compl_best <= 100.0 * options.tol * post_sd;
@@ -5865,11 +5858,7 @@ fn check_stall_near_tolerance_via_optimal_duals(
     let fmult: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
         + opt_zl.iter().map(|v| v.abs()).sum::<f64>()
         + opt_zu.iter().map(|v| v.abs()).sum::<f64>();
-    let fsd = if (m + 2 * n) > 0 {
-        ((100.0f64.max(fmult / (m + 2 * n) as f64)) / 100.0).min(1e4)
-    } else {
-        1.0
-    };
+    let fsd = compute_s_d_scaling(fmult, m + 2 * n);
     let stall_fdu_tol = (stall_near_tol * fsd).max(1e-2);
     let stall_fco_tol = (stall_near_tol * fsd).max(1e-2);
     let stall_fpr_tol = stall_near_tol.max(10.0 * options.constr_viol_tol);
