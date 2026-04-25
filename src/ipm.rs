@@ -2512,15 +2512,9 @@ fn evaluate_trial_point<P: NlpProblem>(
     state: &SolverState,
     problem: &P,
     alpha: f64,
-    n: usize,
     m: usize,
 ) -> Option<(Vec<f64>, f64, Vec<f64>, f64)> {
-    let mut x_trial = vec![0.0; n];
-    #[allow(clippy::needless_range_loop)]
-    for i in 0..n {
-        x_trial[i] = state.x[i] + alpha * state.dx[i];
-        clamp_to_open_bounds(&mut x_trial, &state.x_l, &state.x_u, i);
-    }
+    let x_trial = compute_clamped_trial_x(state, &state.dx, alpha);
 
     let mut obj_trial = f64::INFINITY;
     let obj_ok = problem.objective(&x_trial, true, &mut obj_trial);
@@ -2585,7 +2579,7 @@ fn run_line_search_loop<P: NlpProblem>(
         }
 
         let (x_trial, obj_trial, g_trial, theta_trial) =
-            match evaluate_trial_point(state, problem, alpha, n, m) {
+            match evaluate_trial_point(state, problem, alpha, m) {
                 Some(t) => t,
                 None => {
                     alpha *= 0.5;
@@ -4481,14 +4475,9 @@ fn attempt_soft_restoration<P: NlpProblem>(
     theta_current: f64,
     phi_current: f64,
 ) -> bool {
-    let n = state.n;
     let m = state.m;
     let soft_alpha = alpha_primal_max.min(alpha_dual_max);
-    let mut x_soft = vec![0.0; n];
-    for i in 0..n {
-        x_soft[i] = state.x[i] + soft_alpha * state.dx[i];
-        clamp_to_open_bounds(&mut x_soft, &state.x_l, &state.x_u, i);
-    }
+    let x_soft = compute_clamped_trial_x(state, &state.dx, soft_alpha);
     let mut obj_soft = 0.0;
     let obj_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         problem.objective(&x_soft, true, &mut obj_soft)
@@ -4737,11 +4726,7 @@ fn try_gradient_descent_fallback<P: NlpProblem>(
     let obj_current = state.obj;
     let mut fb_accepted = false;
     for _ in 0..20 {
-        let mut x_trial = vec![0.0; n];
-        for i in 0..n {
-            x_trial[i] = state.x[i] + alpha_fb * state.dx[i];
-            clamp_to_open_bounds(&mut x_trial, &state.x_l, &state.x_u, i);
-        }
+        let x_trial = compute_clamped_trial_x(state, &state.dx, alpha_fb);
         let mut obj_trial = f64::INFINITY;
         let obj_ok = problem.objective(&x_trial, true, &mut obj_trial);
         if obj_ok && obj_trial.is_finite() && obj_trial < obj_current {
@@ -7795,11 +7780,7 @@ fn compute_soc_alpha_and_trial_x(
     }
     let alpha_primal_soc = alpha_new.clamp(0.0, 1.0);
 
-    let mut x_soc = vec![0.0; n];
-    for i in 0..n {
-        x_soc[i] = state.x[i] + alpha_primal_soc * dx_soc[i];
-        clamp_to_open_bounds(&mut x_soc, &state.x_l, &state.x_u, i);
-    }
+    let x_soc = compute_clamped_trial_x(state, dx_soc, alpha_primal_soc);
     (x_soc, alpha_primal_soc)
 }
 
@@ -8932,6 +8913,21 @@ fn clamp_to_open_bounds(arr: &mut [f64], x_l: &[f64], x_u: &[f64], i: usize) {
     if x_u[i].is_finite() {
         arr[i] = arr[i].min(x_u[i] - 1e-14);
     }
+}
+
+/// Build a trial point `x + alpha * dx`, clamped strictly inside the
+/// finite bounds via `clamp_to_open_bounds`. Used by the regular line
+/// search, soft-restoration acceptance, gradient-descent fallback, and
+/// the second-order correction.
+fn compute_clamped_trial_x(state: &SolverState, dx: &[f64], alpha: f64) -> Vec<f64> {
+    let n = state.n;
+    let mut x_trial = vec![0.0; n];
+    #[allow(clippy::needless_range_loop)]
+    for i in 0..n {
+        x_trial[i] = state.x[i] + alpha * dx[i];
+        clamp_to_open_bounds(&mut x_trial, &state.x_l, &state.x_u, i);
+    }
+    x_trial
 }
 
 /// Commit a trial point as the new iterate: writes `x`, `obj`, `g`,
