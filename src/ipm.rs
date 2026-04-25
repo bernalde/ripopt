@@ -1098,7 +1098,7 @@ fn detect_ne_problem<P: NlpProblem>(problem: &P) -> bool {
     if !problem.gradient(&x0, false, &mut grad) {
         return false;
     }
-    let grad_max = grad.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+    let grad_max = linf_norm(&grad);
     if grad_max > 1e-10 {
         return false;
     }
@@ -2924,7 +2924,7 @@ fn try_apply_one_mcc_correction(
     n: usize,
     m: usize,
 ) -> Option<f64> {
-    let nrm_rhs: f64 = rhs_mcc.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+    let nrm_rhs: f64 = linf_norm(rhs_mcc);
     let nrm_sol: f64 = ddx.iter().chain(ddy.iter()).map(|v| v.abs()).fold(0.0_f64, f64::max);
     if nrm_sol > 1e10 * nrm_rhs.max(1.0) {
         log::debug!(
@@ -6205,9 +6205,9 @@ fn emit_trace_row_if_enabled(
         return;
     }
     let n = state.n;
-    let dx_inf = state.dx.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
-    let dzl_inf = state.dz_l.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
-    let dzu_inf = state.dz_u.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+    let dx_inf = linf_norm(&state.dx);
+    let dzl_inf = linf_norm(&state.dz_l);
+    let dzu_inf = linf_norm(&state.dz_u);
     // log10(max Σ_i / min Σ_i) where Σ_i = z_l_i/s_l_i + z_u_i/s_u_i.
     // High values (~10+) signal ill-conditioning of the condensed KKT at
     // low μ and are an α=1/low-μ direction-quality suspect.
@@ -6356,7 +6356,7 @@ fn populate_snapshot_and_invoke_callback(
     crate::intermediate::set_current_iterate(Some(build_iterate_snapshot(state)));
 
     // Invoke intermediate callback (if registered)
-    let d_norm = state.dx.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+    let d_norm = linf_norm(&state.dx);
     let continue_ok = crate::intermediate::invoke_intermediate(
         0, // alg_mod: 0 = regular mode (not in restoration)
         iteration,
@@ -6640,7 +6640,7 @@ fn compute_nlp_scaling<P: NlpProblem>(
     let mut grad_f0 = vec![0.0; n_sc];
     let grad_ok = problem.gradient(x0, true, &mut grad_f0);
     let grad_max = if grad_ok {
-        grad_f0.iter().map(|v| v.abs()).fold(0.0f64, f64::max)
+        linf_norm(&grad_f0)
     } else {
         0.0
     };
@@ -7837,7 +7837,7 @@ fn recompute_y_after_restoration(
     );
     let y_accepted = match y_ls_result {
         Some(y_ls) => {
-            let max_abs = y_ls.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+            let max_abs = linf_norm(&y_ls);
             if max_abs > options.constr_mult_init_max { None } else { Some(y_ls) }
         }
         None => None,
@@ -8368,7 +8368,7 @@ fn compute_ls_multiplier_estimate_with_z(
         return None;
     }
 
-    let max_abs = y_ls.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+    let max_abs = linf_norm(&y_ls);
     if max_abs > max_abs_threshold {
         return None;
     }
@@ -8473,7 +8473,7 @@ fn compute_ls_multiplier_estimate_sparse(
         return None;
     }
 
-    let max_abs = y_ls.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+    let max_abs = linf_norm(&y_ls);
     if max_abs > max_abs_threshold {
         return None;
     }
@@ -8667,7 +8667,7 @@ fn compute_grad_theta_norm(state: &SolverState) -> f64 {
     for (idx, (&row, &col)) in state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate() {
         grad_theta[col] += state.jac_vals[idx] * violation[row];
     }
-    grad_theta.iter().map(|v| v.abs()).fold(0.0f64, f64::max)
+    linf_norm(&grad_theta)
 }
 
 /// `convergence::dual_infeasibility` at the current iterate using
@@ -8854,6 +8854,17 @@ fn compute_clamped_trial_x(state: &SolverState, dx: &[f64], alpha: f64) -> Vec<f
         clamp_to_open_bounds(&mut x_trial, &state.x_l, &state.x_u, i);
     }
     x_trial
+}
+
+/// L-infinity norm of a slice (max of |v_i|, with a 0.0 floor for
+/// empty input). Centralises the eleven sites that spell out
+/// `v.iter().map(|x| x.abs()).fold(0.0f64, f64::max)` inline —
+/// the affine-step KKT residual norm, the watchdog deflection
+/// magnitude, the gradient-descent fallback's L-inf gradient
+/// check, the L-BFGS y-norm probes, and the grad-theta norm
+/// for infeasibility classification.
+fn linf_norm(v: &[f64]) -> f64 {
+    v.iter().map(|x| x.abs()).fold(0.0f64, f64::max)
 }
 
 /// `kkt::compute_sigma` at the current iterate's
