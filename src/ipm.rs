@@ -4119,8 +4119,6 @@ fn classify_exhausted_restoration_attempt(
     options: &SolverOptions,
     iteration: usize,
     fail_count: usize,
-    n: usize,
-    m: usize,
     ever_feasible: bool,
     theta_history: &[f64],
     theta_history_len: usize,
@@ -4132,25 +4130,7 @@ fn classify_exhausted_restoration_attempt(
     let current_theta = state.constraint_violation();
 
     if current_theta > options.constr_viol_tol && !ever_feasible {
-        let mut violation = vec![0.0; m];
-        for i in 0..m {
-            let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
-                && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
-            if is_eq {
-                violation[i] = state.g[i] - state.g_l[i];
-            } else if state.g_l[i].is_finite() && state.g[i] < state.g_l[i] {
-                violation[i] = state.g[i] - state.g_l[i];
-            } else if state.g_u[i].is_finite() && state.g[i] > state.g_u[i] {
-                violation[i] = state.g[i] - state.g_u[i];
-            }
-        }
-        let mut grad_theta = vec![0.0; n];
-        for (idx, (&row, &col)) in
-            state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
-        {
-            grad_theta[col] += state.jac_vals[idx] * violation[row];
-        }
-        let grad_theta_norm = grad_theta.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+        let grad_theta_norm = compute_grad_theta_norm(state);
         let stationarity_tol = 1e-4 * current_theta.max(1.0);
         if grad_theta_norm < stationarity_tol {
             log::info!(
@@ -4250,7 +4230,7 @@ fn run_post_ls_restoration_cascade<P: NlpProblem>(
     let max_restore_attempts = if kkt_dim > 50000 { 3 } else { 6 };
     if fail_count > max_restore_attempts {
         return RestorationCascadeDecision::Return(classify_exhausted_restoration_attempt(
-            state, options, iteration, fail_count, n, m, ever_feasible,
+            state, options, iteration, fail_count, ever_feasible,
             theta_history, theta_history_len,
         ));
     }
@@ -6160,7 +6140,6 @@ fn track_feasibility_and_detect_infeasibility(
     theta_stall_count: &mut usize,
     ever_feasible: &mut bool,
 ) -> Option<SolveResult> {
-    let n = state.n;
     let m = state.m;
 
     if theta_history.len() >= theta_history_len {
@@ -6190,25 +6169,7 @@ fn track_feasibility_and_detect_infeasibility(
             *theta_stall_count = 0;
         }
         if *theta_stall_count >= 10 {
-            let mut violation = vec![0.0; m];
-            for i in 0..m {
-                let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
-                    && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
-                if is_eq {
-                    violation[i] = state.g[i] - state.g_l[i];
-                } else if state.g_l[i].is_finite() && state.g[i] < state.g_l[i] {
-                    violation[i] = state.g[i] - state.g_l[i];
-                } else if state.g_u[i].is_finite() && state.g[i] > state.g_u[i] {
-                    violation[i] = state.g[i] - state.g_u[i];
-                }
-            }
-            let mut grad_theta = vec![0.0; n];
-            for (idx, (&row, &col)) in
-                state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
-            {
-                grad_theta[col] += state.jac_vals[idx] * violation[row];
-            }
-            let grad_theta_norm = grad_theta.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+            let grad_theta_norm = compute_grad_theta_norm(state);
             let stationarity_tol = 1e-3 * primal_inf.max(1.0);
             if grad_theta_norm < stationarity_tol {
                 log::info!(
@@ -7597,31 +7558,11 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 /// Caller must only invoke when `!ever_feasible` and `theta > tol`.
 fn try_classify_max_iter_infeasibility(
     state: &SolverState,
-    n: usize,
-    m: usize,
     final_theta: f64,
     theta_history: &[f64],
     theta_history_len: usize,
 ) -> Option<SolveResult> {
-    let mut violation = vec![0.0; m];
-    for i in 0..m {
-        let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
-            && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
-        if is_eq {
-            violation[i] = state.g[i] - state.g_l[i];
-        } else if state.g_l[i].is_finite() && state.g[i] < state.g_l[i] {
-            violation[i] = state.g[i] - state.g_l[i];
-        } else if state.g_u[i].is_finite() && state.g[i] > state.g_u[i] {
-            violation[i] = state.g[i] - state.g_u[i];
-        }
-    }
-    let mut grad_theta = vec![0.0; n];
-    for (idx, (&row, &col)) in
-        state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
-    {
-        grad_theta[col] += state.jac_vals[idx] * violation[row];
-    }
-    let grad_theta_norm = grad_theta.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+    let grad_theta_norm = compute_grad_theta_norm(state);
     let stationarity_tol = 1e-4 * final_theta.max(1.0);
     if grad_theta_norm < stationarity_tol {
         return Some(make_result(state, SolveStatus::LocalInfeasibility));
@@ -7689,7 +7630,7 @@ fn finalize_after_max_iter(
     let final_theta = state.constraint_violation();
     if !ever_feasible && final_theta > options.constr_viol_tol {
         if let Some(result) = try_classify_max_iter_infeasibility(
-            state, n, m, final_theta, theta_history, theta_history_len,
+            state, final_theta, theta_history, theta_history_len,
         ) {
             return result;
         }
@@ -8771,6 +8712,34 @@ fn compute_s_d_scaling(multiplier_sum: f64, multiplier_count: usize) -> f64 {
     } else {
         1.0
     }
+}
+
+/// L-infinity norm of `J^T * c_violation`, where `c_violation` is the
+/// signed constraint residual (g - g_l for equalities or below-lower
+/// violations, g - g_u for above-upper violations, 0 otherwise). Used
+/// by infeasibility-classification heuristics: when ‖∇θ‖_∞ ≈ 0 with
+/// θ > 0 the iterate is a stationary point of the feasibility merit
+/// function, so the problem is locally infeasible.
+fn compute_grad_theta_norm(state: &SolverState) -> f64 {
+    let n = state.n;
+    let m = state.m;
+    let mut violation = vec![0.0; m];
+    for i in 0..m {
+        let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
+            && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
+        if is_eq {
+            violation[i] = state.g[i] - state.g_l[i];
+        } else if state.g_l[i].is_finite() && state.g[i] < state.g_l[i] {
+            violation[i] = state.g[i] - state.g_l[i];
+        } else if state.g_u[i].is_finite() && state.g[i] > state.g_u[i] {
+            violation[i] = state.g[i] - state.g_u[i];
+        }
+    }
+    let mut grad_theta = vec![0.0; n];
+    for (idx, (&row, &col)) in state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate() {
+        grad_theta[col] += state.jac_vals[idx] * violation[row];
+    }
+    grad_theta.iter().map(|v| v.abs()).fold(0.0f64, f64::max)
 }
 
 /// Sum of absolute values of all Lagrange multipliers in the iterate:
