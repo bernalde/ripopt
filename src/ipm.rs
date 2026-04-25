@@ -8380,18 +8380,25 @@ fn compute_barrier_error(state: &SolverState) -> f64 {
 /// At near-optimal points, identify variables at their bounds (active set),
 /// fix them, solve the reduced KKT system for free variables, and check
 /// if the result meets strict convergence tolerances.
-fn try_active_set_solve<P: NlpProblem>(
-    state: &mut SolverState,
-    problem: &P,
-    options: &SolverOptions,
-    linear_constraints: Option<&[bool]>,
-    lbfgs_mode: bool,
-) -> Option<SolveResult> {
-    let n = state.n;
-    let m = state.m;
+/// Identification of the working active set for `try_active_set_solve`.
+struct ActiveSet {
+    active_lower: Vec<bool>,
+    active_upper: Vec<bool>,
+    /// `free_idx[k]` is the original variable index of the k-th free variable.
+    free_idx: Vec<usize>,
+    /// `orig_to_free[i]` is the reduced-system index of variable `i`, or
+    /// `usize::MAX` when `i` is fixed at a bound.
+    orig_to_free: Vec<usize>,
+    n_free: usize,
+    /// Reduced KKT dimension: `n_free + m`.
+    dim: usize,
+}
 
-    // Identify active bounds using complementarity gap.
-    // A variable is "active at lower bound" if x_i is close to x_l_i and z_l_i is significant.
+/// Identify the working active set: a variable is "active at lower bound"
+/// if x_i is close to x_l_i (relative tol 1e-6) and z_l_i > 1e-8. Returns
+/// `None` when the reduced system is too large for dense solve (dim > 500),
+/// when no bounds are active (dim == n + m), or when dim == 0.
+fn identify_active_bounds(state: &SolverState, n: usize, m: usize) -> Option<ActiveSet> {
     let tol_bound = 1e-6;
     let mut is_free = vec![true; n];
     let mut active_lower = vec![false; n];
@@ -8415,29 +8422,40 @@ fn try_active_set_solve<P: NlpProblem>(
         }
     }
 
-    // Need at least one active bound for this strategy to help
     if n_free == n {
         return None;
     }
-
-    // Don't attempt if reduced system is too large for dense solve
     let dim = n_free + m;
-    if dim > 500 {
-        return None;
-    }
-    if dim == 0 {
+    if dim > 500 || dim == 0 {
         return None;
     }
 
-    // Build mapping: free_idx[k] = original index of k-th free variable
     let mut free_idx = Vec::with_capacity(n_free);
-    let mut orig_to_free = vec![usize::MAX; n]; // usize::MAX = not free
+    let mut orig_to_free = vec![usize::MAX; n];
     for i in 0..n {
         if is_free[i] {
             orig_to_free[i] = free_idx.len();
             free_idx.push(i);
         }
     }
+    Some(ActiveSet { active_lower, active_upper, free_idx, orig_to_free, n_free, dim })
+}
+
+fn try_active_set_solve<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    options: &SolverOptions,
+    linear_constraints: Option<&[bool]>,
+    lbfgs_mode: bool,
+) -> Option<SolveResult> {
+    let n = state.n;
+    let m = state.m;
+
+    let active_set = match identify_active_bounds(state, n, m) {
+        Some(set) => set,
+        None => return None,
+    };
+    let ActiveSet { active_lower, active_upper, free_idx, orig_to_free, n_free, dim } = active_set;
 
     // Fix active variables at their bounds (save full state for restoration)
     let saved_x = state.x.clone();
