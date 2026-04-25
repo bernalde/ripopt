@@ -40,8 +40,9 @@
 
 These are rules distilled from sessions that burned time on avoidable mistakes. Follow them for any non-trivial change to `src/ipm.rs`, `src/restoration*.rs`, `src/filter.rs`, `src/convergence.rs`, or `src/kkt.rs`.
 
-### Change one thing at a time
-Never stack 2+ solver-algorithm changes into one experiment. Each change gets its own commit-or-revert decision, measured in isolation. If the expert gives you a prioritized list of 4 fixes, apply and test fix #1 first; only move to #2 after #1 is understood. Stacking hides which change caused (or masked) any effect.
+### Principled changes
+Every set changes should have a testable hypothesis that is backed by an expert opinion. Each set gets its own commit-or-revert decision, measured in isolation. Document the results of failures for future reference to avoid repeating this.
+
 
 ### Read the function before changing its callsite
 Numerical code often has a constant whose meaning is set by the callee, not the caller. Before editing a call like `RestorationNlp::new(..., rho, 1.0)`, read `RestorationNlp::new` to understand what the `1.0` becomes. Don't rename or rescale based on the caller-side appearance alone.
