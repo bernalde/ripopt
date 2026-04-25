@@ -476,3 +476,83 @@ The v0.7.0 release on Tuesday was the first; the v0.7.0 release on Thursday is t
 The first contract was: here is what we fixed. The second is: here is what we fixed, here is what we know is still broken, and here is the ordered list of what gets fixed next.
 
 The adversary will run again next week. Some of it will PASS. Some of it will find the next HS13. The roadmap will get shorter in some places and longer in others. The question has moved again — from /is ripopt good enough?/ to /where, specifically, is ripopt not good enough, and can we prove it before someone else does?/
+
+* Chapter Ten: The Roadmap, Worked
+
+v0.7.0 had ended on a contract: a published list of twenty places where ripopt did not yet match Ipopt or MUMPS, ranked correctness-first. v0.7.1 is the release where that list got worked.
+
+** The List
+
+Between Tuesday April 22 and Friday April 25, eleven of the twenty roadmap items landed on ~main~. Each came in as a single commit, gated by a Cargo test pass and a hand-written hypothesis attached to its `git log` body.
+
+~698a79f~ separated the dual-stationarity and complementarity scaling factors in the Ipopt-aligned convergence test, dropping the ad-hoc 10⁴ cap. That was D1 — the same failure mode the adversary had surfaced on HS13.
+
+~53f4275~ deleted the ±1 inertia-acceptance heuristic on large systems. The heuristic had been a v0.6.x compromise to keep large sparse problems moving when the factorization reported one extra negative eigenvalue; v0.7.0's separation of /Optimal/ from /NumericalError/ made the heuristic unnecessary, and Ipopt's reference does not have it.
+
+~83fcbc0~ replaced the fixed ~δ_c = 10⁻⁴~ with Ipopt's μ-dependent schedule ~δ_c = 10⁻⁸ · μ^0.25~. ~a449dba~ ported the rest of ~PDPerturbationHandler~ — the 8× / 4× δ_w escalation, the per-iteration decay, the cap at 15 attempts.
+
+~9a59b2f~ ported ~RestoFilterConvCheck~: three exit gates instead of one. The restoration phase no longer terminates only when its own merit gradient is small. It also exits when the original-problem KKT residual drops below tolerance (the adversary returns to the main IPM with a feasible iterate) or when the filter accepts a step that the original problem can use.
+
+~541c059~ added the soft-restoration short-circuit. Before declaring filter rejection and falling into the full GN/NLP restoration cascade, ripopt now tries one primal-dual Newton step on the unmodified problem and accepts it if the Ipopt error metric ~E_μ~ drops by more than 0.1%. ~dc43034~ added the optional centrality term to the quality-function μ oracle. ~c2e4f1a~ added ~warm_start_target_mu~ so a follow-on solve after a parametric step can start at the previous μ instead of climbing back up the cold-start ramp.
+
+~ef410a2~ wrapped the NLP in an ~XScaledProblem~ when the user supplies a positive variable-scaling vector — the missing user-side counterpart to Ipopt's ~IpScaledNLP~ that ripopt had been advertising in options but silently no-op'ing. ~b321ae3~ stopped accepting nonsense ~user_x_scaling~ input — wrong length, zero, negative, NaN — and started returning ~InternalError~ instead of carrying on as if the option weren't there. ~77a37ce~ taught the redundancy-detection probe to bail cleanly when a user constraint callback returned ~false~ at the synthetic perturbation point, instead of panicking.
+
+Each commit had its own measured outcome and its own commit-or-revert decision, per the discipline written into ~CLAUDE.md~ between v0.7.0 and v0.7.1: /every set of changes should have a testable hypothesis backed by an expert opinion. Each gets its own commit-or-revert decision, measured in isolation./ The discipline was what kept eleven port jobs across four days from collapsing into a single noisy diff.
+
+** The Other Half
+
+The other half of the roadmap — the ~mumps-expert~ section, items (a) through (i), the rmumps-side findings — did not land. ~e1bb390~ marked all of them MOOT, superseded by /feral/, the in-progress sparse direct factorization replacement that had been in side-development since v0.6. The reasoning was not that the rmumps fixes were wrong. It was that fixing them in rmumps was investment in an artifact already on the deprecation path.
+
+The MOOT decision was a small one in commit-count terms. In planning terms it was the larger of the two choices made this cycle: an explicit fork in the road between /improve the existing solver/ and /switch to its replacement./ The roadmap document remains in the tree as a record. The mumps-side items are still wrong. They are simply no longer wrong in code that ripopt v0.8 will ship.
+
+** External Functions
+
+Issue #15 had been open since v0.7.0: AMPL ~.nl~ files emitted by Pyomo against IDAES property packages contained ~f~ opcodes that referenced shared libraries via the ~funcadd_ASL~ ABI. ripopt's NL parser had been rejecting them with /unsupported opcode/. Pyomo users with custom thermodynamic correlations or table-lookup routines could not run their models through ripopt at all.
+
+~0680799~ taught the parser to recognize the ~f~ opcode and the file-header function-declaration block. ~f3f3c5e~ wired the opcode through to the autodiff tape, dlopened the host library at solve time, registered each imported function via ~funcadd_ASL~, and dispatched forward and reverse sweeps through the AMPL ~arglist~ structure. ~90a7ac5~ added end-to-end coverage against the IDAES ~cbrt~ function — a real model from a real downstream user.
+
+The implementation was small (about 600 lines across ~src/nl/external.rs~ and ~src/nl/autodiff.rs~) and its scope was bounded: real-valued external functions, no string arguments, second-order via finite differences when the host library does not provide a Hessian. The bound was honest. A model that needed the unimplemented features would now get a parser-level diagnostic instead of a wrong answer.
+
+** The Refactor
+
+Across the same four days, ~src/ipm.rs~ shrank by no fewer than 198 ~refactor(ipm):~ commits. The shape of each was the same: a chunk of in-line state in the main IPM driver was lifted into a struct with named fields, or a 40-to-150-line inline block was extracted into a free function with a one-line call site.
+
+The structs that came out: ~ProgressStallTracker~, ~DualStallTracker~, ~Watchdog~, ~BestDuIterate~, ~BestFeasibleIterate~, ~FeasibilityTracker~, ~PrimalDivergenceState~, ~DyOscillationState~, ~IterateAveraging~, and a ~PerIterationTrace~ struct that consolidated the per-row diagnostic intermediates. The functions that came out: ~apply_warm_start_multipliers~, ~init_bound_multipliers~, ~relax_fixed_variable_bounds~, ~push_initial_point_from_bounds~, ~compute_initial_y_with_ls~, ~compute_affine_step_alpha~, ~compute_affine_complementarity~, ~compute_centrality_xi~, ~try_force_mu_decrease_in_fixed_mode~, ~apply_free_mode_conservative_decrease~, ~apply_free_mode_sufficient_progress_update~, ~try_alpha_halving_post_step_recovery~, ~classify_near_tolerance_stall_outcome~, ~update_stall_counters_and_check_limit~, ~revert_to_best_du_iterate_if_better~, ~apply_first_restoration_failure_mu_update~, ~perturb_x_after_repeated_restoration_failures~, ~build_ls_augmented_matrix~, ~count_du_history_sign_changes~, and dozens more.
+
+None of these commits changed behavior. Every one of them moved a line. Read top to bottom, the diff is unimpressive. Read as an arc, it is the chapter where ~src/ipm.rs~ stopped being a single-author monolith — the file you grep before you edit, the file whose ten thousand lines mean any local change might step on something three thousand lines away — and started being a navigable module where each tracker has its own type, each phase has its own function, and the main loop reads as a sequence of named operations.
+
+The discipline was the precondition for the algorithmic work that landed alongside it. Ports like ~PDPerturbationHandler~ and ~RestoFilterConvCheck~ become tractable when the surrounding code is small enough to reason about; they would have stalled in the v0.7.0 ipm.rs.
+
+The ~test(components):~ commit (~2b3b0f0~) at the front of the cycle added unit tests for the filter, the μ update, and the inertia correction handler. Three tests. The number was small; the precedent was new. v0.6 and v0.7.0 had relied almost entirely on integration tests at the benchmark-suite level, which is why the latent debt of Chapter Eight had been able to live for two releases. Component tests cost less to write and catch the kind of regression — a refactor that subtly shifts a sign, a port that drops a clamp — that no benchmark will see.
+
+** The Cost
+
+The HS suite numbers held: 118/120 for ripopt, 116/120 for Ipopt. The geometric mean speedup on commonly-solved problems went up — 15.0× to 20.8× — partly from the dropped fixed δ_c, partly from the soft-restoration short-circuit avoiding the GN/NLP cascade on iterates that just needed one more Newton step.
+
+The CUTEst suite told a less clean story.
+
+At v0.7.0, ripopt had solved 560 of 727 strict-Optimal — four more than Ipopt's 556. At v0.7.1, both solvers solve 556. ripopt is tied, not ahead. The diff was 20 problems lost and 16 gained, net minus four, concentrated on least-squares and rank-deficient Jacobians: ~CERI651~, several ~MGH~ problems, ~OET~, the ~PALMER~ family, ~NET1~, ~HYDC20LS~, ~DECONVBNE~, ~DUALC8~, ~QPCBLEND~, ~SNAKE~, ~FLETCHER~, ~TFI1~, ~TAX13322~.
+
+The cause was traceable. The s_d/s_c separation removed the 10⁴ cap that earlier ripopt releases had used to declare /Optimal/ on iterates whose dual scaling was running away — exactly the iterates the new Ipopt-aligned check would now run past their numerically-clean stopping point and into ~NumericalError~. The μ-dependent δ_c removed a lower bound on the (2,2)-block regularization that had been masking, on these least-squares-shaped problems, a Jacobian whose null space was real but unrecognized.
+
+Both effects were honest. Both surfaced bugs the v0.7.0 numbers had been hiding. The v0.6.x answer was /tighten the screws so the solver stops claiming victory when it shouldn't./ The v0.7.0 answer was /publish where the gaps are./ The v0.7.1 answer is /close the gaps and accept that some problems we thought we'd solved we hadn't./
+
+The CHANGELOG entry was rewritten once during release prep: an early draft had said /HS and CUTEst pass rates are unchanged at v0.7.0 levels./ A direct comparison of ~benchmarks/cutest/results.json~ at v0.7.0 against the same file at v0.7.1 showed the −4 immediately. The first draft was deleted and replaced with the honest one. The honesty rule, again, was the thing that decided what the release notes said.
+
+** The Headline
+
+On April 25, v0.7.1 was tagged. ripopt and Ipopt were tied on CUTEst at 556/727. ripopt was at 118/120 on HS, two ahead. The geometric mean wall-clock speedup had risen to 12.0× on CUTEst commonly-solved and 20.8× on HS commonly-solved. ripopt exclusively solved 38 CUTEst problems Ipopt could not, and Ipopt exclusively solved 40 ripopt could not — the 38/40 split where v0.7.0 had been 37/36.
+
+The release notes listed: the eleven roadmap ports, the ~XScaledProblem~ x-scaling wrapper, AMPL external functions, ~warm_start_target_mu~, the QF centrality term, the soft-restoration step, the three-gate restoration check, ~PDPerturbationHandler~, the convergence s_d/s_c separation, the inertia-heuristic removal, the μ-dependent δ_c, the redundancy-probe guard. And, in a section of its own, the regression: 20 problems lost, 16 gained, net −4, concentrated on least-squares.
+
+The patch number, 0.7.0 → 0.7.1, was deliberately small. The change set, by line count, was not. The version policy treats this as a patch because the public API is unchanged, the option set is additive, and no working v0.7.0 caller breaks. The honesty rule applies to versioning too: ripopt does not bump minor for cosmetic reasons, and ripopt does not bump patch quietly when something is meaningfully different. v0.7.1 is meaningfully different, and the CHANGELOG and the manuscript both say so.
+
+** The Shape, Again
+
+Chapter Eight's shape was /narrow the gap./ Chapter Nine's was /and publish where the gap still is./ Chapter Ten's adds: /and work the published list, in order, with one commit per change and one measurement per commit./
+
+The roadmap that v0.7.0 ended with had been the artifact. v0.7.1 is the release where the artifact was treated as the work. Eleven items landed; nine were marked MOOT against a strategic call about /feral/; the residue is the remaining items, smaller, more specialized, and more likely to interact with the next release's planning question.
+
+The next release will be a minor bump, not a patch. The reason is /feral/ — the in-progress sparse direct solver intended to replace ~rmumps~. v0.8 is the cycle where that switch happens, and minor versions are reserved for changes that change which artifacts users link against. The roadmap document, the adversary, the GAMS nlpbench harness, and the component-test discipline all carry forward. The mumps-side items will be re-litigated against the new factorization rather than ported into the old one.
+
+The question, again, has moved. v0.6 was /can we ship a usable IPM in Rust?/ v0.7 was /how does it compare against the reference?/ v0.7.1 is /can we close the documented gaps without breaking the cases we'd already solved?/ The answer is mostly yes, and the four-problem regression is the part of the answer that is /no, and we know exactly which four./
