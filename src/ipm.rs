@@ -4086,9 +4086,7 @@ fn apply_restoration_recovery_strategy<P: NlpProblem>(
             state.mu = (state.mu * factor).max(options.mu_min).min(1e5);
         }
     }
-    filter.reset();
-    let theta_now = state.constraint_violation();
-    filter.set_theta_min_from_initial(theta_now);
+    reset_filter_with_current_theta(state, filter);
     inertia_params.delta_w_last = 0.0;
 
     if fail_count >= 3 {
@@ -4520,9 +4518,7 @@ fn detect_tiny_step(
                 log::debug!("Tiny step with mu at minimum, checking acceptability");
             } else {
                 state.mu = new_mu;
-                filter.reset();
-                let theta_new = state.constraint_violation();
-                filter.set_theta_min_from_initial(theta_new);
+                reset_filter_with_current_theta(state, filter);
                 log::debug!("Tiny step detected, forced mu decrease to {:.2e}", state.mu);
             }
             *consecutive_tiny_steps = 0;
@@ -4634,9 +4630,7 @@ fn try_early_perturbation_recovery<P: NlpProblem>(
                     "Early perturbation (scale={:.0e}) recovered factorization at iter {}",
                     perturb_scale, iteration
                 );
-                filter.reset();
-                let theta_p = state.constraint_violation();
-                filter.set_theta_min_from_initial(theta_p);
+                reset_filter_with_current_theta(state, filter);
                 return true;
             }
         }
@@ -4874,9 +4868,7 @@ fn try_last_resort_perturbation<P: NlpProblem>(
         let pert2_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
         update_lbfgs_hessian(lbfgs_state, state);
         if pert2_ok && !state.obj.is_nan() && !state.obj.is_infinite() {
-            filter.reset();
-            let theta_new = state.constraint_violation();
-            filter.set_theta_min_from_initial(theta_new);
+            reset_filter_with_current_theta(state, filter);
             return true;
         }
     }
@@ -5092,9 +5084,7 @@ fn update_barrier_parameter_free_mode(
         // stop gate above ensures mu only changes when the
         // subproblem is approximately solved, this happens at
         // the same low frequency as in Ipopt — not every iter.
-        filter.reset();
-        let theta_new = state.constraint_violation();
-        filter.set_theta_min_from_initial(theta_new);
+        reset_filter_with_current_theta(state, filter);
     } else {
         // Also check dual infeasibility stagnation: if du is not improving
         // over 3 consecutive iterations, force the switch to Fixed mode
@@ -5126,9 +5116,7 @@ fn update_barrier_parameter_free_mode(
                 state.mu = (options.mu_linear_decrease_factor * state.mu)
                     .max(options.mu_min);
             }
-            filter.reset();
-            let theta_new = state.constraint_violation();
-            filter.set_theta_min_from_initial(theta_new);
+            reset_filter_with_current_theta(state, filter);
         } else if barrier_subproblem_solved {
             // Stay in Free mode with conservative mu decrease —
             // only when the barrier subproblem is approximately
@@ -5183,9 +5171,7 @@ fn update_barrier_parameter_fixed_mode(
                 .max(options.mu_min);
             if !(mu_state.tiny_step && (new_mu - state.mu).abs() < 1e-20) {
                 state.mu = new_mu;
-                filter.reset();
-                let theta_new = state.constraint_violation();
-                filter.set_theta_min_from_initial(theta_new);
+                reset_filter_with_current_theta(state, filter);
                 log::debug!("Fixed mode: mu decreased to {:.2e}", state.mu);
             }
         }
@@ -5533,6 +5519,16 @@ fn check_time_limits(
         }
     }
     None
+}
+
+/// Reset the filter and re-seed `theta_min` from the current iterate's
+/// constraint violation. Standard "fresh-start" sequence after μ
+/// changes, restoration, stall recovery, or watchdog promotions.
+/// Mirrors Ipopt IpFilterLSAcceptor.cpp:524-532.
+fn reset_filter_with_current_theta(state: &SolverState, filter: &mut Filter) {
+    filter.reset();
+    let theta = state.constraint_violation();
+    filter.set_theta_min_from_initial(theta);
 }
 
 /// Per-iteration KKT residuals used by the log row, filter, and
@@ -5897,9 +5893,7 @@ fn handle_near_tolerance_stall(
             );
         }
         state.mu = new_mu;
-        filter.reset();
-        let theta_new = state.constraint_violation();
-        filter.set_theta_min_from_initial(theta_new);
+        reset_filter_with_current_theta(state, filter);
         *stall_no_progress_count = 0;
         *stall_best_pr = f64::INFINITY;
         *stall_best_du = f64::INFINITY;
@@ -5918,9 +5912,7 @@ fn handle_near_tolerance_stall(
             );
         }
         state.mu = new_mu;
-        filter.reset();
-        let theta_new = state.constraint_violation();
-        filter.set_theta_min_from_initial(theta_new);
+        reset_filter_with_current_theta(state, filter);
         *stall_no_progress_count = 0;
         *stall_best_pr = f64::INFINITY;
         *stall_best_du = f64::INFINITY;
@@ -5976,9 +5968,7 @@ fn try_boost_mu_for_stall(
         );
     }
     state.mu = new_mu;
-    filter.reset();
-    let theta_new = state.constraint_violation();
-    filter.set_theta_min_from_initial(theta_new);
+    reset_filter_with_current_theta(state, filter);
     *stall_no_progress_count = 0;
     *stall_best_pr = f64::INFINITY;
     *stall_best_du = f64::INFINITY;
@@ -6324,9 +6314,7 @@ fn handle_dual_stagnation<P: NlpProblem>(
     update_lbfgs_hessian(lbfgs_state, state);
 
     // Reset filter and bump mu for a fresh start from the good point.
-    filter.reset();
-    let theta_restart = state.constraint_violation();
-    filter.set_theta_min_from_initial(theta_restart);
+    reset_filter_with_current_theta(state, filter);
     state.mu = (state.mu * 100.0).max(1e-4).min(1e-1);
     if options.mu_strategy_adaptive {
         mu_state.mode = MuMode::Free;
@@ -8219,9 +8207,7 @@ fn apply_restoration_success<P: NlpProblem>(
     reset_constraint_slack_multipliers_after_restoration(state, m, nuclear_reset);
 
     // Reset filter and re-initialize from restored point
-    filter.reset();
-    let theta_restored = state.constraint_violation();
-    filter.set_theta_min_from_initial(theta_restored);
+    reset_filter_with_current_theta(state, filter);
     state.consecutive_acceptable = 0;
 
     // Recompute mu from current complementarity after restoration
