@@ -3703,6 +3703,70 @@ enum RestorationCascadeDecision {
     Return(SolveResult),
 }
 
+/// Classify the terminal status when the restoration cascade has exhausted its
+/// retry budget. Returns LocalInfeasibility when the constraint-violation
+/// gradient is near-stationary at an infeasible point, Infeasible when theta
+/// has stayed > 1% of its historical minimum well into the run, otherwise
+/// RestorationFailed. Caller must only invoke this once `fail_count` exceeds
+/// `max_restore_attempts`.
+fn classify_exhausted_restoration_attempt(
+    state: &SolverState,
+    options: &SolverOptions,
+    iteration: usize,
+    fail_count: usize,
+    n: usize,
+    m: usize,
+    ever_feasible: bool,
+    theta_history: &[f64],
+    theta_history_len: usize,
+) -> SolveResult {
+    log::warn!(
+        "Restoration failed at iteration {} (attempt #{})",
+        iteration, fail_count
+    );
+    let current_theta = state.constraint_violation();
+
+    if current_theta > options.constr_viol_tol && !ever_feasible {
+        let mut violation = vec![0.0; m];
+        for i in 0..m {
+            let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
+                && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
+            if is_eq {
+                violation[i] = state.g[i] - state.g_l[i];
+            } else if state.g_l[i].is_finite() && state.g[i] < state.g_l[i] {
+                violation[i] = state.g[i] - state.g_l[i];
+            } else if state.g_u[i].is_finite() && state.g[i] > state.g_u[i] {
+                violation[i] = state.g[i] - state.g_u[i];
+            }
+        }
+        let mut grad_theta = vec![0.0; n];
+        for (idx, (&row, &col)) in
+            state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
+        {
+            grad_theta[col] += state.jac_vals[idx] * violation[row];
+        }
+        let grad_theta_norm = grad_theta.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+        let stationarity_tol = 1e-4 * current_theta.max(1.0);
+        if grad_theta_norm < stationarity_tol {
+            log::info!(
+                "Local infeasibility detected: theta={:.2e}, ||∇theta||={:.2e}",
+                current_theta, grad_theta_norm
+            );
+            return make_result(state, SolveStatus::LocalInfeasibility);
+        }
+    }
+
+    if !ever_feasible && current_theta > 1e4 && iteration > 500
+        && theta_history.len() >= theta_history_len
+    {
+        let min_theta = theta_history.iter().cloned().fold(f64::INFINITY, f64::min);
+        if current_theta > 0.01 * min_theta {
+            return make_result(state, SolveStatus::Infeasible);
+        }
+    }
+    make_result(state, SolveStatus::RestorationFailed)
+}
+
 /// Invoke the restoration cascade after a failed line search. Runs the
 /// fast Gauss–Newton restoration first; on failure, rotates through
 /// (a) NLP restoration at `fail_count ∈ {2, 4}`,
@@ -3823,51 +3887,10 @@ fn run_post_ls_restoration_cascade<P: NlpProblem>(
     // For large problems (no NLP restoration), give up sooner.
     let max_restore_attempts = if kkt_dim > 50000 { 3 } else { 6 };
     if fail_count > max_restore_attempts {
-        log::warn!(
-            "Restoration failed at iteration {} (attempt #{})",
-            iteration, fail_count
-        );
-        let current_theta = state.constraint_violation();
-
-        if current_theta > options.constr_viol_tol && !ever_feasible {
-            let mut violation = vec![0.0; m];
-            for i in 0..m {
-                let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
-                    && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
-                if is_eq {
-                    violation[i] = state.g[i] - state.g_l[i];
-                } else if state.g_l[i].is_finite() && state.g[i] < state.g_l[i] {
-                    violation[i] = state.g[i] - state.g_l[i];
-                } else if state.g_u[i].is_finite() && state.g[i] > state.g_u[i] {
-                    violation[i] = state.g[i] - state.g_u[i];
-                }
-            }
-            let mut grad_theta = vec![0.0; n];
-            for (idx, (&row, &col)) in
-                state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
-            {
-                grad_theta[col] += state.jac_vals[idx] * violation[row];
-            }
-            let grad_theta_norm = grad_theta.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
-            let stationarity_tol = 1e-4 * current_theta.max(1.0);
-            if grad_theta_norm < stationarity_tol {
-                log::info!(
-                    "Local infeasibility detected: theta={:.2e}, ||∇theta||={:.2e}",
-                    current_theta, grad_theta_norm
-                );
-                return RestorationCascadeDecision::Return(make_result(state, SolveStatus::LocalInfeasibility));
-            }
-        }
-
-        if !ever_feasible && current_theta > 1e4 && iteration > 500
-            && theta_history.len() >= theta_history_len
-        {
-            let min_theta = theta_history.iter().cloned().fold(f64::INFINITY, f64::min);
-            if current_theta > 0.01 * min_theta {
-                return RestorationCascadeDecision::Return(make_result(state, SolveStatus::Infeasible));
-            }
-        }
-        return RestorationCascadeDecision::Return(make_result(state, SolveStatus::RestorationFailed));
+        return RestorationCascadeDecision::Return(classify_exhausted_restoration_attempt(
+            state, options, iteration, fail_count, n, m, ever_feasible,
+            theta_history, theta_history_len,
+        ));
     }
 
     // Recovery strategies: cycle through mode switches and mu perturbations.
