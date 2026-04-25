@@ -623,18 +623,7 @@ impl SolverState {
             }
         }
 
-        // Push initial point away from bounds
-        for i in 0..n {
-            if x_l[i].is_finite() && x_u[i].is_finite() {
-                let range = x_u[i] - x_l[i];
-                let push = options.bound_push.min(options.bound_frac * range);
-                x[i] = x[i].max(x_l[i] + push).min(x_u[i] - push);
-            } else if x_l[i].is_finite() {
-                x[i] = x[i].max(x_l[i] + options.bound_push);
-            } else if x_u[i].is_finite() {
-                x[i] = x[i].min(x_u[i] - options.bound_push);
-            }
-        }
+        push_initial_point_from_bounds(&mut x, &x_l, &x_u, options);
 
         // Initialize bound multipliers
         let mut z_l = vec![0.0; n];
@@ -8215,6 +8204,28 @@ fn compute_ls_multiplier_rhs(
         b[row] -= jac_vals[idx] * rhs_grad[col];
     }
     b
+}
+
+/// Push the initial point strictly inside finite variable bounds. For
+/// two-sided bounds, the push is min(bound_push, bound_frac * range);
+/// for one-sided bounds it is bound_push.
+fn push_initial_point_from_bounds(
+    x: &mut [f64],
+    x_l: &[f64],
+    x_u: &[f64],
+    options: &SolverOptions,
+) {
+    for i in 0..x.len() {
+        if x_l[i].is_finite() && x_u[i].is_finite() {
+            let range = x_u[i] - x_l[i];
+            let push = options.bound_push.min(options.bound_frac * range);
+            x[i] = x[i].max(x_l[i] + push).min(x_u[i] - push);
+        } else if x_l[i].is_finite() {
+            x[i] = x[i].max(x_l[i] + options.bound_push);
+        } else if x_u[i].is_finite() {
+            x[i] = x[i].min(x_u[i] - options.bound_push);
+        }
+    }
 }
 
 /// Compute initial constraint multipliers via least-squares estimate when
