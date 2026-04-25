@@ -5207,9 +5207,44 @@ struct ConvergenceWorkspace<'a> {
 /// plus the near-tolerance polishing heuristics (`RecalcIpoptData`,
 /// multiplier snap), which live inline in Ipopt as well.
 ///
-/// Extracted from `solve_ipm` as part of the v0.8 main-loop decomposition
-/// (pre-work step 2).
-#[allow(clippy::too_many_arguments)]
+/// Snapshot of (x, y, z_l, z_u) used by speculative promotion paths
+/// (iterate averaging, active-set solve) to roll back if the speculative
+/// step fails to converge.
+struct SavedIterate {
+    x: Vec<f64>,
+    y: Vec<f64>,
+    z_l: Vec<f64>,
+    z_u: Vec<f64>,
+}
+
+impl SavedIterate {
+    fn snapshot(state: &SolverState) -> Self {
+        Self {
+            x: state.x.clone(),
+            y: state.y.clone(),
+            z_l: state.z_l.clone(),
+            z_u: state.z_u.clone(),
+        }
+    }
+
+    /// Restore (x, y, z_l, z_u) into `state` and re-evaluate the problem
+    /// at the restored x. The eval result is discarded — callers expect
+    /// the saved point to have been valid.
+    fn restore_and_reeval<P: NlpProblem>(
+        &self,
+        state: &mut SolverState,
+        problem: &P,
+        linear_constraints: Option<&[bool]>,
+        lbfgs_mode: bool,
+    ) {
+        state.x.copy_from_slice(&self.x);
+        state.y.copy_from_slice(&self.y);
+        state.z_l.copy_from_slice(&self.z_l);
+        state.z_u.copy_from_slice(&self.z_u);
+        let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+    }
+}
+
 /// Strategy 1 (Acceptable promotion): if the dual-infeasibility history has
 /// `AVG_WINDOW` entries and shows oscillation (>= AVG_WINDOW/2 sign changes
 /// in consecutive differences), average the last `AVG_WINDOW` iterates and
@@ -5262,10 +5297,7 @@ fn try_iterate_averaging_promotion<P: NlpProblem>(
         avg_zl[i] = avg_zl[i].max(0.0);
         avg_zu[i] = avg_zu[i].max(0.0);
     }
-    let saved_x = state.x.clone();
-    let saved_y = state.y.clone();
-    let saved_zl = state.z_l.clone();
-    let saved_zu = state.z_u.clone();
+    let saved = SavedIterate::snapshot(state);
     state.x.copy_from_slice(&avg_x);
     state.y.copy_from_slice(&avg_y);
     state.z_l.copy_from_slice(&avg_zl);
@@ -5295,11 +5327,7 @@ fn try_iterate_averaging_promotion<P: NlpProblem>(
         }
         return Some(make_result(state, SolveStatus::Optimal));
     }
-    state.x.copy_from_slice(&saved_x);
-    state.y.copy_from_slice(&saved_y);
-    state.z_l.copy_from_slice(&saved_zl);
-    state.z_u.copy_from_slice(&saved_zu);
-    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+    saved.restore_and_reeval(state, problem, linear_constraints, lbfgs_mode);
     None
 }
 
@@ -9027,10 +9055,7 @@ fn try_active_set_solve<P: NlpProblem>(
     let ActiveSet { active_lower, active_upper, free_idx, orig_to_free, n_free, dim } = active_set;
 
     // Fix active variables at their bounds (save full state for restoration)
-    let saved_x = state.x.clone();
-    let saved_y = state.y.clone();
-    let saved_zl = state.z_l.clone();
-    let saved_zu = state.z_u.clone();
+    let saved = SavedIterate::snapshot(state);
     for i in 0..n {
         if active_lower[i] {
             state.x[i] = state.x_l[i];
@@ -9048,11 +9073,7 @@ fn try_active_set_solve<P: NlpProblem>(
     let solution = dense_symmetric_solve(dim, &mut kkt, &mut rhs);
     if solution.is_none() {
         // Singular system, restore and bail
-        state.x.copy_from_slice(&saved_x);
-        state.y.copy_from_slice(&saved_y);
-        state.z_l.copy_from_slice(&saved_zl);
-        state.z_u.copy_from_slice(&saved_zu);
-        let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+        saved.restore_and_reeval(state, problem, linear_constraints, lbfgs_mode);
         return None;
     }
     let sol = solution.unwrap();
@@ -9124,11 +9145,7 @@ fn try_active_set_solve<P: NlpProblem>(
     }
 
     // Didn't converge; restore original state and re-evaluate
-    state.x.copy_from_slice(&saved_x);
-    state.y.copy_from_slice(&saved_y);
-    state.z_l.copy_from_slice(&saved_zl);
-    state.z_u.copy_from_slice(&saved_zu);
-    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+    saved.restore_and_reeval(state, problem, linear_constraints, lbfgs_mode);
 
     None
 }
