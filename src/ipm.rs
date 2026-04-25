@@ -5405,6 +5405,93 @@ fn check_stall_near_tolerance_via_optimal_duals(
     None
 }
 
+/// Handle a stall whose current iterate is near-tolerance (1000x tol on
+/// each metric). Three sub-decisions in priority order:
+/// 1. mu has outrun feasibility (mu < 0.01*pr_max while pr_max above
+///    constr_viol_tol): boost mu to 0.1*pr_max, switch to Fixed mode,
+///    return Continue.
+/// 2. Fixed (monotone) mode + mu still above mu_min: force a mu decrease
+///    by min(linear, superlinear) rate (the barrier subproblem is
+///    effectively solved at the current mu), return Continue.
+/// 3. Otherwise, classify as Acceptable when both unscaled (1e-2) and
+///    scaled (1e-6 * s_d) tolerances pass; else return NumericalError.
+#[allow(clippy::too_many_arguments)]
+fn handle_near_tolerance_stall(
+    state: &mut SolverState,
+    options: &SolverOptions,
+    primal_inf: f64,
+    primal_inf_max: f64,
+    dual_inf: f64,
+    compl_inf: f64,
+    s_d_for_acc: f64,
+    filter: &mut Filter,
+    mu_state: &mut MuState,
+    stall_no_progress_count: &mut usize,
+    stall_best_pr: &mut f64,
+    stall_best_du: &mut f64,
+) -> StallDecision {
+    if state.mu < primal_inf_max * 0.01 && primal_inf_max > options.constr_viol_tol {
+        let new_mu = (primal_inf_max * 0.1).max(1e-6);
+        if options.print_level >= 3 {
+            rip_log!(
+                "ripopt: Near-tolerance stall: boosting mu {:.2e} -> {:.2e} (pr_max={:.2e})",
+                state.mu, new_mu, primal_inf_max
+            );
+        }
+        state.mu = new_mu;
+        filter.reset();
+        let theta_new = state.constraint_violation();
+        filter.set_theta_min_from_initial(theta_new);
+        *stall_no_progress_count = 0;
+        *stall_best_pr = f64::INFINITY;
+        *stall_best_du = f64::INFINITY;
+        mu_state.mode = MuMode::Fixed;
+        mu_state.first_iter_in_mode = true;
+        return StallDecision::Continue;
+    }
+    if !options.mu_strategy_adaptive && state.mu > options.mu_min {
+        let new_mu = (options.mu_linear_decrease_factor * state.mu)
+            .min(state.mu.powf(options.mu_superlinear_decrease_power))
+            .max(options.mu_min);
+        if options.print_level >= 3 {
+            rip_log!(
+                "ripopt: Fixed mode stall near tolerance (pr={:.2e}, du={:.2e}, co={:.2e}), forcing mu {:.2e} -> {:.2e}",
+                primal_inf, dual_inf, compl_inf, state.mu, new_mu
+            );
+        }
+        state.mu = new_mu;
+        filter.reset();
+        let theta_new = state.constraint_violation();
+        filter.set_theta_min_from_initial(theta_new);
+        *stall_no_progress_count = 0;
+        *stall_best_pr = f64::INFINITY;
+        *stall_best_du = f64::INFINITY;
+        return StallDecision::Continue;
+    }
+    let acc_pr_ok = primal_inf_max <= 1e-2;
+    let acc_du_ok = dual_inf <= 1e10;
+    let acc_co_ok = compl_inf <= 1e-2;
+    let acc_scaled_ok = primal_inf_max <= 1e-6
+        && dual_inf <= 1e-6 * s_d_for_acc
+        && compl_inf <= 1e-6 * s_d_for_acc;
+    if acc_pr_ok && acc_du_ok && acc_co_ok && acc_scaled_ok {
+        if options.print_level >= 3 {
+            rip_log!(
+                "ripopt: Stalled at acceptable tolerance (pr={:.2e}, du={:.2e}, co={:.2e}), returning Acceptable",
+                primal_inf, dual_inf, compl_inf
+            );
+        }
+        return StallDecision::Return(make_result(state, SolveStatus::Acceptable));
+    }
+    if options.print_level >= 3 {
+        rip_log!(
+            "ripopt: Stalled but near-tolerance (pr={:.2e}, du={:.2e}, co={:.2e}), returning NumericalError",
+            primal_inf, dual_inf, compl_inf
+        );
+    }
+    StallDecision::Return(make_result(state, SolveStatus::NumericalError))
+}
+
 fn detect_and_handle_progress_stall<P: NlpProblem>(
     state: &mut SolverState,
     problem: &P,
@@ -5462,74 +5549,11 @@ fn detect_and_handle_progress_stall<P: NlpProblem>(
     let stall_du_ok = dual_inf <= (stall_near_tol * s_d_for_acc).max(1e-2);
     let stall_co_ok = compl_inf <= (stall_near_tol * s_d_for_acc).max(1e-2);
     if stall_pr_ok && stall_du_ok && stall_co_ok {
-        // Near-tolerance stall: try boosting μ if it's very small relative
-        // to primal_inf. Restores KKT regularization when μ has outrun
-        // feasibility.
-        if state.mu < primal_inf_max * 0.01 && primal_inf_max > options.constr_viol_tol {
-            let new_mu = (primal_inf_max * 0.1).max(1e-6);
-            if options.print_level >= 3 {
-                rip_log!(
-                    "ripopt: Near-tolerance stall: boosting mu {:.2e} -> {:.2e} (pr_max={:.2e})",
-                    state.mu, new_mu, primal_inf_max
-                );
-            }
-            state.mu = new_mu;
-            filter.reset();
-            let theta_new = state.constraint_violation();
-            filter.set_theta_min_from_initial(theta_new);
-            *stall_no_progress_count = 0;
-            *stall_best_pr = f64::INFINITY;
-            *stall_best_du = f64::INFINITY;
-            mu_state.mode = MuMode::Fixed;
-            mu_state.first_iter_in_mode = true;
-            return StallDecision::Continue;
-        }
-        // In Fixed (monotone) mode, stalling near tolerance means the
-        // barrier subproblem is solved at the current μ — force a μ
-        // decrease to continue toward the NLP optimum.
-        if !options.mu_strategy_adaptive && state.mu > options.mu_min {
-            let new_mu = (options.mu_linear_decrease_factor * state.mu)
-                .min(state.mu.powf(options.mu_superlinear_decrease_power))
-                .max(options.mu_min);
-            if options.print_level >= 3 {
-                rip_log!(
-                    "ripopt: Fixed mode stall near tolerance (pr={:.2e}, du={:.2e}, co={:.2e}), forcing mu {:.2e} -> {:.2e}",
-                    primal_inf, dual_inf, compl_inf, state.mu, new_mu
-                );
-            }
-            state.mu = new_mu;
-            filter.reset();
-            let theta_new = state.constraint_violation();
-            filter.set_theta_min_from_initial(theta_new);
-            *stall_no_progress_count = 0;
-            *stall_best_pr = f64::INFINITY;
-            *stall_best_du = f64::INFINITY;
-            return StallDecision::Continue;
-        }
-        // Stalled near-tolerance: check Ipopt's Acceptable thresholds
-        // (IpOptErrorConvCheck.cpp defaults).
-        let acc_pr_ok = primal_inf_max <= 1e-2;
-        let acc_du_ok = dual_inf <= 1e10;
-        let acc_co_ok = compl_inf <= 1e-2;
-        let acc_scaled_ok = primal_inf_max <= 1e-6
-            && dual_inf <= 1e-6 * s_d_for_acc
-            && compl_inf <= 1e-6 * s_d_for_acc;
-        if acc_pr_ok && acc_du_ok && acc_co_ok && acc_scaled_ok {
-            if options.print_level >= 3 {
-                rip_log!(
-                    "ripopt: Stalled at acceptable tolerance (pr={:.2e}, du={:.2e}, co={:.2e}), returning Acceptable",
-                    primal_inf, dual_inf, compl_inf
-                );
-            }
-            return StallDecision::Return(make_result(state, SolveStatus::Acceptable));
-        }
-        if options.print_level >= 3 {
-            rip_log!(
-                "ripopt: Stalled but near-tolerance (pr={:.2e}, du={:.2e}, co={:.2e}), returning NumericalError",
-                primal_inf, dual_inf, compl_inf
-            );
-        }
-        return StallDecision::Return(make_result(state, SolveStatus::NumericalError));
+        return handle_near_tolerance_stall(
+            state, options, primal_inf, primal_inf_max, dual_inf, compl_inf,
+            s_d_for_acc, filter, mu_state,
+            stall_no_progress_count, stall_best_pr, stall_best_du,
+        );
     }
     if let Some(decision) = check_stall_near_tolerance_via_optimal_duals(
         state, options, primal_inf, primal_inf_max, compl_inf, stall_near_tol, n, m,
