@@ -3703,6 +3703,64 @@ enum RestorationCascadeDecision {
     Return(SolveResult),
 }
 
+/// Attempt full NLP restoration on `fail_count ∈ {2, 4}` (skipped if
+/// disabled, KKT dim > 50000, or the early-stall timeout has nearly
+/// elapsed within the first 3 iterations). Returns true when restoration
+/// succeeded and the cascade should short-circuit with `Continue`; false
+/// when the caller should fall through to the recovery / max-attempts
+/// classification.
+#[allow(clippy::too_many_arguments)]
+fn try_nlp_restoration_phase<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    options: &SolverOptions,
+    filter: &mut Filter,
+    mu_state: &mut MuState,
+    lbfgs_state: &mut Option<LbfgsIpmState>,
+    lbfgs_mode: bool,
+    linear_constraints: Option<&[bool]>,
+    iteration: usize,
+    fail_count: usize,
+    n: usize,
+    m: usize,
+    start_time: Instant,
+    early_timeout: f64,
+    theta_current: f64,
+) -> bool {
+    let kkt_dim = n + m;
+    let skip_nlp_restoration = iteration < 3
+        && options.early_stall_timeout > 0.0
+        && start_time.elapsed().as_secs_f64() > early_timeout * 0.5;
+    if !((fail_count == 2 || fail_count == 4)
+        && !options.disable_nlp_restoration
+        && kkt_dim <= 50000
+        && !skip_nlp_restoration)
+    {
+        return false;
+    }
+
+    state.diagnostics.nlp_restoration_count += 1;
+    let (x_nlp, outcome) = attempt_nlp_restoration(
+        problem, state, filter, options, theta_current, start_time,
+    );
+    match outcome {
+        RestorationOutcome::Success => {
+            apply_restoration_success(
+                state, filter, mu_state, options, n, m,
+                problem, &x_nlp,
+                linear_constraints, lbfgs_mode, lbfgs_state,
+            );
+            true
+        }
+        RestorationOutcome::LocalInfeasibility | RestorationOutcome::Failed => {
+            // Fall through to continue recovery. Don't immediately return
+            // LocalInfeasibility — the fail_count > 6 stationarity check
+            // is more reliable.
+            false
+        }
+    }
+}
+
 /// Run the fast Gauss–Newton restoration. Returns true if GN restoration
 /// succeeded and `apply_restoration_success` was invoked (caller should
 /// short-circuit the cascade with `Continue`); false otherwise (caller
@@ -3956,39 +4014,16 @@ fn run_post_ls_restoration_cascade<P: NlpProblem>(
     mu_state.consecutive_restoration_failures += 1;
     let fail_count = mu_state.consecutive_restoration_failures;
 
-    // At fail_count == 2 (or 4): try full NLP restoration. It's Ipopt's primary
-    // method — most robust, but doubles the problem size, so skip for large n+m.
-    let kkt_dim = n + m;
-    let skip_nlp_restoration = iteration < 3
-        && options.early_stall_timeout > 0.0
-        && start_time.elapsed().as_secs_f64() > early_timeout * 0.5;
-    if (fail_count == 2 || fail_count == 4)
-        && !options.disable_nlp_restoration
-        && kkt_dim <= 50000
-        && !skip_nlp_restoration
-    {
-        state.diagnostics.nlp_restoration_count += 1;
-        let (x_nlp, outcome) = attempt_nlp_restoration(
-            problem, state, filter, options, theta_current, start_time,
-        );
-        match outcome {
-            RestorationOutcome::Success => {
-                apply_restoration_success(
-                    state, filter, mu_state, options, n, m,
-                    problem, &x_nlp,
-                    linear_constraints, lbfgs_mode, lbfgs_state,
-                );
-                return RestorationCascadeDecision::Continue;
-            }
-            RestorationOutcome::LocalInfeasibility | RestorationOutcome::Failed => {
-                // Fall through to continue recovery. Don't immediately return
-                // LocalInfeasibility — the fail_count > 6 stationarity check below
-                // is more reliable.
-            }
-        }
+    if try_nlp_restoration_phase(
+        state, problem, options, filter, mu_state, lbfgs_state, lbfgs_mode,
+        linear_constraints, iteration, fail_count, n, m, start_time,
+        early_timeout, theta_current,
+    ) {
+        return RestorationCascadeDecision::Continue;
     }
 
     // For large problems (no NLP restoration), give up sooner.
+    let kkt_dim = n + m;
     let max_restore_attempts = if kkt_dim > 50000 { 3 } else { 6 };
     if fail_count > max_restore_attempts {
         return RestorationCascadeDecision::Return(classify_exhausted_restoration_attempt(
