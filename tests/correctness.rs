@@ -1852,3 +1852,17 @@ fn user_scaling_produces_correct_result() {
     assert!((result2.x[0] - 1.0).abs() < 1e-6);
     assert!((result2.x[1] - 1.0).abs() < 1e-6);
 }
+
+/// Roadmap item #9 guardrail: user_x_scaling is not implemented yet, so
+/// the solver must refuse the call rather than silently solving the
+/// unscaled problem and pretending the scaling was applied.
+#[test]
+fn user_x_scaling_is_rejected() {
+    let opts = SolverOptions {
+        print_level: 0,
+        user_x_scaling: Some(vec![2.0, 2.0]),
+        ..SolverOptions::default()
+    };
+    let result = ripopt::solve(&Rosenbrock, &opts);
+    assert_eq!(result.status, SolveStatus::InternalError);
+}

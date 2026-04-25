@@ -192,8 +192,12 @@ pub struct SolverOptions {
     /// User-provided constraint scaling factors (length m). When `Some`, bypasses
     /// automatic gradient-based constraint scaling.
     pub user_g_scaling: Option<Vec<f64>>,
-    /// User-provided variable scaling factors (length n). When `Some`, the solver
-    /// transforms variables as x_scaled = x / x_scaling before solving.
+    /// User-provided variable scaling factors (length n). **NOT YET
+    /// IMPLEMENTED.** The solver currently rejects calls with
+    /// `Some(...)` here and returns `SolveStatus::InternalError`,
+    /// rather than silently ignoring the request. Set this to `None`
+    /// (the default) to proceed with automatic gradient-based
+    /// scaling. Tracked as roadmap item #9.
     pub user_x_scaling: Option<Vec<f64>>,
     /// Initial constraint multipliers for warm starting.
     pub warm_start_y: Option<Vec<f64>>,

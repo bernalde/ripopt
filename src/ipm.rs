@@ -1877,6 +1877,37 @@ fn try_ne_to_ls_reformulation<P: NlpProblem>(
 pub fn solve<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult {
     let solve_start = Instant::now();
 
+    // Roadmap item #9: `options.user_x_scaling` is documented to scale
+    // primal variables, but the solver does not yet wrap the NLP with
+    // an x-scaling adapter. Returning silently with the unscaled
+    // solution would let the caller believe their scaling was applied;
+    // refuse the request loudly instead so the user can either remove
+    // the field or wait for the wrapper. Mirrors Ipopt's behavior of
+    // honoring `nlp_scaling_method = user-scaling` only when the full
+    // user-scaling path is wired (`IpScaledNLP`); a partial wiring
+    // there returns an error rather than ignoring the input.
+    if let Some(ref xs) = options.user_x_scaling {
+        if !xs.is_empty() {
+            rip_log!(
+                "ripopt: user_x_scaling was provided ({} entries) but variable \
+                 scaling is not yet implemented; returning InternalError. Clear \
+                 options.user_x_scaling to proceed with automatic scaling.",
+                xs.len()
+            );
+            return SolveResult {
+                x: vec![0.0; problem.num_variables()],
+                objective: f64::NAN,
+                constraint_multipliers: vec![0.0; problem.num_constraints()],
+                bound_multipliers_lower: vec![0.0; problem.num_variables()],
+                bound_multipliers_upper: vec![0.0; problem.num_variables()],
+                constraint_values: vec![0.0; problem.num_constraints()],
+                status: SolveStatus::InternalError,
+                iterations: 0,
+                diagnostics: SolverDiagnostics::default(),
+            };
+        }
+    }
+
     // Capture initial objective and feasibility for slow-optimal detection.
     // NOTE: disabled -- extra problem evaluations here change CUTEst FP state and cause regressions.
     let (initial_obj, initial_feasible) = (f64::INFINITY, false);

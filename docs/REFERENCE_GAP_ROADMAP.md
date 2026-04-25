@@ -62,8 +62,14 @@ where a reader short on time should start.
    nonlinear constraints whose Jacobians happened to match at `x0`.
    Regression covered by
    `test_redundancy_guard_bound_wedged_variable`.
-9. **ripopt: `user_x_scaling` option is declared but not applied**
-   (`src/options.rs:188` vs `src/ipm.rs:2094-2170`). Silent no-op.
+9. ~~**ripopt: `user_x_scaling` option is declared but not applied**~~
+   **DONE (guardrail).** `solve()` now refuses calls with
+   `Some(user_x_scaling)` and returns `SolveStatus::InternalError`
+   with a log message, rather than silently returning the unscaled
+   solution. The full x-scaling NLP wrapper (Ipopt's `IpScaledNLP`)
+   remains a feature gap to land in v0.9; the docstring on
+   `SolverOptions::user_x_scaling` is updated to advertise this.
+   Regression: `user_x_scaling_is_rejected`.
 10. **rmumps: unify the two pivot-search paths.** The classic-BK code
     path runs when `pivot_threshold = 0.0` and cannot emit delayed
     pivots at all. Callers who disable thresholding think they are
