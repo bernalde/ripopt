@@ -2462,7 +2462,7 @@ fn run_line_search_loop<P: NlpProblem>(
     m: usize,
     start_time: Instant,
     early_timeout: f64,
-    last_soc_accepted: &mut bool,
+    trace_meta: &mut TraceMetadata,
     ls_steps: &mut usize,
 ) -> LineSearchOutcome {
     let mut alpha = alpha_primal_max;
@@ -2542,7 +2542,7 @@ fn run_line_search_loop<P: NlpProblem>(
             );
             if let Some((x_soc, obj_soc, g_soc, alpha_soc)) = soc_accepted {
                 state.diagnostics.soc_corrections += 1;
-                *last_soc_accepted = true;
+                trace_meta.soc_accepted = true;
                 commit_trial_point(state, x_soc, obj_soc, g_soc, alpha_soc);
                 step_accepted = true;
                 filter.add(theta_current, phi_current);
@@ -6284,6 +6284,19 @@ fn compute_sigma_condition(state: &SolverState) -> f64 {
     }
 }
 
+/// Per-iteration trace intermediates captured during the line-search /
+/// direction-compute sub-phases, drained into the TSV at iteration-end.
+/// The α_primal_max and τ values are set after compute_alpha_max; the
+/// SOC-accepted flag is set inside the line-search loop. Reset to
+/// defaults after each emission so a missing assignment shows as NaN
+/// rather than stale data.
+#[derive(Default)]
+struct TraceMetadata {
+    alpha_primal_max: Option<f64>,
+    tau_used: Option<f64>,
+    soc_accepted: bool,
+}
+
 fn emit_trace_row_if_enabled(
     state: &SolverState,
     iteration: usize,
@@ -6293,9 +6306,7 @@ fn emit_trace_row_if_enabled(
     ls_steps: usize,
     inertia_params: &InertiaCorrectionParams,
     last_mehrotra_sigma: Option<f64>,
-    last_alpha_primal_max: &mut Option<f64>,
-    last_tau_used: &mut Option<f64>,
-    last_soc_accepted: &mut bool,
+    trace_meta: &mut TraceMetadata,
 ) {
     if !trace::is_enabled() {
         return;
@@ -6326,14 +6337,14 @@ fn emit_trace_row_if_enabled(
         mcc_iters: 0,
         ls: ls_steps as u32,
         accepted: true,
-        alpha_primal_max: last_alpha_primal_max.unwrap_or(f64::NAN),
-        tau_used: last_tau_used.unwrap_or(f64::NAN),
+        alpha_primal_max: trace_meta.alpha_primal_max.unwrap_or(f64::NAN),
+        tau_used: trace_meta.tau_used.unwrap_or(f64::NAN),
         sigma_cond,
-        soc_accepted: *last_soc_accepted,
+        soc_accepted: trace_meta.soc_accepted,
     });
-    *last_alpha_primal_max = None;
-    *last_tau_used = None;
-    *last_soc_accepted = false;
+    trace_meta.alpha_primal_max = None;
+    trace_meta.tau_used = None;
+    trace_meta.soc_accepted = false;
 }
 
 /// Populate the per-iteration IterateSnapshot and invoke the user
@@ -6825,9 +6836,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let mut last_mehrotra_sigma: Option<f64> = None;
     // Per-iteration trace intermediates captured during the line-search /
     // direction-compute sub-phases, drained into the TSV at iteration-end.
-    let mut last_alpha_primal_max: Option<f64> = None;
-    let mut last_tau_used: Option<f64> = None;
-    let mut last_soc_accepted: bool = false;
+    let mut trace_meta = TraceMetadata::default();
 
     // Free/fixed mu mode state (replaces ad-hoc stall recovery)
     let mut mu_state = MuState::new();
@@ -6983,9 +6992,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             ls_steps,
             &inertia_params,
             last_mehrotra_sigma,
-            &mut last_alpha_primal_max,
-            &mut last_tau_used,
-            &mut last_soc_accepted,
+            &mut trace_meta,
         );
 
         if let Some(result) = populate_snapshot_and_invoke_callback(
@@ -7217,8 +7224,8 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         let (tau, alpha_primal_max, alpha_dual_max) = compute_alpha_max(
             &state, options, &mu_state, primal_inf, dual_inf, compl_inf,
         );
-        last_alpha_primal_max = Some(alpha_primal_max);
-        last_tau_used = Some(tau);
+        trace_meta.alpha_primal_max = Some(alpha_primal_max);
+        trace_meta.tau_used = Some(tau);
 
         detect_tiny_step(
             &mut state,
@@ -7266,7 +7273,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             m,
             start_time,
             early_timeout,
-            &mut last_soc_accepted,
+            &mut trace_meta,
             &mut ls_steps,
         ) {
             LineSearchOutcome::StepAccepted => {
