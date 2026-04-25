@@ -8293,17 +8293,7 @@ fn attempt_nlp_restoration<P: NlpProblem>(
     // Using a mu_init consistent with the current infeasibility makes the
     // closed-form (p,n) init well-conditioned: when theta ≫ mu, the slacks
     // would otherwise be pinned near 0 with enormous bound multipliers.
-    let c_inf = {
-        let mut v: f64 = 0.0;
-        for i in 0..m {
-            if state.g_l[i].is_finite() && state.g[i] < state.g_l[i] {
-                v = v.max(state.g_l[i] - state.g[i]);
-            } else if state.g_u[i].is_finite() && state.g[i] > state.g_u[i] {
-                v = v.max(state.g[i] - state.g_u[i]);
-            }
-        }
-        v
-    };
+    let c_inf = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
     let resto_mu = state.mu.max(c_inf);
 
     // Build restoration NLP using the same resto_mu for p/n quadratic init.
