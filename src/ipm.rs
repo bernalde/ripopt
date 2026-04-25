@@ -3971,10 +3971,7 @@ fn track_post_step_acceptable(state: &mut SolverState, options: &SolverOptions) 
         accumulate_jt_y(state, &mut gj);
         recover_active_set_z(state, &gj, n)
     };
-    let post_du = convergence::dual_infeasibility(
-        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-        &state.y, &post_zl_opt, &post_zu_opt, n,
-    );
+    let post_du = dual_inf_with_z(state, &post_zl_opt, &post_zu_opt);
     let post_du_unsc = convergence::dual_infeasibility_scaled(
         &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
         &state.y, &state.z_l, &state.z_u, n,
@@ -5830,10 +5827,7 @@ fn check_stall_near_tolerance_via_optimal_duals(
     let mut gj = state.grad_f.clone();
     accumulate_jt_y(state, &mut gj);
     let (opt_zl, opt_zu) = recover_active_set_z(state, &gj, n);
-    let opt_du = convergence::dual_infeasibility(
-        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-        &state.y, &opt_zl, &opt_zu, n,
-    );
+    let opt_du = dual_inf_with_z(state, &opt_zl, &opt_zu);
     let opt_co = convergence::complementarity_error(
         &state.x, &state.x_l, &state.x_u, &opt_zl, &opt_zu, 0.0,
     );
@@ -8818,6 +8812,17 @@ fn compute_dual_inf_at_state(state: &SolverState) -> f64 {
     convergence::dual_infeasibility(
         &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
         &state.y, &state.z_l, &state.z_u, state.n,
+    )
+}
+
+/// `convergence::dual_infeasibility` at the current iterate using
+/// caller-supplied `z_l`/`z_u` (typically the active-set z recovered
+/// by [`recover_active_set_z`] for an optimistic optimality probe)
+/// instead of `state.z_l`/`state.z_u`.
+fn dual_inf_with_z(state: &SolverState, z_l: &[f64], z_u: &[f64]) -> f64 {
+    convergence::dual_infeasibility(
+        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+        &state.y, z_l, z_u, state.n,
     )
 }
 
