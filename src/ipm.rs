@@ -6204,6 +6204,33 @@ fn handle_dual_stagnation<P: NlpProblem>(
 /// Extracted from `solve_ipm` as part of the v0.8 main-loop
 /// decomposition (pre-work step 2). Pure side-effect function.
 #[allow(clippy::too_many_arguments)]
+/// log10(max Σ_i / min Σ_i) where Σ_i = z_l_i/s_l_i + z_u_i/s_u_i over
+/// variables with at least one active bound. High values (~10+) signal
+/// ill-conditioning of the condensed KKT at low μ and are a suspect for
+/// α=1/low-μ direction-quality issues. Returns NaN when no Σ_i > 0.
+fn compute_sigma_condition(state: &SolverState) -> f64 {
+    let mut mn = f64::INFINITY;
+    let mut mx = 0.0_f64;
+    for i in 0..state.n {
+        let mut s_i = 0.0_f64;
+        if state.x_l[i].is_finite() {
+            s_i += state.z_l[i] / slack_xl(state, i);
+        }
+        if state.x_u[i].is_finite() {
+            s_i += state.z_u[i] / slack_xu(state, i);
+        }
+        if s_i > 0.0 {
+            mn = mn.min(s_i);
+            mx = mx.max(s_i);
+        }
+    }
+    if mn.is_finite() && mn > 0.0 && mx > 0.0 {
+        (mx / mn).log10()
+    } else {
+        f64::NAN
+    }
+}
+
 fn emit_trace_row_if_enabled(
     state: &SolverState,
     iteration: usize,
@@ -6220,36 +6247,10 @@ fn emit_trace_row_if_enabled(
     if !trace::is_enabled() {
         return;
     }
-    let n = state.n;
     let dx_inf = linf_norm(&state.dx);
     let dzl_inf = linf_norm(&state.dz_l);
     let dzu_inf = linf_norm(&state.dz_u);
-    // log10(max Σ_i / min Σ_i) where Σ_i = z_l_i/s_l_i + z_u_i/s_u_i.
-    // High values (~10+) signal ill-conditioning of the condensed KKT at
-    // low μ and are an α=1/low-μ direction-quality suspect.
-    let (sigma_min, sigma_max_val) = {
-        let mut mn = f64::INFINITY;
-        let mut mx = 0.0_f64;
-        for i in 0..n {
-            let mut s_i = 0.0_f64;
-            if state.x_l[i].is_finite() {
-                s_i += state.z_l[i] / slack_xl(state, i);
-            }
-            if state.x_u[i].is_finite() {
-                s_i += state.z_u[i] / slack_xu(state, i);
-            }
-            if s_i > 0.0 {
-                mn = mn.min(s_i);
-                mx = mx.max(s_i);
-            }
-        }
-        (mn, mx)
-    };
-    let sigma_cond = if sigma_min.is_finite() && sigma_min > 0.0 && sigma_max_val > 0.0 {
-        (sigma_max_val / sigma_min).log10()
-    } else {
-        f64::NAN
-    };
+    let sigma_cond = compute_sigma_condition(state);
     trace::emit(&trace::TraceRow {
         iter: iteration,
         obj: state.obj / state.obj_scaling,
