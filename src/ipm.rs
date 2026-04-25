@@ -5321,6 +5321,90 @@ enum StallDecision {
 /// Extracted from `solve_ipm` as part of the v0.8 main-loop
 /// decomposition.
 #[allow(clippy::too_many_arguments)]
+/// Full two-gate near-tolerance check with optimal dual multipliers. When
+/// duals have diverged but the primal point is near-optimal (HS116,
+/// CONCON), the simple `compl_inf`/`dual_inf` check fails because it uses
+/// the current (diverged) duals. This helper recomputes optimal duals from
+/// the gradient (z = max(0, ∇L) capped at kc*mu/slack), then checks both
+/// the scaled (sc) and unscaled (usc) tolerance gates. Returns
+/// `Some(StallDecision::Return(NumericalError))` when both gates pass —
+/// in which case the caller should exit with NumericalError because the
+/// iterate is good enough to not be a hard failure but the solver can't
+/// drive it further. Returns `None` to let the caller continue with the
+/// remaining stall-recovery logic.
+fn check_stall_near_tolerance_via_optimal_duals(
+    state: &SolverState,
+    options: &SolverOptions,
+    primal_inf: f64,
+    primal_inf_max: f64,
+    compl_inf: f64,
+    stall_near_tol: f64,
+    n: usize,
+    m: usize,
+) -> Option<StallDecision> {
+    let mut gj = state.grad_f.clone();
+    for (idx, (&row, &col)) in
+        state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
+    {
+        gj[col] += state.jac_vals[idx] * state.y[row];
+    }
+    let mut opt_zl = vec![0.0; n];
+    let mut opt_zu = vec![0.0; n];
+    let kc = 1e10;
+    for i in 0..n {
+        if gj[i] > 0.0 && state.x_l[i].is_finite() {
+            let sl = (state.x[i] - state.x_l[i]).max(1e-20);
+            if gj[i] * sl <= kc * state.mu.max(1e-20) {
+                opt_zl[i] = gj[i];
+            }
+        } else if gj[i] < 0.0 && state.x_u[i].is_finite() {
+            let su = (state.x_u[i] - state.x[i]).max(1e-20);
+            if (-gj[i]) * su <= kc * state.mu.max(1e-20) {
+                opt_zu[i] = -gj[i];
+            }
+        }
+    }
+    let opt_du = convergence::dual_infeasibility(
+        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+        &state.y, &opt_zl, &opt_zu, n,
+    );
+    let opt_co = convergence::complementarity_error(
+        &state.x, &state.x_l, &state.x_u, &opt_zl, &opt_zu, 0.0,
+    );
+    let opt_co_best = compl_inf.min(opt_co);
+    let fmult: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
+        + opt_zl.iter().map(|v| v.abs()).sum::<f64>()
+        + opt_zu.iter().map(|v| v.abs()).sum::<f64>();
+    let fsd = if (m + 2 * n) > 0 {
+        ((100.0f64.max(fmult / (m + 2 * n) as f64)) / 100.0).min(1e4)
+    } else {
+        1.0
+    };
+    let stall_fdu_tol = (stall_near_tol * fsd).max(1e-2);
+    let stall_fco_tol = (stall_near_tol * fsd).max(1e-2);
+    let stall_fpr_tol = stall_near_tol.max(10.0 * options.constr_viol_tol);
+    let sc = primal_inf_max <= stall_fpr_tol
+        && opt_du <= stall_fdu_tol
+        && opt_co_best <= stall_fco_tol;
+    let du_u = convergence::dual_infeasibility_scaled(
+        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+        &state.y, &state.z_l, &state.z_u, n,
+    );
+    let usc = primal_inf_max <= 10.0 * options.constr_viol_tol
+        && du_u <= 10.0 * options.dual_inf_tol
+        && opt_co_best <= 10.0 * options.compl_inf_tol;
+    if sc && usc {
+        if options.print_level >= 3 {
+            rip_log!(
+                "ripopt: Stalled but near-tolerance via optimal duals (pr={:.2e}, du_opt={:.2e}, co={:.2e}), returning NumericalError",
+                primal_inf, opt_du, opt_co_best
+            );
+        }
+        return Some(StallDecision::Return(make_result(state, SolveStatus::NumericalError)));
+    }
+    None
+}
+
 fn detect_and_handle_progress_stall<P: NlpProblem>(
     state: &mut SolverState,
     problem: &P,
@@ -5447,71 +5531,10 @@ fn detect_and_handle_progress_stall<P: NlpProblem>(
         }
         return StallDecision::Return(make_result(state, SolveStatus::NumericalError));
     }
-    // Full two-gate near-tolerance check with optimal dual multipliers.
-    // When duals have diverged but the primal point is near-optimal
-    // (HS116, CONCON), the simple check above fails because it uses the
-    // current (diverged) duals. Recompute optimal duals from the gradient.
-    {
-        let mut gj = state.grad_f.clone();
-        for (idx, (&row, &col)) in
-            state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
-        {
-            gj[col] += state.jac_vals[idx] * state.y[row];
-        }
-        let mut opt_zl = vec![0.0; n];
-        let mut opt_zu = vec![0.0; n];
-        let kc = 1e10;
-        for i in 0..n {
-            if gj[i] > 0.0 && state.x_l[i].is_finite() {
-                let sl = (state.x[i] - state.x_l[i]).max(1e-20);
-                if gj[i] * sl <= kc * state.mu.max(1e-20) {
-                    opt_zl[i] = gj[i];
-                }
-            } else if gj[i] < 0.0 && state.x_u[i].is_finite() {
-                let su = (state.x_u[i] - state.x[i]).max(1e-20);
-                if (-gj[i]) * su <= kc * state.mu.max(1e-20) {
-                    opt_zu[i] = -gj[i];
-                }
-            }
-        }
-        let opt_du = convergence::dual_infeasibility(
-            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-            &state.y, &opt_zl, &opt_zu, n,
-        );
-        let opt_co = convergence::complementarity_error(
-            &state.x, &state.x_l, &state.x_u, &opt_zl, &opt_zu, 0.0,
-        );
-        let opt_co_best = compl_inf.min(opt_co);
-        let fmult: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
-            + opt_zl.iter().map(|v| v.abs()).sum::<f64>()
-            + opt_zu.iter().map(|v| v.abs()).sum::<f64>();
-        let fsd = if (m + 2 * n) > 0 {
-            ((100.0f64.max(fmult / (m + 2 * n) as f64)) / 100.0).min(1e4)
-        } else {
-            1.0
-        };
-        let stall_fdu_tol = (stall_near_tol * fsd).max(1e-2);
-        let stall_fco_tol = (stall_near_tol * fsd).max(1e-2);
-        let stall_fpr_tol = stall_near_tol.max(10.0 * options.constr_viol_tol);
-        let sc = primal_inf_max <= stall_fpr_tol
-            && opt_du <= stall_fdu_tol
-            && opt_co_best <= stall_fco_tol;
-        let du_u = convergence::dual_infeasibility_scaled(
-            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-            &state.y, &state.z_l, &state.z_u, n,
-        );
-        let usc = primal_inf_max <= 10.0 * options.constr_viol_tol
-            && du_u <= 10.0 * options.dual_inf_tol
-            && opt_co_best <= 10.0 * options.compl_inf_tol;
-        if sc && usc {
-            if options.print_level >= 3 {
-                rip_log!(
-                    "ripopt: Stalled but near-tolerance via optimal duals (pr={:.2e}, du_opt={:.2e}, co={:.2e}), returning NumericalError",
-                    primal_inf, opt_du, opt_co_best
-                );
-            }
-            return StallDecision::Return(make_result(state, SolveStatus::NumericalError));
-        }
+    if let Some(decision) = check_stall_near_tolerance_via_optimal_duals(
+        state, options, primal_inf, primal_inf_max, compl_inf, stall_near_tol, n, m,
+    ) {
+        return decision;
     }
     // Before terminating: if primal is close but μ is very small, boost μ
     // to restore KKT regularization for dual convergence. Addresses the
