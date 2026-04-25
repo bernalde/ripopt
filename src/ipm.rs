@@ -1674,6 +1674,85 @@ fn polish_ls_solution_with_newton<P: NlpProblem>(
     }
 }
 
+/// Build the final `SolveResult` for the NE-to-LS reformulation path.
+/// When `enable_lbfgs_fallback` is on and the LS path landed in
+/// LocalInfeasibility, runs L-BFGS on the LS problem and adopts its
+/// solution if it improves theta; otherwise keeps the polished_x /
+/// ls_result tuple. All paths converge to a single SolveResult build.
+#[allow(clippy::too_many_arguments)]
+fn finalize_ne_to_ls_result<P: NlpProblem>(
+    problem: &P,
+    options: &SolverOptions,
+    ls_problem: &LeastSquaresProblem<'_, P>,
+    ls_result: &SolveResult,
+    polished_x: Vec<f64>,
+    status: SolveStatus,
+    g_out: Vec<f64>,
+    g_l: &[f64],
+    g_u: &[f64],
+    theta: f64,
+    m: usize,
+) -> SolveResult {
+    let (final_x, final_status, final_g, final_iters, final_zl, final_zu) =
+        if status == SolveStatus::LocalInfeasibility && options.enable_lbfgs_fallback {
+            if options.print_level >= 5 {
+                rip_log!(
+                    "ripopt: NE-to-LS LocalInfeasibility (theta={:.4e}), trying L-BFGS on LS",
+                    theta
+                );
+            }
+            let lbfgs_ls = crate::lbfgs::solve(ls_problem, options);
+            let mut g_lb = vec![0.0; m];
+            let theta_lb = if problem.constraints(&lbfgs_ls.x, true, &mut g_lb) {
+                convergence::primal_infeasibility(&g_lb, g_l, g_u)
+            } else {
+                f64::INFINITY
+            };
+
+            if theta_lb < theta {
+                let new_status = if theta_lb < options.tol {
+                    SolveStatus::Optimal
+                } else {
+                    SolveStatus::LocalInfeasibility
+                };
+                if options.print_level >= 5 {
+                    rip_log!(
+                        "ripopt: L-BFGS improved NE-to-LS (theta: {:.4e} -> {:.4e}, status={:?})",
+                        theta, theta_lb, new_status
+                    );
+                }
+                (lbfgs_ls.x, new_status, g_lb, lbfgs_ls.iterations,
+                 lbfgs_ls.bound_multipliers_lower, lbfgs_ls.bound_multipliers_upper)
+            } else {
+                if options.print_level >= 5 {
+                    rip_log!(
+                        "ripopt: L-BFGS did not improve NE-to-LS (theta_lb={:.4e} >= theta={:.4e})",
+                        theta_lb, theta
+                    );
+                }
+                (polished_x, status, g_out, ls_result.iterations,
+                 ls_result.bound_multipliers_lower.clone(),
+                 ls_result.bound_multipliers_upper.clone())
+            }
+        } else {
+            (polished_x, status, g_out, ls_result.iterations,
+             ls_result.bound_multipliers_lower.clone(),
+             ls_result.bound_multipliers_upper.clone())
+        };
+
+    SolveResult {
+        x: final_x,
+        objective: 0.0,
+        constraint_multipliers: vec![0.0; m],
+        bound_multipliers_lower: final_zl,
+        bound_multipliers_upper: final_zu,
+        constraint_values: final_g,
+        status: final_status,
+        iterations: final_iters,
+        diagnostics: SolverDiagnostics::default(),
+    }
+}
+
 /// LS reformulation reported infeasibility on a square or non-converged
 /// system — fall back to the constrained IPM on the original problem,
 /// then optionally to the augmented-Lagrangian solver. Honors the
@@ -1837,63 +1916,10 @@ fn try_ne_to_ls_reformulation<P: NlpProblem>(
         ));
     }
 
-    // L-BFGS retry on LS problem when IPM found a local min with nonzero residual
-    let (final_x, final_status, final_g, final_iters, final_zl, final_zu) =
-        if status == SolveStatus::LocalInfeasibility && options.enable_lbfgs_fallback {
-            if options.print_level >= 5 {
-                rip_log!(
-                    "ripopt: NE-to-LS LocalInfeasibility (theta={:.4e}), trying L-BFGS on LS",
-                    theta
-                );
-            }
-            let lbfgs_ls = crate::lbfgs::solve(&ls_problem, options);
-            let mut g_lb = vec![0.0; m];
-            let theta_lb = if problem.constraints(&lbfgs_ls.x, true, &mut g_lb) {
-                convergence::primal_infeasibility(&g_lb, &g_l, &g_u)
-            } else {
-                f64::INFINITY
-            };
-
-            if theta_lb < theta {
-                let new_status = if theta_lb < options.tol {
-                    SolveStatus::Optimal
-                } else {
-                    SolveStatus::LocalInfeasibility
-                };
-                if options.print_level >= 5 {
-                    rip_log!(
-                        "ripopt: L-BFGS improved NE-to-LS (theta: {:.4e} -> {:.4e}, status={:?})",
-                        theta, theta_lb, new_status
-                    );
-                }
-                (lbfgs_ls.x, new_status, g_lb, lbfgs_ls.iterations,
-                 lbfgs_ls.bound_multipliers_lower, lbfgs_ls.bound_multipliers_upper)
-            } else {
-                if options.print_level >= 5 {
-                    rip_log!(
-                        "ripopt: L-BFGS did not improve NE-to-LS (theta_lb={:.4e} >= theta={:.4e})",
-                        theta_lb, theta
-                    );
-                }
-                (polished_x, status, g_out, ls_result.iterations,
-                 ls_result.bound_multipliers_lower, ls_result.bound_multipliers_upper)
-            }
-        } else {
-            (polished_x, status, g_out, ls_result.iterations,
-             ls_result.bound_multipliers_lower, ls_result.bound_multipliers_upper)
-        };
-
-    Some(SolveResult {
-        x: final_x,
-        objective: 0.0,
-        constraint_multipliers: vec![0.0; m],
-        bound_multipliers_lower: final_zl,
-        bound_multipliers_upper: final_zu,
-        constraint_values: final_g,
-        status: final_status,
-        iterations: final_iters,
-        diagnostics: SolverDiagnostics::default(),
-    })
+    Some(finalize_ne_to_ls_result(
+        problem, options, &ls_problem, &ls_result,
+        polished_x, status, g_out, &g_l, &g_u, theta, m,
+    ))
 }
 
 /// Solve the NLP using the interior point method.
