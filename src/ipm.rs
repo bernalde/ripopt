@@ -3413,6 +3413,33 @@ fn compute_affine_complementarity(
     }
 }
 
+/// Fraction-to-boundary step length for the affine predictor.
+/// Combines the dual-z minimum (`fraction_to_boundary_dual_z_min`)
+/// with primal-slack ratios on each variable's active bound under
+/// τ = 1 - 1e-3, clamped to `[0, 1]`. Used inside the Mehrotra
+/// predictor to derive α_aff before computing the affine
+/// complementarity μ_aff and centering parameter σ.
+fn compute_affine_step_alpha(
+    state: &SolverState,
+    dx_aff: &[f64],
+    dz_l_aff: &[f64],
+    dz_u_aff: &[f64],
+    n: usize,
+) -> f64 {
+    let tau_aff = 1.0 - 1e-3;
+    let mut alpha_aff = fraction_to_boundary_dual_z_min(state, dz_l_aff, dz_u_aff, tau_aff)
+        .min(1.0);
+    for i in 0..n {
+        if state.x_l[i].is_finite() && dx_aff[i] < 0.0 {
+            alpha_aff = alpha_aff.min(tau_aff * slack_xl(state, i) / (-dx_aff[i]));
+        }
+        if state.x_u[i].is_finite() && dx_aff[i] > 0.0 {
+            alpha_aff = alpha_aff.min(tau_aff * slack_xu(state, i) / dx_aff[i]);
+        }
+    }
+    alpha_aff.clamp(0.0, 1.0)
+}
+
 fn try_mehrotra_predictor(
     state: &SolverState,
     options: &SolverOptions,
@@ -3429,18 +3456,7 @@ fn try_mehrotra_predictor(
         &kkt.matrix, kkt.n, kkt.dim, lin_solver, &rhs_aff,
     ).ok()?;
     let (dz_l_aff, dz_u_aff) = recover_dz_from_state(state, &dx_aff, 0.0);
-    let tau_aff = 1.0 - 1e-3;
-    let mut alpha_aff = fraction_to_boundary_dual_z_min(state, &dz_l_aff, &dz_u_aff, tau_aff)
-        .min(1.0);
-    for i in 0..n {
-        if state.x_l[i].is_finite() && dx_aff[i] < 0.0 {
-            alpha_aff = alpha_aff.min(tau_aff * slack_xl(state, i) / (-dx_aff[i]));
-        }
-        if state.x_u[i].is_finite() && dx_aff[i] > 0.0 {
-            alpha_aff = alpha_aff.min(tau_aff * slack_xu(state, i) / dx_aff[i]);
-        }
-    }
-    alpha_aff = alpha_aff.clamp(0.0, 1.0);
+    let alpha_aff = compute_affine_step_alpha(state, &dx_aff, &dz_l_aff, &dz_u_aff, n);
     let mu_aff = compute_affine_complementarity(
         state, &dx_aff, &dz_l_aff, &dz_u_aff, alpha_aff, n,
     )?;
