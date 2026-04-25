@@ -4444,12 +4444,10 @@ fn reset_slack_multipliers(state: &mut SolverState, mu_ks: f64) {
     let m = state.m;
     for i in 0..m {
         if state.v_l[i] > 0.0 && state.g_l[i].is_finite() {
-            let slack = (state.g[i] - state.g_l[i]).max(1e-20);
-            state.v_l[i] = mu_ks / slack;
+            state.v_l[i] = mu_ks / slack_gl(state, i);
         }
         if state.v_u[i] > 0.0 && state.g_u[i].is_finite() {
-            let slack = (state.g_u[i] - state.g[i]).max(1e-20);
-            state.v_u[i] = mu_ks / slack;
+            state.v_u[i] = mu_ks / slack_gu(state, i);
         }
     }
 }
@@ -6746,12 +6744,10 @@ fn initialize_constraint_slack_multipliers(state: &mut SolverState, m: usize, op
             continue;
         }
         if state.g_l[i].is_finite() {
-            let slack = (state.g[i] - state.g_l[i]).max(1e-20);
-            state.v_l[i] = options.mu_init / slack;
+            state.v_l[i] = options.mu_init / slack_gl(state, i);
         }
         if state.g_u[i].is_finite() {
-            let slack = (state.g_u[i] - state.g[i]).max(1e-20);
-            state.v_u[i] = options.mu_init / slack;
+            state.v_u[i] = options.mu_init / slack_gu(state, i);
         }
     }
 }
@@ -8916,6 +8912,20 @@ fn slack_xu(state: &SolverState, i: usize) -> f64 {
     (state.x_u[i] - state.x[i]).max(1e-20)
 }
 
+/// Strictly-positive lower-side constraint slack
+/// `max(g - g_l, 1e-20)`. Caller is responsible for the
+/// `g_l[i].is_finite()` guard (or `v_l[i] > 0`, used by callers that
+/// only attached a slack-multiplier when the bound was finite).
+fn slack_gl(state: &SolverState, i: usize) -> f64 {
+    (state.g[i] - state.g_l[i]).max(1e-20)
+}
+
+/// Strictly-positive upper-side constraint slack
+/// `max(g_u - g, 1e-20)`. See [`slack_gl`] for the finite-guard contract.
+fn slack_gu(state: &SolverState, i: usize) -> f64 {
+    (state.g_u[i] - state.g[i]).max(1e-20)
+}
+
 /// Build a trial point `x + alpha * dx`, clamped strictly inside the
 /// finite bounds via `clamp_to_open_bounds`. Used by the regular line
 /// search, soft-restoration acceptance, gradient-descent fallback, and
@@ -9011,13 +9021,11 @@ fn compute_avg_complementarity(state: &SolverState) -> f64 {
     if count == 0 {
         for i in 0..state.m {
             if state.v_l[i] > 0.0 {
-                let slack = (state.g[i] - state.g_l[i]).max(1e-20);
-                sum_compl += state.v_l[i] * slack;
+                sum_compl += state.v_l[i] * slack_gl(state, i);
                 count += 1;
             }
             if state.v_u[i] > 0.0 {
-                let slack = (state.g_u[i] - state.g[i]).max(1e-20);
-                sum_compl += state.v_u[i] * slack;
+                sum_compl += state.v_u[i] * slack_gu(state, i);
                 count += 1;
             }
         }
