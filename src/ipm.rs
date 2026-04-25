@@ -7746,6 +7746,48 @@ enum RestorationOutcome {
 ///
 /// Formulates a restoration NLP with p/n slack variables and solves it using
 /// the same IPM engine (with `disable_nlp_restoration=true` to prevent recursion).
+/// Configure the inner SolverOptions for the restoration NLP solve. Caps
+/// max_iter at restoration_max_iter (>=500), disables nested restoration to
+/// prevent recursion, sets mu_init to resto_mu, disables stall detection
+/// (restoration makes slow steady progress that would trip the 30-iter
+/// stall limit), and relaxes tol to 1e-7 (we want feasibility, not
+/// optimality). Propagates the remaining wall-time budget so the inner
+/// solve can't outlive the outer fallback cascade; returns None when the
+/// remaining budget is < 0.5s. Scales early_stall_timeout by restoration
+/// NLP size so large restorations get the full default timeout.
+fn configure_restoration_inner_options(
+    options: &SolverOptions,
+    resto_mu: f64,
+    resto_dim: usize,
+    start_time: Instant,
+) -> Option<SolverOptions> {
+    let mut inner_opts = options.clone();
+    inner_opts.max_iter = options.restoration_max_iter.max(500);
+    inner_opts.disable_nlp_restoration = true;
+    inner_opts.print_level = if options.print_level >= 5 { 3 } else { 0 };
+    inner_opts.mu_init = resto_mu;
+    inner_opts.stall_iter_limit = 0;
+    inner_opts.tol = 1e-7;
+
+    if options.max_wall_time > 0.0 {
+        let remaining = options.max_wall_time - start_time.elapsed().as_secs_f64();
+        if remaining < 0.5 {
+            return None;
+        }
+        inner_opts.max_wall_time = remaining;
+    }
+    inner_opts.early_stall_timeout = if options.early_stall_timeout > 0.0 {
+        if resto_dim > 500 {
+            options.early_stall_timeout
+        } else {
+            options.early_stall_timeout.min(3.0)
+        }
+    } else {
+        3.0
+    };
+    Some(inner_opts)
+}
+
 fn attempt_nlp_restoration<P: NlpProblem>(
     problem: &P,
     state: &SolverState,
@@ -7790,41 +7832,11 @@ fn attempt_nlp_restoration<P: NlpProblem>(
     // Build restoration NLP using the same resto_mu for p/n quadratic init.
     let resto_nlp = RestorationNlp::new(problem, &state.x, resto_mu, rho, 1.0);
 
-    // Configure inner solver options
-    let mut inner_opts = options.clone();
-    inner_opts.max_iter = options.restoration_max_iter.max(500);
-    inner_opts.disable_nlp_restoration = true; // prevent recursion
-    inner_opts.print_level = if options.print_level >= 5 { 3 } else { 0 };
-    inner_opts.mu_init = resto_mu;
-    // Disable stall detection for inner solve: the restoration NLP makes slow
-    // but steady progress toward feasibility, and the 30-iter stall limit kills
-    // it prematurely. max_iter provides a hard cap.
-    inner_opts.stall_iter_limit = 0;
-    // Relax convergence tolerances — we just need feasibility, not optimality
-    inner_opts.tol = 1e-7;
-
-    // Propagate remaining wall time so the inner solve doesn't get a fresh clock.
-    // Without this, the inner solve can run for the full max_wall_time, causing
-    // the outer solve to timeout before its fallback cascade can run.
-    if options.max_wall_time > 0.0 {
-        let remaining = options.max_wall_time - start_time.elapsed().as_secs_f64();
-        if remaining < 0.5 {
-            // Not enough time left for a meaningful inner solve
-            return (state.x[..n].to_vec(), RestorationOutcome::Failed);
-        }
-        inner_opts.max_wall_time = remaining;
-    }
-    // Scale early stall timeout by restoration NLP size — large restoration NLPs
-    // need more time than the default 3s cap.
-    let resto_dim = resto_nlp.num_variables() + resto_nlp.num_constraints();
-    inner_opts.early_stall_timeout = if options.early_stall_timeout > 0.0 {
-        if resto_dim > 500 {
-            options.early_stall_timeout // Full timeout for large restoration NLPs
-        } else {
-            options.early_stall_timeout.min(3.0)
-        }
-    } else {
-        3.0
+    let inner_opts = match configure_restoration_inner_options(
+        options, resto_mu, resto_nlp.num_variables() + resto_nlp.num_constraints(), start_time,
+    ) {
+        Some(opts) => opts,
+        None => return (state.x[..n].to_vec(), RestorationOutcome::Failed),
     };
 
     // Solve the restoration NLP
