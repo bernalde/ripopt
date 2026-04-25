@@ -1026,6 +1026,33 @@ impl<P: NlpProblem> NlpProblem for LeastSquaresProblem<'_, P> {
 /// - ∇f(x0) ≈ 0 (zero gradient)
 /// - All constraints are equalities (g_l[i] == g_u[i])
 /// - m >= n (square or more constraints than variables)
+/// Solve the Gauss-Newton normal equations (J^T J) dx = J^T r with a
+/// 1e-14 diagonal regularization for numerical stability. `j_dense` is
+/// a row-major m × n matrix. Returns `None` if the regularized normal
+/// matrix is not positive definite (Cholesky failure).
+fn solve_gn_normal_equations(j_dense: &[f64], r: &[f64], n: usize, m: usize) -> Option<Vec<f64>> {
+    let mut jtj = vec![0.0; n * n];
+    let mut jtr = vec![0.0; n];
+    for i in 0..n {
+        for j in 0..n {
+            let mut s = 0.0;
+            for k in 0..m {
+                s += j_dense[k * n + i] * j_dense[k * n + j];
+            }
+            jtj[i * n + j] = s;
+        }
+        let mut s = 0.0;
+        for k in 0..m {
+            s += j_dense[k * n + i] * r[k];
+        }
+        jtr[i] = s;
+    }
+    for i in 0..n {
+        jtj[i * n + i] += 1e-14;
+    }
+    dense_cholesky_solve(&jtj, &jtr, n)
+}
+
 /// Dense Cholesky solve: solve A*x = b where A is n×n symmetric positive definite.
 /// Returns None if A is not positive definite (factorization fails).
 fn dense_cholesky_solve(a: &[f64], b: &[f64], n: usize) -> Option<Vec<f64>> {
@@ -1587,29 +1614,7 @@ fn polish_ls_solution_with_newton<P: NlpProblem>(
             j_dense[jac_rows[k] * n + jac_cols[k]] += jac_vals[k];
         }
 
-        // Solve for dx using normal equations: (J^T J) dx = -J^T r
-        let mut jtj = vec![0.0; n * n];
-        let mut jtr = vec![0.0; n];
-        for i in 0..n {
-            for j in 0..n {
-                let mut s = 0.0;
-                for k in 0..m {
-                    s += j_dense[k * n + i] * j_dense[k * n + j];
-                }
-                jtj[i * n + j] = s;
-            }
-            let mut s = 0.0;
-            for k in 0..m {
-                s += j_dense[k * n + i] * r[k];
-            }
-            jtr[i] = s;
-        }
-
-        for i in 0..n {
-            jtj[i * n + i] += 1e-14;
-        }
-
-        let dx = match dense_cholesky_solve(&jtj, &jtr, n) {
+        let dx = match solve_gn_normal_equations(&j_dense, &r, n, m) {
             Some(dx) => dx,
             None => break,
         };
