@@ -3985,11 +3985,7 @@ fn track_post_step_acceptable(state: &mut SolverState, options: &SolverOptions) 
     let post_primal = state.constraint_violation();
     let (post_zl_opt, post_zu_opt) = {
         let mut gj = state.grad_f.clone();
-        for (idx, (&row, &col)) in
-            state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
-        {
-            gj[col] += state.jac_vals[idx] * state.y[row];
-        }
+        accumulate_jt_y(state, &mut gj);
         let mut zl = vec![0.0; n];
         let mut zu = vec![0.0; n];
         let kc = 1e10;
@@ -5886,11 +5882,7 @@ fn check_stall_near_tolerance_via_optimal_duals(
     m: usize,
 ) -> Option<StallDecision> {
     let mut gj = state.grad_f.clone();
-    for (idx, (&row, &col)) in
-        state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
-    {
-        gj[col] += state.jac_vals[idx] * state.y[row];
-    }
+    accumulate_jt_y(state, &mut gj);
     let mut opt_zl = vec![0.0; n];
     let mut opt_zu = vec![0.0; n];
     let kc = 1e10;
@@ -6526,9 +6518,7 @@ fn build_iterate_snapshot(state: &SolverState) -> crate::intermediate::IterateSn
     }
     // grad_lag = grad_f + J^T y - z_l + z_u
     let mut grad_lag = state.grad_f.clone();
-    for (k, (&r, &c)) in state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate() {
-        grad_lag[c] += state.jac_vals[k] * state.y[r];
-    }
+    accumulate_jt_y(state, &mut grad_lag);
     for i in 0..n {
         grad_lag[i] -= state.z_l[i];
         grad_lag[i] += state.z_u[i];
@@ -8780,6 +8770,17 @@ fn theta_for_g(state: &SolverState, g: &[f64]) -> f64 {
     convergence::primal_infeasibility(g, &state.g_l, &state.g_u)
 }
 
+/// Accumulate `J^T * y` (constraint Jacobian transpose times the
+/// equality multipliers) into `target`. Used to assemble several
+/// related dual residuals: ∇_x L for the snapshot/barrier-error
+/// computations, the active-set z recovery, and the gradient-of-f +
+/// J^T y diagnostic used by stall classification.
+fn accumulate_jt_y(state: &SolverState, target: &mut [f64]) {
+    for (idx, (&row, &col)) in state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate() {
+        target[col] += state.jac_vals[idx] * state.y[row];
+    }
+}
+
 /// L-infinity norm of `J^T * c_violation`, where `c_violation` is the
 /// signed constraint residual (g - g_l for equalities or below-lower
 /// violations, g - g_u for above-upper violations, 0 otherwise). Used
@@ -9055,9 +9056,7 @@ fn compute_barrier_error(state: &SolverState) -> f64 {
     // Dual infeasibility of barrier problem:
     // grad_f + J^T y - z_l + z_u
     let mut grad_lag = state.grad_f.clone();
-    for (idx, (&row, &col)) in state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate() {
-        grad_lag[col] += state.jac_vals[idx] * state.y[row];
-    }
+    accumulate_jt_y(state, &mut grad_lag);
     for i in 0..n {
         if state.x_l[i].is_finite() {
             grad_lag[i] -= state.z_l[i];
@@ -9238,9 +9237,7 @@ fn build_reduced_kkt_dense(
 /// `z` is not produced by the reduced KKT solve.
 fn recover_z_from_stationarity(state: &mut SolverState, n: usize) {
     let mut grad_jty = state.grad_f.clone();
-    for (idx, (&row, &col)) in state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate() {
-        grad_jty[col] += state.jac_vals[idx] * state.y[row];
-    }
+    accumulate_jt_y(state, &mut grad_jty);
     for i in 0..n {
         state.z_l[i] = 0.0;
         state.z_u[i] = 0.0;
