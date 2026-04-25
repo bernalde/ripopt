@@ -8348,12 +8348,10 @@ fn compute_ls_multiplier_estimate_with_z(
     }
     let mut a_mat = SymmetricMatrix::zeros(m);
     for i in 0..m {
+        let row_i = &j_dense[i * n..(i + 1) * n];
         for j in 0..=i {
-            let mut dot = 0.0;
-            for k in 0..n {
-                dot += j_dense[i * n + k] * j_dense[j * n + k];
-            }
-            a_mat.set(i, j, dot);
+            let row_j = &j_dense[j * n..(j + 1) * n];
+            a_mat.set(i, j, dot_product(row_i, row_j));
         }
     }
 
