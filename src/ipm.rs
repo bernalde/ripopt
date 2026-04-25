@@ -630,22 +630,8 @@ impl SolverState {
             problem, options, &x, &jac_rows, &jac_cols, &g_l, &g_u, n, m, jac_nnz,
         );
 
-        // Warm-start override: when warm_start is enabled and the problem
-        // supplies initial multipliers, overwrite the defaults computed
-        // above. WarmStartInitializer::initialize (called later in
-        // `solve()`) will still floor z_l/z_u and recompute mu from
-        // complementarity of the provided point.
         if options.warm_start {
-            let mut ws_lam_g = vec![0.0; m];
-            let mut ws_z_l = vec![0.0; n];
-            let mut ws_z_u = vec![0.0; n];
-            if problem.initial_multipliers(&mut ws_lam_g, &mut ws_z_l, &mut ws_z_u) {
-                if m > 0 {
-                    y.copy_from_slice(&ws_lam_g);
-                }
-                z_l.copy_from_slice(&ws_z_l);
-                z_u.copy_from_slice(&ws_z_u);
-            }
+            apply_warm_start_multipliers(problem, &mut y, &mut z_l, &mut z_u);
         }
 
         Self {
@@ -8182,6 +8168,29 @@ fn compute_ls_multiplier_rhs(
         b[row] -= jac_vals[idx] * rhs_grad[col];
     }
     b
+}
+
+/// Overwrite the default constraint and bound multipliers with values
+/// supplied by the problem's `initial_multipliers` hook. Called only when
+/// `options.warm_start` is true; if the hook returns false, the defaults
+/// are kept. WarmStartInitializer::initialize (called later in solve())
+/// will still floor z_l/z_u and recompute mu from complementarity.
+fn apply_warm_start_multipliers<P: NlpProblem>(
+    problem: &P,
+    y: &mut [f64],
+    z_l: &mut [f64],
+    z_u: &mut [f64],
+) {
+    let mut ws_lam_g = vec![0.0; y.len()];
+    let mut ws_z_l = vec![0.0; z_l.len()];
+    let mut ws_z_u = vec![0.0; z_u.len()];
+    if problem.initial_multipliers(&mut ws_lam_g, &mut ws_z_l, &mut ws_z_u) {
+        if !y.is_empty() {
+            y.copy_from_slice(&ws_lam_g);
+        }
+        z_l.copy_from_slice(&ws_z_l);
+        z_u.copy_from_slice(&ws_z_u);
+    }
 }
 
 /// Initialize bound multipliers from complementarity at mu_init:
