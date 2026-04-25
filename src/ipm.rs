@@ -773,9 +773,7 @@ impl SolverState {
         if options.constraint_slack_barrier {
             for i in 0..self.m {
                 // Skip equality constraints (g_l == g_u): slack is zero by definition
-                let is_eq = self.g_l[i].is_finite() && self.g_u[i].is_finite()
-                    && (self.g_l[i] - self.g_u[i]).abs() < 1e-15;
-                if is_eq {
+                if constraint_is_equality(self, i) {
                     continue;
                 }
                 if self.g_l[i].is_finite() {
@@ -827,9 +825,7 @@ impl SolverState {
                 jdx[row] += self.jac_vals[idx] * self.dx[col];
             }
             for i in 0..self.m {
-                let is_eq = self.g_l[i].is_finite() && self.g_u[i].is_finite()
-                    && (self.g_l[i] - self.g_u[i]).abs() < 1e-15;
-                if is_eq {
+                if constraint_is_equality(self, i) {
                     continue;
                 }
                 if self.g_l[i].is_finite() {
