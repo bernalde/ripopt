@@ -7038,6 +7038,7 @@ fn log_iteration_row(
     state: &SolverState,
     primal_inf: f64,
     dual_inf: f64,
+    compl_inf: f64,
     ls_steps: usize,
     log_line_count: &mut usize,
     options: &SolverOptions,
@@ -7048,16 +7049,17 @@ fn log_iteration_row(
     // Reprint header every 25 data rows for readability
     if *log_line_count > 0 && *log_line_count % 25 == 0 {
         rip_log!(
-            "{:>4}  {:>14}  {:>10}  {:>10}  {:>7}  {:>8}  {:>8}  {:>3}",
-            "iter", "objective", "inf_pr", "inf_du", "lg(mu)", "alpha_pr", "alpha_du", "ls"
+            "{:>4}  {:>14}  {:>10}  {:>10}  {:>10}  {:>10}  {:>8}  {:>8}  {:>3}",
+            "iter", "objective", "inf_pr", "inf_du", "compl", "lg(mu)", "alpha_pr", "alpha_du", "ls"
         );
     }
     rip_log!(
-        "{:>4}  {:>14.7e}  {:>10.2e}  {:>10.2e}  {:>10.2e}  {:>8.2e}  {:>8.2e}  {:>3}",
+        "{:>4}  {:>14.7e}  {:>10.2e}  {:>10.2e}  {:>10.2e}  {:>10.2e}  {:>8.2e}  {:>8.2e}  {:>3}",
         iteration,
         state.obj / state.obj_scaling,
         primal_inf,
         dual_inf,
+        compl_inf,
         state.mu,
         state.alpha_primal,
         state.alpha_dual,
@@ -7566,6 +7568,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             &state,
             primal_inf,
             dual_inf,
+            compl_inf,
             ls_steps,
             &mut log_line_count,
             options,
