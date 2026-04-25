@@ -2960,21 +2960,12 @@ fn compute_mcc_alpha_max(
     dz_l: &[f64],
     dz_u: &[f64],
     tau_mcc: f64,
-    n: usize,
 ) -> f64 {
     let mcc_zl = filter::fraction_to_boundary(&state.z_l, dz_l, tau_mcc);
     let mcc_zu = filter::fraction_to_boundary(&state.z_u, dz_u, tau_mcc);
-    let mut alpha = mcc_zl.min(mcc_zu).min(1.0);
-    for i in 0..n {
-        if state.x_l[i].is_finite() && dx[i] < 0.0 {
-            let s = state.x[i] - state.x_l[i];
-            alpha = alpha.min(tau_mcc * s / (-dx[i]));
-        }
-        if state.x_u[i].is_finite() && dx[i] > 0.0 {
-            let s = state.x_u[i] - state.x[i];
-            alpha = alpha.min(tau_mcc * s / dx[i]);
-        }
-    }
+    let alpha = mcc_zl
+        .min(mcc_zu)
+        .min(fraction_to_boundary_primal_x(state, dx, tau_mcc));
     alpha.clamp(0.0, 1.0)
 }
 
@@ -3012,7 +3003,7 @@ fn try_apply_one_mcc_correction(
     );
 
     let alpha_new = compute_mcc_alpha_max(
-        state, &dx_c, &dz_l_c, &dz_u_c, tau_mcc, n,
+        state, &dx_c, &dz_l_c, &dz_u_c, tau_mcc,
     );
 
     if alpha_new >= 0.9 * alpha_mcc {
@@ -3052,7 +3043,7 @@ fn apply_gondzio_mcc(
         (1.0 - state.mu).max(options.tau_min)
     };
     let mut alpha_mcc = compute_mcc_alpha_max(
-        state, &state.dx, &state.dz_l, &state.dz_u, tau_mcc, n,
+        state, &state.dx, &state.dz_l, &state.dz_u, tau_mcc,
     );
 
     let mu_target = state.mu;
@@ -4519,7 +4510,6 @@ fn compute_alpha_max(
     dual_inf: f64,
     compl_inf: f64,
 ) -> (f64, f64, f64) {
-    let n = state.n;
     let tau = if mu_state.mode == MuMode::Free {
         let nlp_error = primal_inf + dual_inf + compl_inf;
         (1.0 - nlp_error).max(options.tau_min)
@@ -4527,20 +4517,8 @@ fn compute_alpha_max(
         (1.0 - state.mu).max(options.tau_min)
     };
 
-    let mut alpha_primal_max: f64 = 1.0;
-    for i in 0..n {
-        if state.x_l[i].is_finite() && state.dx[i] < 0.0 {
-            let slack = state.x[i] - state.x_l[i];
-            let ratio = -tau * slack / state.dx[i];
-            alpha_primal_max = alpha_primal_max.min(ratio);
-        }
-        if state.x_u[i].is_finite() && state.dx[i] > 0.0 {
-            let slack = state.x_u[i] - state.x[i];
-            let ratio = tau * slack / state.dx[i];
-            alpha_primal_max = alpha_primal_max.min(ratio);
-        }
-    }
-    alpha_primal_max = alpha_primal_max.clamp(0.0, 1.0);
+    let alpha_primal_max =
+        fraction_to_boundary_primal_x(state, &state.dx, tau).clamp(0.0, 1.0);
 
     let alpha_dual_max_l = filter::fraction_to_boundary(&state.z_l, &state.dz_l, tau);
     let alpha_dual_max_u = filter::fraction_to_boundary(&state.z_u, &state.dz_u, tau);
@@ -7731,19 +7709,8 @@ fn compute_soc_alpha_and_trial_x(
     dx_soc: &[f64],
     tau: f64,
 ) -> (Vec<f64>, f64) {
-    let n = state.n;
-    let mut alpha_new: f64 = 1.0;
-    for i in 0..n {
-        if state.x_l[i].is_finite() && dx_soc[i] < 0.0 {
-            let slack = state.x[i] - state.x_l[i];
-            alpha_new = alpha_new.min(-tau * slack / dx_soc[i]);
-        }
-        if state.x_u[i].is_finite() && dx_soc[i] > 0.0 {
-            let slack = state.x_u[i] - state.x[i];
-            alpha_new = alpha_new.min(tau * slack / dx_soc[i]);
-        }
-    }
-    let alpha_primal_soc = alpha_new.clamp(0.0, 1.0);
+    let alpha_primal_soc =
+        fraction_to_boundary_primal_x(state, dx_soc, tau).clamp(0.0, 1.0);
 
     let x_soc = compute_clamped_trial_x(state, dx_soc, alpha_primal_soc);
     (x_soc, alpha_primal_soc)
@@ -8770,6 +8737,27 @@ fn accumulate_jt_y(state: &SolverState, target: &mut [f64]) {
     for (idx, (&row, &col)) in state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate() {
         target[col] += state.jac_vals[idx] * state.y[row];
     }
+}
+
+/// Fraction-to-boundary cap on the primal step `α·dx` against the
+/// variable bounds, ignoring the `[0, 1]` clamp. The Mehrotra
+/// affine-predictor and the L-BFGS gradient-descent fallback both use
+/// this same per-component scan; centralising it keeps the three
+/// step-controllers (main step, multiple-centrality corrections,
+/// second-order correction) in lockstep.
+fn fraction_to_boundary_primal_x(state: &SolverState, dx: &[f64], tau: f64) -> f64 {
+    let mut alpha = 1.0_f64;
+    for i in 0..state.n {
+        if state.x_l[i].is_finite() && dx[i] < 0.0 {
+            let slack = state.x[i] - state.x_l[i];
+            alpha = alpha.min(-tau * slack / dx[i]);
+        }
+        if state.x_u[i].is_finite() && dx[i] > 0.0 {
+            let slack = state.x_u[i] - state.x[i];
+            alpha = alpha.min(tau * slack / dx[i]);
+        }
+    }
+    alpha
 }
 
 /// Install the four step components into `state`. Used after the main
