@@ -2271,6 +2271,55 @@ enum LineSearchOutcome {
 /// trips, `StepAccepted` on any accepted trial / SOC / watchdog full
 /// step, `Rejected` if α falls below `min_alpha` / loop budget exhausts.
 #[allow(clippy::too_many_arguments)]
+/// Compute the barrier-augmented objective phi(x, g) = obj - mu*Σ ln(slack)
+/// summed over (a) all finite variable bounds via x and (b) when
+/// `constraint_slack_barrier` is on, all finite inequality-constraint
+/// bounds via g whose slack exceeds mu*1e-2 (the small-slack guard
+/// matches the line-search loop and the SOC routines).
+fn compute_barrier_phi(
+    obj: f64,
+    x: &[f64],
+    g: &[f64],
+    state: &SolverState,
+    n: usize,
+    m: usize,
+    constraint_slack_barrier: bool,
+) -> f64 {
+    let mut phi = obj;
+    for i in 0..n {
+        if state.x_l[i].is_finite() {
+            let slack = (x[i] - state.x_l[i]).max(1e-20);
+            phi -= state.mu * slack.ln();
+        }
+        if state.x_u[i].is_finite() {
+            let slack = (state.x_u[i] - x[i]).max(1e-20);
+            phi -= state.mu * slack.ln();
+        }
+    }
+    if constraint_slack_barrier {
+        for i in 0..m {
+            let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
+                && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
+            if is_eq {
+                continue;
+            }
+            if state.g_l[i].is_finite() {
+                let slack = g[i] - state.g_l[i];
+                if slack > state.mu * 1e-2 {
+                    phi -= state.mu * slack.ln();
+                }
+            }
+            if state.g_u[i].is_finite() {
+                let slack = state.g_u[i] - g[i];
+                if slack > state.mu * 1e-2 {
+                    phi -= state.mu * slack.ln();
+                }
+            }
+        }
+    }
+    phi
+}
+
 /// Dispatch a Second-Order Correction attempt to the appropriate solver
 /// path: dense condensed (cond_solver_for_soc + condensed_system), sparse
 /// condensed, or full augmented KKT. Returns the SOC trial tuple
@@ -2403,39 +2452,9 @@ fn run_line_search_loop<P: NlpProblem>(
         }
 
         // Barrier objective at trial
-        let mut phi_trial = obj_trial;
-        #[allow(clippy::needless_range_loop)]
-        for i in 0..n {
-            if state.x_l[i].is_finite() {
-                let slack = (x_trial[i] - state.x_l[i]).max(1e-20);
-                phi_trial -= state.mu * slack.ln();
-            }
-            if state.x_u[i].is_finite() {
-                let slack = (state.x_u[i] - x_trial[i]).max(1e-20);
-                phi_trial -= state.mu * slack.ln();
-            }
-        }
-        if options.constraint_slack_barrier {
-            for i in 0..m {
-                let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
-                    && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
-                if is_eq {
-                    continue;
-                }
-                if state.g_l[i].is_finite() {
-                    let slack = g_trial[i] - state.g_l[i];
-                    if slack > state.mu * 1e-2 {
-                        phi_trial -= state.mu * slack.ln();
-                    }
-                }
-                if state.g_u[i].is_finite() {
-                    let slack = state.g_u[i] - g_trial[i];
-                    if slack > state.mu * 1e-2 {
-                        phi_trial -= state.mu * slack.ln();
-                    }
-                }
-            }
-        }
+        let phi_trial = compute_barrier_phi(
+            obj_trial, &x_trial, &g_trial, state, n, m, options.constraint_slack_barrier,
+        );
 
         let (acceptable, used_switching) = filter.check_acceptability(
             theta_current,
