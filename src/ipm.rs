@@ -2605,7 +2605,7 @@ fn assemble_kkt_systems(
     use_sparse: bool,
     disable_sparse_condensed: bool,
 ) -> AssembledKkt {
-    let sigma = kkt::compute_sigma(&state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u);
+    let sigma = compute_sigma_from_state(state);
 
     let use_condensed = m >= 2 * n && n > 0 && (!use_sparse || n <= 100);
     let use_sparse_condensed = use_sparse && m > 0 && !use_condensed && !disable_sparse_condensed;
@@ -4503,9 +4503,7 @@ fn try_early_perturbation_recovery<P: NlpProblem>(
         reseed_bound_multipliers_from_mu(state, state.mu);
         let pert_eval_ok = evaluate_and_refresh_lbfgs(state, problem, lbfgs_state, linear_constraints, lbfgs_mode);
         if pert_eval_ok && obj_and_grad_finite(state) {
-            let sigma_p = kkt::compute_sigma(
-                &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u,
-            );
+            let sigma_p = compute_sigma_from_state(state);
             let mut kkt_p = assemble_kkt_from_state(state, n, m, &sigma_p, use_sparse);
             if kkt::factor_with_inertia_correction(
                 &mut kkt_p, lin_solver, inertia_params,
@@ -8856,6 +8854,14 @@ fn compute_clamped_trial_x(state: &SolverState, dx: &[f64], alpha: f64) -> Vec<f
         clamp_to_open_bounds(&mut x_trial, &state.x_l, &state.x_u, i);
     }
     x_trial
+}
+
+/// `kkt::compute_sigma` at the current iterate's
+/// `state.{x, x_l, x_u, z_l, z_u}`. Centralises the two callers —
+/// assemble_kkt_systems (main solve) and the perturbation recovery
+/// path in try_early_perturbation_recovery.
+fn compute_sigma_from_state(state: &SolverState) -> Vec<f64> {
+    kkt::compute_sigma(&state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u)
 }
 
 /// `kkt::recover_dz` (Fiacco bound-multiplier step recovery) at the
