@@ -5380,9 +5380,7 @@ fn try_complementarity_polish_promotion(
     let snap_compl = convergence::complementarity_error(
         &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
     );
-    let snap_mult_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
-        + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
-        + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
+    let snap_mult_sum = compute_multiplier_sum(state);
     let snap_conv = ConvergenceInfo {
         primal_inf: conv_info.primal_inf,
         dual_inf: snap_du,
@@ -7177,9 +7175,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
         // Compute multiplier scaling (also used by the consecutive-acceptable
         // tracker further below, so kept here rather than inside the helper).
-        let multiplier_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
-            + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
-            + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
+        let multiplier_sum = compute_multiplier_sum(&state);
         let multiplier_count = m + 2 * n;
 
         let mut conv_ws = ConvergenceWorkspace {
@@ -8801,6 +8797,16 @@ fn compute_s_d_scaling(multiplier_sum: f64, multiplier_count: usize) -> f64 {
     }
 }
 
+/// Sum of absolute values of all Lagrange multipliers in the iterate:
+/// equality multipliers `y` plus bound multipliers `z_l` and `z_u`.
+/// Used together with `multiplier_count = m + 2*n` to compute the dual
+/// scaling factor `s_d` via `compute_s_d_scaling`.
+fn compute_multiplier_sum(state: &SolverState) -> f64 {
+    state.y.iter().map(|v| v.abs()).sum::<f64>()
+        + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
+        + state.z_u.iter().map(|v| v.abs()).sum::<f64>()
+}
+
 fn compute_avg_complementarity(state: &SolverState) -> f64 {
     let mut sum_compl = 0.0;
     let mut count = 0;
@@ -9118,9 +9124,7 @@ fn try_active_set_solve<P: NlpProblem>(
     let compl_inf = convergence::complementarity_error(
         &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
     );
-    let multiplier_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
-        + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
-        + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
+    let multiplier_sum = compute_multiplier_sum(state);
     let multiplier_count = m + 2 * n;
 
     let conv_info = ConvergenceInfo {
@@ -9252,12 +9256,7 @@ fn make_result(state: &SolverState, status: SolveStatus) -> SolveResult {
     );
 
     // Compute dual scaling factor s_d (same formula as check_convergence)
-    {
-        let mult_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
-            + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
-            + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
-        diag.final_s_d = compute_s_d_scaling(mult_sum, m + 2 * n);
-    }
+    diag.final_s_d = compute_s_d_scaling(compute_multiplier_sum(state), m + 2 * n);
 
     // Use iterative z for reported bound multipliers (Ipopt semantics).
     // Unscale: z_unscaled = z_scaled / obj_scaling.
