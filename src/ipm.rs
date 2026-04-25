@@ -2733,53 +2733,69 @@ fn apply_kappa_sigma_bound_multiplier_reset(
     mu_ks
 }
 
+/// Per-component sign-flip damping state for the y multiplier update.
+/// `prev_dy` holds the previous iterate's dy (for sign comparison) and
+/// `sign_change_count[i]` accumulates consecutive sign flips on row i;
+/// when a count hits 3 the corresponding dy[i] is halved.
+struct DyOscillationTracker {
+    prev_dy: Option<Vec<f64>>,
+    sign_change_count: Vec<u8>,
+}
+
+impl DyOscillationTracker {
+    fn new(m: usize) -> Self {
+        Self {
+            prev_dy: None,
+            sign_change_count: vec![0u8; m],
+        }
+    }
+}
+
 /// Apply the y multiplier update with sign-flip damping. Once the
 /// solver is near convergence (`consecutive_acceptable >= 1`),
 /// components of `dy` whose sign has flipped relative to the previous
 /// iterate accumulate a counter; when the count hits 3, the step is
 /// halved (0.5·dy). Components without a flip reset their counter.
-/// `state.y[i] += alpha_y * dy_i` for each row, then `prev_dy` is
-/// rotated to hold the current `dy`.
+/// `state.y[i] += alpha_y * dy_i` for each row, then `tracker.prev_dy`
+/// is rotated to hold the current `dy`.
 fn apply_damped_y_update(
     state: &mut SolverState,
     alpha_y: f64,
-    prev_dy: &mut Option<Vec<f64>>,
-    dy_sign_change_count: &mut [u8],
+    tracker: &mut DyOscillationTracker,
 ) {
     let m = state.m;
     let near_convergence = state.consecutive_acceptable >= 1;
     for i in 0..m {
-        let sign_change = if let Some(ref pdy) = prev_dy {
+        let sign_change = if let Some(ref pdy) = tracker.prev_dy {
             pdy[i] * state.dy[i] < 0.0
         } else {
             false
         };
         if near_convergence && sign_change {
-            dy_sign_change_count[i] = dy_sign_change_count[i].saturating_add(1);
+            tracker.sign_change_count[i] = tracker.sign_change_count[i].saturating_add(1);
         } else if !sign_change {
-            dy_sign_change_count[i] = 0;
+            tracker.sign_change_count[i] = 0;
         }
-        let dy_i = if near_convergence && dy_sign_change_count[i] >= 3 {
+        let dy_i = if near_convergence && tracker.sign_change_count[i] >= 3 {
             0.5 * state.dy[i]
         } else {
             state.dy[i]
         };
         state.y[i] += alpha_y * dy_i;
     }
-    *prev_dy = Some(state.dy.clone());
+    tracker.prev_dy = Some(state.dy.clone());
 }
 
 fn update_dual_variables(
     state: &mut SolverState,
     mu_state: &MuState,
     alpha_dual_max: f64,
-    prev_dy: &mut Option<Vec<f64>>,
-    dy_sign_change_count: &mut [u8],
+    tracker: &mut DyOscillationTracker,
 ) -> f64 {
     let alpha_y = state.alpha_primal;
     let alpha_d = alpha_dual_max;
 
-    apply_damped_y_update(state, alpha_y, prev_dy, dy_sign_change_count);
+    apply_damped_y_update(state, alpha_y, tracker);
 
     let mu_ks = apply_kappa_sigma_bound_multiplier_reset(state, mu_state, alpha_d);
 
@@ -6895,8 +6911,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let mut tried_iterate_averaging: bool = false;
 
     // Strategy 2: Damped multiplier updates when oscillation detected
-    let mut prev_dy: Option<Vec<f64>> = None;
-    let mut dy_sign_change_count: Vec<u8> = vec![0u8; m]; // per-component consecutive sign change count
+    let mut dy_tracker = DyOscillationTracker::new(m);
 
     // Strategy 3: Active set reduced KKT solve
     let mut tried_active_set: bool = false;
@@ -7355,8 +7370,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             &mut state,
             &mu_state,
             alpha_dual_max,
-            &mut prev_dy,
-            &mut dy_sign_change_count,
+            &mut dy_tracker,
         );
 
         match reevaluate_after_step(
