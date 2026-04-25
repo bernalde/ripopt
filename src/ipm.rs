@@ -16,6 +16,13 @@ use crate::linear_solver::hybrid::HybridSolver;
 use crate::linear_solver::{KktMatrix, LinearSolver, SymmetricMatrix};
 use crate::options::LinearSolverChoice;
 
+/// Window size for the iterate-averaging oscillation-recovery
+/// strategy: dual-infeasibility and (x, y, z_l, z_u) histories are
+/// truncated to this many trailing entries, and oscillation is
+/// declared when at least `AVG_WINDOW / 2` consecutive sign changes
+/// appear in the differences of the dual-infeasibility history.
+const AVG_WINDOW: usize = 6;
+
 /// Create a new sparse linear solver using the best available backend.
 /// Prefers rmumps (multifrontal) when available, falls back to faer (SparseLdl).
 fn new_sparse_solver() -> Box<dyn LinearSolver> {
@@ -5208,13 +5215,12 @@ fn try_iterate_averaging_promotion<P: NlpProblem>(
     problem: &P,
     options: &SolverOptions,
     ws: &mut ConvergenceWorkspace,
-    avg_window: usize,
     n: usize,
     m: usize,
     linear_constraints: Option<&[bool]>,
     lbfgs_mode: bool,
 ) -> Option<SolveResult> {
-    if *ws.tried_iterate_averaging || ws.du_history.len() != avg_window {
+    if *ws.tried_iterate_averaging || ws.du_history.len() != AVG_WINDOW {
         return None;
     }
     let mut sign_changes = 0;
@@ -5225,7 +5231,7 @@ fn try_iterate_averaging_promotion<P: NlpProblem>(
             sign_changes += 1;
         }
     }
-    if sign_changes < avg_window / 2 {
+    if sign_changes < AVG_WINDOW / 2 {
         return None;
     }
     *ws.tried_iterate_averaging = true;
@@ -5322,13 +5328,12 @@ fn handle_acceptable_status_with_promotions<P: NlpProblem>(
     ipm_start: Instant,
     n: usize,
     m: usize,
-    avg_window: usize,
     linear_constraints: Option<&[bool]>,
     lbfgs_mode: bool,
 ) -> SolveResult {
     // Strategy 1: Try iterate averaging before declaring Acceptable
     if let Some(result) = try_iterate_averaging_promotion(
-        state, problem, options, ws, avg_window, n, m,
+        state, problem, options, ws, n, m,
         linear_constraints, lbfgs_mode,
     ) {
         return result;
@@ -5380,7 +5385,6 @@ fn check_convergence_and_handle_promotions<P: NlpProblem>(
     linear_constraints: Option<&[bool]>,
     lbfgs_mode: bool,
 ) -> Option<SolveResult> {
-    const AVG_WINDOW: usize = 6;
     let n = state.n;
     let m = state.m;
 
@@ -5414,7 +5418,7 @@ fn check_convergence_and_handle_promotions<P: NlpProblem>(
         }
         ConvergenceStatus::Acceptable => Some(handle_acceptable_status_with_promotions(
             state, problem, options, &conv_info, ws, timings,
-            iteration, ipm_start, n, m, AVG_WINDOW,
+            iteration, ipm_start, n, m,
             linear_constraints, lbfgs_mode,
         )),
         ConvergenceStatus::Diverging => {
@@ -6905,7 +6909,6 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let mut dual_stall = DualStallTracker::new();
 
     // Strategy 1: Iterate averaging for oscillation recovery
-    const AVG_WINDOW: usize = 6;
     let mut du_history: Vec<f64> = Vec::with_capacity(AVG_WINDOW + 1);
     let mut iterate_history: Vec<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>)> = Vec::new(); // (x, y, z_l, z_u)
     let mut tried_iterate_averaging: bool = false;
