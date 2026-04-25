@@ -9381,11 +9381,14 @@ fn gradient_descent_fallback(state: &SolverState) -> Option<(Vec<f64>, Vec<f64>)
 /// Build the final solve result.
 /// Computes z from stationarity for more accurate output multipliers.
 /// Unscales all values from the internal scaled space to the original NLP space.
-fn make_result(state: &SolverState, status: SolveStatus) -> SolveResult {
+/// Populate the `final_*` measures on a cloned `SolverDiagnostics`:
+/// μ, ‖θ‖_∞ primal infeasibility, dual infeasibility (raw), and the
+/// complementarity error at μ=0. Also computes the dual scaling
+/// factor `s_d` from the multiplier sum. Same formulas as
+/// `check_convergence`.
+fn populate_final_diagnostics(state: &SolverState) -> SolverDiagnostics {
     let n = state.n;
     let m = state.m;
-
-    // Fill in final convergence measures for diagnostics
     let mut diag = state.diagnostics.clone();
     diag.final_mu = state.mu;
     diag.final_primal_inf = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
@@ -9396,33 +9399,39 @@ fn make_result(state: &SolverState, status: SolveStatus) -> SolveResult {
     diag.final_compl = convergence::complementarity_error(
         &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
     );
-
-    // Compute dual scaling factor s_d (same formula as check_convergence)
     diag.final_s_d = compute_s_d_scaling(compute_multiplier_sum(state), m + 2 * n);
+    diag
+}
 
-    // Use iterative z for reported bound multipliers (Ipopt semantics).
-    // Unscale: z_unscaled = z_scaled / obj_scaling.
+/// Unscale the iterate's multipliers and constraint values for
+/// reporting (Ipopt semantics):
+///   - `z_unscaled = z_scaled / obj_scaling`
+///   - `y_unscaled[i] = y_scaled[i] * g_scaling[i] / obj_scaling`
+///   - `g_unscaled[i] = g_scaled[i] / g_scaling[i]`
+/// Returns `(z_l_out, z_u_out, y_out, g_out)`.
+fn unscale_solution_vectors(state: &SolverState) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
+    let n = state.n;
+    let m = state.m;
     let mut z_l_out = vec![0.0; n];
     let mut z_u_out = vec![0.0; n];
     for i in 0..n {
         z_l_out[i] = state.z_l[i] / state.obj_scaling;
         z_u_out[i] = state.z_u[i] / state.obj_scaling;
     }
-
-    // Unscale constraint multipliers: y_unscaled[i] = y_scaled[i] * g_scaling[i] / obj_scaling
     let mut y_out = state.y.clone();
     for i in 0..m {
         y_out[i] = state.y[i] * state.g_scaling[i] / state.obj_scaling;
     }
-
-    // Unscale constraint values: g_unscaled[i] = g_scaled[i] / g_scaling[i]
     let mut g_out = state.g.clone();
     for i in 0..m {
         g_out[i] /= state.g_scaling[i];
     }
+    (z_l_out, z_u_out, y_out, g_out)
+}
 
-    // No Acceptable status anymore — pass status through directly.
-    let validated_status = status;
+fn make_result(state: &SolverState, status: SolveStatus) -> SolveResult {
+    let diag = populate_final_diagnostics(state);
+    let (z_l_out, z_u_out, y_out, g_out) = unscale_solution_vectors(state);
 
     SolveResult {
         x: state.x.clone(),
@@ -9431,7 +9440,7 @@ fn make_result(state: &SolverState, status: SolveStatus) -> SolveResult {
         bound_multipliers_lower: z_l_out,
         bound_multipliers_upper: z_u_out,
         constraint_values: g_out,
-        status: validated_status,
+        status,
         iterations: state.iter,
         diagnostics: diag,
     }
