@@ -2819,7 +2819,7 @@ fn build_mcc_corrected_direction(
     let mut dz_u_c: Vec<f64> = state.dz_u.iter().zip(ddz_u.iter()).map(|(a, b)| a + b).collect();
 
     if dx_norm_orig > 1e-30 {
-        let dx_c_norm: f64 = dx_c.iter().map(|v| v * v).sum::<f64>().sqrt();
+        let dx_c_norm: f64 = l2_norm(&dx_c);
         if dx_c_norm > 1e-30 {
             let dot: f64 = state.dx.iter().zip(dx_c.iter()).map(|(a, b)| a * b).sum::<f64>();
             let cos_angle = dot / (dx_norm_orig * dx_c_norm);
@@ -2980,7 +2980,7 @@ fn apply_gondzio_mcc(
     let beta_min = 0.01_f64;
     let beta_max = 100.0_f64;
 
-    let dx_norm_orig: f64 = state.dx.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let dx_norm_orig: f64 = l2_norm(&state.dx);
 
     for _mcc_iter in 0..options.gondzio_mcc_max {
         let (rhs_mcc, needs_correction) = build_mcc_corrector_rhs(
@@ -3273,8 +3273,8 @@ fn maybe_revert_mehrotra_deflection(
     let Ok((dx_orig, dy_orig)) = kkt::solve_with_custom_rhs_refined(
         &kkt.matrix, kkt.n, kkt.dim, lin_solver, orig_rhs,
     ) else { return };
-    let norm_orig: f64 = dx_orig.iter().map(|v| v * v).sum::<f64>().sqrt();
-    let norm_pc: f64 = dx_dir.iter().map(|v| v * v).sum::<f64>().sqrt();
+    let norm_orig: f64 = l2_norm(&dx_orig);
+    let norm_pc: f64 = l2_norm(dx_dir);
     if norm_orig <= 1e-30 || norm_pc <= 1e-30 {
         return;
     }
@@ -8865,6 +8865,15 @@ fn compute_clamped_trial_x(state: &SolverState, dx: &[f64], alpha: f64) -> Vec<f
 /// for infeasibility classification.
 fn linf_norm(v: &[f64]) -> f64 {
     v.iter().map(|x| x.abs()).fold(0.0f64, f64::max)
+}
+
+/// L2 (Euclidean) norm of a slice. Centralises the four sites that
+/// spell out `v.iter().map(|x| x * x).sum::<f64>().sqrt()` inline —
+/// the Gondzio dampening cosine numerators (dx_c_norm,
+/// dx_norm_orig) and the Mehrotra deflection cosine numerators
+/// (norm_orig, norm_pc) in maybe_revert_mehrotra_deflection.
+fn l2_norm(v: &[f64]) -> f64 {
+    v.iter().map(|x| x * x).sum::<f64>().sqrt()
 }
 
 /// `kkt::compute_sigma` at the current iterate's
