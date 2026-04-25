@@ -3016,10 +3016,7 @@ fn try_apply_one_mcc_correction(
     );
 
     if alpha_new >= 0.9 * alpha_mcc {
-        state.dx = dx_c;
-        state.dy = dy_c;
-        state.dz_l = dz_l_c;
-        state.dz_u = dz_u_c;
+        install_step_directions(state, dx_c, dy_c, dz_l_c, dz_u_c);
         log::debug!(
             "Gondzio MCC iter {}: correction accepted, α_mcc={:.4}",
             iteration, alpha_new
@@ -4703,10 +4700,7 @@ fn try_gradient_descent_fallback<P: NlpProblem>(
     let Some(fallback) = gradient_descent_fallback(state) else {
         return false;
     };
-    state.dx = fallback.0;
-    state.dy = fallback.1;
-    state.dz_l = vec![0.0; n];
-    state.dz_u = vec![0.0; n];
+    install_step_directions(state, fallback.0, fallback.1, vec![0.0; n], vec![0.0; n]);
 
     let mut alpha_fb = 1.0;
     let obj_current = state.obj;
@@ -7397,10 +7391,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, &dx, mu_for_dz,
         );
 
-        state.dx = dx;
-        state.dy = dy;
-        state.dz_l = dz_l;
-        state.dz_u = dz_u;
+        install_step_directions(&mut state, dx, dy, dz_l, dz_u);
 
         apply_gondzio_mcc(
             &mut state,
@@ -8779,6 +8770,22 @@ fn accumulate_jt_y(state: &SolverState, target: &mut [f64]) {
     for (idx, (&row, &col)) in state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate() {
         target[col] += state.jac_vals[idx] * state.y[row];
     }
+}
+
+/// Install the four step components into `state`. Used after the main
+/// search-direction solve, after a gradient-descent fallback, and
+/// after a Gondzio multiple-centrality correction is accepted.
+fn install_step_directions(
+    state: &mut SolverState,
+    dx: Vec<f64>,
+    dy: Vec<f64>,
+    dz_l: Vec<f64>,
+    dz_u: Vec<f64>,
+) {
+    state.dx = dx;
+    state.dy = dy;
+    state.dz_l = dz_l;
+    state.dz_u = dz_u;
 }
 
 /// L-infinity norm of `J^T * c_violation`, where `c_violation` is the
