@@ -5,9 +5,9 @@
     "n": 12,
     "m": 12,
     "status": "Optimal",
-    "objective": 5812.642974213903,
+    "objective": 5812.642974234093,
     "iterations": 10,
-    "solve_time": 0.000994709
+    "solve_time": 0.000457667
   },
   {
     "solver": "ipopt",
@@ -17,7 +17,7 @@
     "status": "Optimal",
     "objective": 5812.642934996067,
     "iterations": 10,
-    "solve_time": 0.005605834
+    "solve_time": 0.002341459
   },
   {
     "solver": "ripopt",
@@ -25,9 +25,9 @@
     "n": 20,
     "m": 22,
     "status": "Optimal",
-    "objective": 17551.890919547423,
+    "objective": 17551.890919576654,
     "iterations": 23,
-    "solve_time": 0.0015745
+    "solve_time": 0.001199541
   },
   {
     "solver": "ipopt",
@@ -37,7 +37,7 @@
     "status": "Optimal",
     "objective": 17551.8908990633,
     "iterations": 15,
-    "solve_time": 0.003745083
+    "solve_time": 0.003317792
   },
   {
     "solver": "ripopt",
@@ -45,9 +45,9 @@
     "n": 38,
     "m": 68,
     "status": "Optimal",
-    "objective": 2178.0804282562212,
+    "objective": 2178.080428256279,
     "iterations": 14,
-    "solve_time": 0.005081417
+    "solve_time": 0.005057417
   },
   {
     "solver": "ipopt",
@@ -57,17 +57,17 @@
     "status": "Optimal",
     "objective": 2178.080406411837,
     "iterations": 11,
-    "solve_time": 0.008173917
+    "solve_time": 0.007906958
   },
   {
     "solver": "ripopt",
     "name": "case30_ieee",
     "n": 72,
     "m": 142,
-    "status": "MaxIterations",
-    "objective": 5541.316190692105,
-    "iterations": 16,
-    "solve_time": 52.830977458
+    "status": "NumericalError",
+    "objective": 1711.9896316795664,
+    "iterations": 78,
+    "solve_time": 41.995428083
   },
   {
     "solver": "ipopt",
@@ -77,6 +77,6 @@
     "status": "Optimal",
     "objective": 8208.515425007794,
     "iterations": 14,
-    "solve_time": 0.052370458
+    "solve_time": 0.053701667
   }
 ]
