@@ -7734,6 +7734,79 @@ fn compute_soc_alpha_and_trial_x(
     (x_soc, alpha_primal_soc)
 }
 
+/// Outcome of one second-order-correction trial-point evaluation.
+enum SocTrialOutcome {
+    /// Filter accepted the trial — caller returns this from the SOC fn.
+    Accepted { x_soc: Vec<f64>, obj_soc: f64, g_soc: Vec<f64> },
+    /// Eval failed, NaN/Inf detected, or theta failed the κ_soc test —
+    /// caller bails out (returns `None`).
+    Abort,
+    /// theta improved but filter rejected — caller continues the SOC
+    /// loop using `g_soc` to refresh `latest_trial_c`.
+    NotAccepted { g_soc: Vec<f64> },
+}
+
+/// Evaluate objective/constraints at `x_soc`, gate on the κ_soc theta
+/// reduction test, then check filter acceptability of (theta_soc,
+/// phi_soc) against (theta_current, phi_current). Mutates
+/// `theta_prev_soc` when theta improved enough to keep iterating.
+/// Mirrors Ipopt IpFilterLSAcceptor.cpp:617-640.
+#[allow(clippy::too_many_arguments)]
+fn evaluate_soc_trial_and_check<P: NlpProblem>(
+    state: &SolverState,
+    problem: &P,
+    options: &SolverOptions,
+    filter: &Filter,
+    x_soc: Vec<f64>,
+    n: usize,
+    m: usize,
+    theta_current: f64,
+    phi_current: f64,
+    grad_phi_step: f64,
+    alpha: f64,
+    kappa_soc: f64,
+    theta_prev_soc: &mut f64,
+) -> SocTrialOutcome {
+    let mut obj_soc = f64::INFINITY;
+    if !problem.objective(&x_soc, true, &mut obj_soc) || !obj_soc.is_finite() {
+        return SocTrialOutcome::Abort;
+    }
+    let mut g_soc = vec![0.0; m];
+    if !problem.constraints(&x_soc, false, &mut g_soc) {
+        return SocTrialOutcome::Abort;
+    }
+    if g_soc.iter().any(|v| !v.is_finite()) {
+        return SocTrialOutcome::Abort;
+    }
+
+    let theta_soc = convergence::primal_infeasibility(&g_soc, &state.g_l, &state.g_u);
+    if theta_soc >= kappa_soc * *theta_prev_soc {
+        return SocTrialOutcome::Abort;
+    }
+    *theta_prev_soc = theta_soc;
+
+    let phi_soc = compute_barrier_phi(
+        obj_soc, &x_soc, &g_soc, state, n, m, options.constraint_slack_barrier,
+    );
+
+    // Pass ORIGINAL alpha (alpha_primal_test), not alpha_primal_soc.
+    // Matches Ipopt IpFilterLSAcceptor.cpp:629.
+    let (acceptable, _) = filter.check_acceptability(
+        theta_current,
+        phi_current,
+        theta_soc,
+        phi_soc,
+        grad_phi_step,
+        alpha,
+    );
+
+    if acceptable {
+        SocTrialOutcome::Accepted { x_soc, obj_soc, g_soc }
+    } else {
+        SocTrialOutcome::NotAccepted { g_soc }
+    }
+}
+
 /// Refresh `latest_trial_c` from a newly evaluated `g_soc`, using the
 /// same equality/lower/upper classification as
 /// `init_soc_constraint_residuals`.
@@ -7811,40 +7884,20 @@ fn attempt_soc<P: NlpProblem>(
         let (x_soc, alpha_primal_soc_new) = compute_soc_alpha_and_trial_x(state, dx_soc, tau);
         alpha_primal_soc = alpha_primal_soc_new;
 
-        let mut obj_soc = f64::INFINITY;
-        if !problem.objective(&x_soc, true, &mut obj_soc) || !obj_soc.is_finite() { return None; }
-        let mut g_soc = vec![0.0; m];
-        if !problem.constraints(&x_soc, false, &mut g_soc) { return None; }
-        if g_soc.iter().any(|v| !v.is_finite()) { return None; }
-
-        let theta_soc = convergence::primal_infeasibility(&g_soc, &state.g_l, &state.g_u);
-
-        if theta_soc >= kappa_soc * theta_prev_soc {
-            return None;
+        match evaluate_soc_trial_and_check(
+            state, problem, options, filter, x_soc, n, m,
+            theta_current, phi_current, grad_phi_step, alpha,
+            kappa_soc, &mut theta_prev_soc,
+        ) {
+            SocTrialOutcome::Accepted { x_soc, obj_soc, g_soc } => {
+                return Some((x_soc, obj_soc, g_soc, alpha_primal_soc));
+            }
+            SocTrialOutcome::Abort => return None,
+            SocTrialOutcome::NotAccepted { g_soc } => {
+                // Update latest trial_c for next iter's accumulation.
+                update_soc_latest_trial_c(state, &g_soc, &mut latest_trial_c);
+            }
         }
-        theta_prev_soc = theta_soc;
-
-        let phi_soc = compute_barrier_phi(
-            obj_soc, &x_soc, &g_soc, state, n, m, options.constraint_slack_barrier,
-        );
-
-        // Pass ORIGINAL alpha (alpha_primal_test), not alpha_primal_soc.
-        // Matches Ipopt IpFilterLSAcceptor.cpp:629.
-        let (acceptable, _) = filter.check_acceptability(
-            theta_current,
-            phi_current,
-            theta_soc,
-            phi_soc,
-            grad_phi_step,
-            alpha,
-        );
-
-        if acceptable {
-            return Some((x_soc, obj_soc, g_soc, alpha_primal_soc));
-        }
-
-        // Update latest trial_c for next iter's accumulation.
-        update_soc_latest_trial_c(state, &g_soc, &mut latest_trial_c);
     }
 
     None
@@ -7897,37 +7950,19 @@ fn attempt_soc_condensed<P: NlpProblem>(
         let (x_soc, alpha_primal_soc_new) = compute_soc_alpha_and_trial_x(state, &dx_soc, tau);
         alpha_primal_soc = alpha_primal_soc_new;
 
-        let mut obj_soc = f64::INFINITY;
-        if !problem.objective(&x_soc, true, &mut obj_soc) || !obj_soc.is_finite() { return None; }
-        let mut g_soc = vec![0.0; m];
-        if !problem.constraints(&x_soc, false, &mut g_soc) { return None; }
-        if g_soc.iter().any(|v| !v.is_finite()) { return None; }
-
-        let theta_soc = convergence::primal_infeasibility(&g_soc, &state.g_l, &state.g_u);
-
-        if theta_soc >= kappa_soc * theta_prev_soc {
-            return None;
+        match evaluate_soc_trial_and_check(
+            state, problem, options, filter, x_soc, n, m,
+            theta_current, phi_current, grad_phi_step, alpha,
+            kappa_soc, &mut theta_prev_soc,
+        ) {
+            SocTrialOutcome::Accepted { x_soc, obj_soc, g_soc } => {
+                return Some((x_soc, obj_soc, g_soc, alpha_primal_soc));
+            }
+            SocTrialOutcome::Abort => return None,
+            SocTrialOutcome::NotAccepted { g_soc } => {
+                update_soc_latest_trial_c(state, &g_soc, &mut latest_trial_c);
+            }
         }
-        theta_prev_soc = theta_soc;
-
-        let phi_soc = compute_barrier_phi(
-            obj_soc, &x_soc, &g_soc, state, n, m, options.constraint_slack_barrier,
-        );
-
-        let (acceptable, _) = filter.check_acceptability(
-            theta_current,
-            phi_current,
-            theta_soc,
-            phi_soc,
-            grad_phi_step,
-            alpha,
-        );
-
-        if acceptable {
-            return Some((x_soc, obj_soc, g_soc, alpha_primal_soc));
-        }
-
-        update_soc_latest_trial_c(state, &g_soc, &mut latest_trial_c);
     }
 
     None
@@ -7972,26 +8007,19 @@ fn attempt_soc_sparse_condensed<P: NlpProblem>(
         let (x_soc, alpha_primal_soc_new) = compute_soc_alpha_and_trial_x(state, &dx_soc, tau);
         alpha_primal_soc = alpha_primal_soc_new;
 
-        let mut obj_soc = f64::INFINITY;
-        if !problem.objective(&x_soc, true, &mut obj_soc) || !obj_soc.is_finite() { return None; }
-        let mut g_soc = vec![0.0; m];
-        if !problem.constraints(&x_soc, false, &mut g_soc) { return None; }
-        if g_soc.iter().any(|v| !v.is_finite()) { return None; }
-
-        let theta_soc = convergence::primal_infeasibility(&g_soc, &state.g_l, &state.g_u);
-        if theta_soc >= kappa_soc * theta_prev_soc { return None; }
-        theta_prev_soc = theta_soc;
-
-        let phi_soc = compute_barrier_phi(
-            obj_soc, &x_soc, &g_soc, state, n, m, options.constraint_slack_barrier,
-        );
-
-        let (acceptable, _) = filter.check_acceptability(
-            theta_current, phi_current, theta_soc, phi_soc, grad_phi_step, alpha,
-        );
-        if acceptable { return Some((x_soc, obj_soc, g_soc, alpha_primal_soc)); }
-
-        update_soc_latest_trial_c(state, &g_soc, &mut latest_trial_c);
+        match evaluate_soc_trial_and_check(
+            state, problem, options, filter, x_soc, n, m,
+            theta_current, phi_current, grad_phi_step, alpha,
+            kappa_soc, &mut theta_prev_soc,
+        ) {
+            SocTrialOutcome::Accepted { x_soc, obj_soc, g_soc } => {
+                return Some((x_soc, obj_soc, g_soc, alpha_primal_soc));
+            }
+            SocTrialOutcome::Abort => return None,
+            SocTrialOutcome::NotAccepted { g_soc } => {
+                update_soc_latest_trial_c(state, &g_soc, &mut latest_trial_c);
+            }
+        }
     }
 
     None
