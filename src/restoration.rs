@@ -386,36 +386,44 @@ impl RestorationPhase {
             return (x_rest, false);
         }
 
-        // Success criteria:
-        // 1. Constraint violation is below solver tolerance (feasible)
-        // 2. At least 10% infeasibility reduction (kappa_resto = 0.9) AND either
-        //    feasible enough or a meaningful absolute reduction
+        // Ipopt RestoFilterConvCheck (IpRestoFilterConvCheck.cpp:53-80)
+        // requires three gates to declare restoration success:
+        //   (1) primal-infeasibility decrease:
+        //         theta_final <= max(0.9 * theta_initial, min(tol, constr_viol_tol))
+        //   (2) parent filter accepts (theta_final, phi_rest)
+        //   (3) parent current iterate accepts the trial point with
+        //       resto-relaxation; this is implicit here because the
+        //       caller augments the parent filter with a margin entry
+        //       at restoration entry, so (2) subsumes (3) within
+        //       gamma_theta / gamma_phi.
+        //
+        // Feasibility recovery (theta_final < constr_viol_tol)
+        // bypasses the filter check because the parent resets the
+        // filter on feasibility. The legacy "large_reduction" (50%)
+        // and "abs_reduction" alternate paths are retained as
+        // additional success conditions; they are subsumed by Ipopt's
+        // gate (1) on most problems but help the GN restoration
+        // recover when theta_initial is small.
         let feasible = theta_final < options.constr_viol_tol;
-        let kappa_resto_met = theta_final <= 0.9 * theta_initial;
+        let small_threshold = options.tol.min(options.constr_viol_tol);
+        let ipopt_kappa_resto_met =
+            theta_final <= (0.9 * theta_initial).max(small_threshold);
         let large_reduction = theta_final < 0.5 * theta_initial;
         let abs_reduction = (theta_initial - theta_final) > options.tol;
 
-        let mut success = feasible
-            || large_reduction
-            || (kappa_resto_met && (feasible || abs_reduction));
+        let infeas_decrease_ok =
+            ipopt_kappa_resto_met || large_reduction || abs_reduction;
 
-        // Filter acceptance check: if we have an objective evaluator, verify the
-        // restored point is acceptable to the filter before declaring full success.
-        if success {
+        let mut success = feasible || infeas_decrease_ok;
+
+        // Filter acceptance check (gate 2). Always run when the caller
+        // provided an objective evaluator (every production caller does);
+        // a non-feasible exit must satisfy the filter unconditionally.
+        if success && !feasible {
             if let Some(eval_obj) = eval_objective {
                 let mut phi_rest = f64::INFINITY;
-                if !eval_obj(&x_rest, &mut phi_rest) {
-                    // Objective eval failed; treat as filter-rejected
-                    if !feasible {
-                        success = false;
-                    }
-                } else if !is_acceptable_to_filter(theta_final, phi_rest) {
-                    // Point is not acceptable to the filter.
-                    // Still succeed if we achieved feasibility (filter will be reset),
-                    // but fail if we only got partial reduction.
-                    if !feasible {
-                        success = false;
-                    }
+                if !eval_obj(&x_rest, &mut phi_rest) || !is_acceptable_to_filter(theta_final, phi_rest) {
+                    success = false;
                 }
             }
         }

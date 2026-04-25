@@ -73,10 +73,14 @@ where a reader short on time should start.
 12. **ripopt: soft-restoration phase.** When filter rejects, Ipopt first
     tries a primal-dual soft restoration before restarting a nested
     IPM. ripopt jumps directly to full restoration or failure.
-13. **ripopt: port `RestoFilterConvCheck`.** Restoration currently exits
-    on feasibility alone; Ipopt additionally requires filter-acceptance
-    in the original problem. Ping-pong between main IPM and restoration
-    is a real failure mode for several CUTEst problems.
+13. ~~**ripopt: port `RestoFilterConvCheck`.**~~
+    **DONE.** `restoration.rs` success criteria now follow the Ipopt
+    `IpRestoFilterConvCheck.cpp:53-80` three-gate test:
+    `theta_final ≤ max(0.9·theta_initial, min(tol, constr_viol_tol))`,
+    plus a mandatory parent-filter acceptance check on every
+    non-feasible exit. Gate 3 (parent iterate accepts with
+    resto-relaxation) is implicit because the caller augments the
+    parent filter with a margin entry before invoking restoration.
 14. **ripopt: quality-function mu oracle must include centrality term.**
     Production Free-mode oracle is `compute_loqo_mu` at `src/ipm.rs`,
     which already incorporates centrality via the Loqo σ formula
