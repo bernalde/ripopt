@@ -6269,10 +6269,7 @@ fn check_restored_point_near_tolerance(
     let rest_co = convergence::complementarity_error(
         &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
     );
-    let mult_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
-        + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
-        + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
-    let s_d = compute_s_d_scaling(mult_sum, m + 2 * n);
+    let s_d = compute_s_d_scaling(compute_multiplier_sum(state), m + 2 * n);
     let near_tol = 100.0 * options.tol;
     let du_tol = (near_tol * s_d).max(1e-2);
     let co_tol = (near_tol * s_d).max(1e-2);
@@ -7670,10 +7667,7 @@ fn print_max_iter_diagnostics(
     let final_compl = convergence::complementarity_error(
         &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
     );
-    let mult_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
-        + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
-        + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
-    let s_d = compute_s_d_scaling(mult_sum, m + 2 * n);
+    let s_d = compute_s_d_scaling(compute_multiplier_sum(state), m + 2 * n);
     rip_log!(
         "ripopt: MaxIter diag: pr={:.2e} du={:.2e}(t={:.2e}) du_u={:.2e}(t={:.0e}) co={:.2e}(t={:.2e}) mu={:.2e} sd={:.1} ac={}",
         final_primal_inf,
