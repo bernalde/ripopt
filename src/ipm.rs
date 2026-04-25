@@ -6369,6 +6369,31 @@ fn check_restored_point_near_tolerance(
     None
 }
 
+/// Copy the saved best-du iterate `(best_du_x, best_du_y, best_du_zl,
+/// best_du_zu)` back into `state` and re-evaluate. Each multiplier
+/// vector is restored only when its `Option` is `Some`, allowing the
+/// caller to opt out of restoring `(y, z)` when the best-du save was
+/// primal-only. After the copy, calls `evaluate_with_linear` to
+/// refresh `obj`, `g`, gradients, and the L-BFGS Hessian.
+fn restore_best_du_iterate<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    lbfgs_state: &mut Option<LbfgsIpmState>,
+    best_du_x: &[f64],
+    best_du_y: &Option<Vec<f64>>,
+    best_du_zl: &Option<Vec<f64>>,
+    best_du_zu: &Option<Vec<f64>>,
+    linear_constraints: Option<&[bool]>,
+    lbfgs_mode: bool,
+) {
+    state.x.copy_from_slice(best_du_x);
+    if let Some(ref bdy) = best_du_y { state.y.copy_from_slice(bdy); }
+    if let Some(ref bdzl) = best_du_zl { state.z_l.copy_from_slice(bdzl); }
+    if let Some(ref bdzu) = best_du_zu { state.z_u.copy_from_slice(bdzu); }
+    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+    update_lbfgs_hessian(lbfgs_state, state);
+}
+
 fn handle_dual_stagnation<P: NlpProblem>(
     state: &mut SolverState,
     problem: &P,
@@ -6421,12 +6446,10 @@ fn handle_dual_stagnation<P: NlpProblem>(
         "Dual stagnation at iter {}: du={:.2e}, restoring best-du point (du={:.2e} at iter {})",
         iteration, current_du, *last_good_du, *last_good_iter
     );
-    state.x.copy_from_slice(bdx);
-    if let Some(ref bdy) = best_du_y { state.y.copy_from_slice(bdy); }
-    if let Some(ref bdzl) = best_du_zl { state.z_l.copy_from_slice(bdzl); }
-    if let Some(ref bdzu) = best_du_zu { state.z_u.copy_from_slice(bdzu); }
-    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-    update_lbfgs_hessian(lbfgs_state, state);
+    restore_best_du_iterate(
+        state, problem, lbfgs_state, bdx, best_du_y, best_du_zl, best_du_zu,
+        linear_constraints, lbfgs_mode,
+    );
 
     // Reset filter and bump mu for a fresh start from the good point.
     reset_filter_with_current_theta(state, filter);
