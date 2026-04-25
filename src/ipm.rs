@@ -8717,6 +8717,63 @@ fn compute_ls_multiplier_estimate_with_z(
 /// Sparse variant of LS multiplier estimate for large problems.
 /// Builds sparse J*J^T in COO format and factors with the sparse solver.
 /// If `solver` is Some, reuses the solver (for recalc_y caching).
+/// Build the sparse normal matrix `J·Jᵀ + reg·I` (upper triangle) as
+/// a `SparseSymmetricMatrix`. Groups Jacobian entries by column, then
+/// for each column accumulates the outer product `v·vᵀ` into a
+/// HashMap keyed by `(row, col)` with `row ≤ col`. A small `1e-12`
+/// regularization on the diagonal preserves numerical stability when
+/// `J` is rank-deficient. Used by the sparse LS multiplier estimate.
+fn build_sparse_normal_matrix_jjt(
+    jac_rows: &[usize],
+    jac_cols: &[usize],
+    jac_vals: &[f64],
+    n: usize,
+    m: usize,
+) -> crate::linear_solver::SparseSymmetricMatrix {
+    use crate::linear_solver::SparseSymmetricMatrix;
+
+    let mut col_entries: Vec<Vec<(usize, f64)>> = vec![vec![]; n];
+    for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
+        col_entries[col].push((row, jac_vals[idx]));
+    }
+
+    let total_col_nnz: usize = col_entries.iter().map(|c| c.len()).sum();
+    let nnz_est = total_col_nnz * 4;
+
+    use std::collections::HashMap;
+    let mut triplet_map: HashMap<(usize, usize), f64> = HashMap::with_capacity(nnz_est);
+
+    for k in 0..n {
+        let entries = &col_entries[k];
+        for &(i, vi) in entries.iter() {
+            for &(j, vj) in entries.iter() {
+                if i >= j {
+                    *triplet_map.entry((j, i)).or_insert(0.0) += vi * vj;
+                }
+            }
+        }
+    }
+
+    let reg = 1e-12;
+    for i in 0..m {
+        *triplet_map.entry((i, i)).or_insert(0.0) += reg;
+    }
+
+    let nnz = triplet_map.len();
+    let mut ssm = SparseSymmetricMatrix {
+        n: m,
+        triplet_rows: Vec::with_capacity(nnz),
+        triplet_cols: Vec::with_capacity(nnz),
+        triplet_vals: Vec::with_capacity(nnz),
+    };
+    for (&(r, c), &v) in &triplet_map {
+        ssm.triplet_rows.push(r);
+        ssm.triplet_cols.push(c);
+        ssm.triplet_vals.push(v);
+    }
+    ssm
+}
+
 fn compute_ls_multiplier_estimate_sparse(
     grad_f: &[f64],
     jac_rows: &[usize],
@@ -8731,60 +8788,13 @@ fn compute_ls_multiplier_estimate_sparse(
     z_l: Option<&[f64]>,
     z_u: Option<&[f64]>,
 ) -> Option<Vec<f64>> {
-    use crate::linear_solver::SparseSymmetricMatrix;
     if m == 0 {
         return None;
     }
 
     let b = compute_ls_multiplier_rhs(grad_f, jac_rows, jac_cols, jac_vals, n, m, z_l, z_u);
 
-    // Build sparse J*J^T: group Jacobian entries by column, then for each
-    // column accumulate outer products into COO triplets.
-    // Use a HashMap to accumulate duplicates efficiently.
-    let mut col_entries: Vec<Vec<(usize, f64)>> = vec![vec![]; n];
-    for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
-        col_entries[col].push((row, jac_vals[idx]));
-    }
-
-    // Estimate nnz: for PDE Jacobians, each column has O(1) nonzeros
-    let total_col_nnz: usize = col_entries.iter().map(|c| c.len()).sum();
-    let nnz_est = total_col_nnz * 4; // rough upper bound
-
-    use std::collections::HashMap;
-    let mut triplet_map: HashMap<(usize, usize), f64> = HashMap::with_capacity(nnz_est);
-
-    for k in 0..n {
-        let entries = &col_entries[k];
-        for &(i, vi) in entries.iter() {
-            for &(j, vj) in entries.iter() {
-                if i >= j {
-                    // Upper triangle: row <= col, so store (j, i) since j <= i
-                    *triplet_map.entry((j, i)).or_insert(0.0) += vi * vj;
-                }
-            }
-        }
-    }
-
-    // Add small regularization to diagonal for numerical stability
-    let reg = 1e-12;
-    for i in 0..m {
-        *triplet_map.entry((i, i)).or_insert(0.0) += reg;
-    }
-
-    // Build SparseSymmetricMatrix (upper triangle: row <= col)
-    let nnz = triplet_map.len();
-    let mut ssm = SparseSymmetricMatrix {
-        n: m,
-        triplet_rows: Vec::with_capacity(nnz),
-        triplet_cols: Vec::with_capacity(nnz),
-        triplet_vals: Vec::with_capacity(nnz),
-    };
-    for (&(r, c), &v) in &triplet_map {
-        ssm.triplet_rows.push(r);
-        ssm.triplet_cols.push(c);
-        ssm.triplet_vals.push(v);
-    }
-
+    let ssm = build_sparse_normal_matrix_jjt(jac_rows, jac_cols, jac_vals, n, m);
     let matrix = KktMatrix::Sparse(ssm);
 
     // Factor and solve
