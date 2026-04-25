@@ -2525,12 +2525,7 @@ fn evaluate_trial_point<P: NlpProblem>(
     #[allow(clippy::needless_range_loop)]
     for i in 0..n {
         x_trial[i] = state.x[i] + alpha * state.dx[i];
-        if state.x_l[i].is_finite() {
-            x_trial[i] = x_trial[i].max(state.x_l[i] + 1e-14);
-        }
-        if state.x_u[i].is_finite() {
-            x_trial[i] = x_trial[i].min(state.x_u[i] - 1e-14);
-        }
+        clamp_to_open_bounds(&mut x_trial, &state.x_l, &state.x_u, i);
     }
 
     let mut obj_trial = f64::INFINITY;
@@ -4233,12 +4228,7 @@ fn apply_restoration_recovery_strategy<P: NlpProblem>(
             };
             let sign = if (i * 7 + fail_count * 13) % 3 == 0 { -1.0 } else { 1.0 };
             state.x[i] += sign * 1e-4 * range;
-            if state.x_l[i].is_finite() {
-                state.x[i] = state.x[i].max(state.x_l[i] + 1e-14);
-            }
-            if state.x_u[i].is_finite() {
-                state.x[i] = state.x[i].min(state.x_u[i] - 1e-14);
-            }
+            clamp_to_open_bounds(&mut state.x, &state.x_l, &state.x_u, i);
         }
         let _ = evaluate_and_refresh_lbfgs(state, problem, lbfgs_state, linear_constraints, lbfgs_mode);
     }
@@ -4504,12 +4494,7 @@ fn attempt_soft_restoration<P: NlpProblem>(
     let mut x_soft = vec![0.0; n];
     for i in 0..n {
         x_soft[i] = state.x[i] + soft_alpha * state.dx[i];
-        if state.x_l[i].is_finite() {
-            x_soft[i] = x_soft[i].max(state.x_l[i] + 1e-14);
-        }
-        if state.x_u[i].is_finite() {
-            x_soft[i] = x_soft[i].min(state.x_u[i] - 1e-14);
-        }
+        clamp_to_open_bounds(&mut x_soft, &state.x_l, &state.x_u, i);
     }
     let mut obj_soft = 0.0;
     let obj_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -4701,12 +4686,7 @@ fn try_early_perturbation_recovery<P: NlpProblem>(
                 1.0
             };
             state.x[i] += sign * perturb_scale * mag;
-            if state.x_l[i].is_finite() {
-                state.x[i] = state.x[i].max(state.x_l[i] + 1e-14);
-            }
-            if state.x_u[i].is_finite() {
-                state.x[i] = state.x[i].min(state.x_u[i] - 1e-14);
-            }
+            clamp_to_open_bounds(&mut state.x, &state.x_l, &state.x_u, i);
         }
         for i in 0..n {
             if state.x_l[i].is_finite() {
@@ -4778,12 +4758,7 @@ fn try_gradient_descent_fallback<P: NlpProblem>(
         let mut x_trial = vec![0.0; n];
         for i in 0..n {
             x_trial[i] = state.x[i] + alpha_fb * state.dx[i];
-            if state.x_l[i].is_finite() {
-                x_trial[i] = x_trial[i].max(state.x_l[i] + 1e-14);
-            }
-            if state.x_u[i].is_finite() {
-                x_trial[i] = x_trial[i].min(state.x_u[i] - 1e-14);
-            }
+            clamp_to_open_bounds(&mut x_trial, &state.x_l, &state.x_u, i);
         }
         let mut obj_trial = f64::INFINITY;
         let obj_ok = problem.objective(&x_trial, true, &mut obj_trial);
@@ -4966,12 +4941,7 @@ fn try_last_resort_perturbation<P: NlpProblem>(
             let mag = state.x[i].abs().max(1.0);
             let sign = if (i * 7 + iteration * 13) % 3 == 0 { -1.0 } else { 1.0 };
             state.x[i] += sign * perturb_scale * mag;
-            if state.x_l[i].is_finite() {
-                state.x[i] = state.x[i].max(state.x_l[i] + 1e-14);
-            }
-            if state.x_u[i].is_finite() {
-                state.x[i] = state.x[i].min(state.x_u[i] - 1e-14);
-            }
+            clamp_to_open_bounds(&mut state.x, &state.x_l, &state.x_u, i);
         }
         let pert2_ok = evaluate_and_refresh_lbfgs(state, problem, lbfgs_state, linear_constraints, lbfgs_mode);
         if pert2_ok && !state.obj.is_nan() && !state.obj.is_infinite() {
@@ -7875,12 +7845,7 @@ fn compute_soc_alpha_and_trial_x(
     let mut x_soc = vec![0.0; n];
     for i in 0..n {
         x_soc[i] = state.x[i] + alpha_primal_soc * dx_soc[i];
-        if state.x_l[i].is_finite() {
-            x_soc[i] = x_soc[i].max(state.x_l[i] + 1e-14);
-        }
-        if state.x_u[i].is_finite() {
-            x_soc[i] = x_soc[i].min(state.x_u[i] - 1e-14);
-        }
+        clamp_to_open_bounds(&mut x_soc, &state.x_l, &state.x_u, i);
     }
     (x_soc, alpha_primal_soc)
 }
@@ -8928,6 +8893,21 @@ fn compute_compl_err_at_state(state: &SolverState) -> f64 {
     convergence::complementarity_error(
         &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
     )
+}
+
+/// Clamp `arr[i]` strictly inside the open variable box at index `i`,
+/// using a 1e-14 inset off finite bounds. Callers use this to project
+/// trial / SOC / perturbed iterates back to the strict interior so the
+/// barrier `log(s)` terms stay finite. Takes `x_l`/`x_u` directly (not
+/// a `&SolverState`) so callers can pass `&mut state.x` for `arr`
+/// without an aliased state borrow.
+fn clamp_to_open_bounds(arr: &mut [f64], x_l: &[f64], x_u: &[f64], i: usize) {
+    if x_l[i].is_finite() {
+        arr[i] = arr[i].max(x_l[i] + 1e-14);
+    }
+    if x_u[i].is_finite() {
+        arr[i] = arr[i].min(x_u[i] - 1e-14);
+    }
 }
 
 /// Commit a trial point as the new iterate: writes `x`, `obj`, `g`,
