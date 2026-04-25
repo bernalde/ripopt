@@ -2346,6 +2346,24 @@ fn update_lbfgs_hessian(
     }
 }
 
+/// Re-evaluate the problem at the current `state.x` (Hessian, gradient,
+/// constraints, Jacobian) and refresh the L-BFGS Hessian if L-BFGS mode
+/// is on. The two-step "evaluate then update_lbfgs" pair appears at
+/// over a dozen sites: every restoration recovery, every perturbation
+/// retry, every saved-state restore. Returns the evaluator's success
+/// flag for the few callers that branch on it.
+fn evaluate_and_refresh_lbfgs<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    lbfgs_state: &mut Option<LbfgsIpmState>,
+    linear_constraints: Option<&[bool]>,
+    lbfgs_mode: bool,
+) -> bool {
+    let ok = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+    update_lbfgs_hessian(lbfgs_state, state);
+    ok
+}
+
 /// Bundled output of the per-iteration KKT assembly phase.
 ///
 /// Holds the barrier diagonal `sigma` and whichever of the three KKT
@@ -3205,8 +3223,7 @@ fn process_watchdog_trial<P: NlpProblem>(
         state.obj = saved.obj;
         state.g = saved.g.clone();
         state.grad_f = saved.grad_f.clone();
-        let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-        update_lbfgs_hessian(lbfgs_state, state);
+        let _ = evaluate_and_refresh_lbfgs(state, problem, lbfgs_state, linear_constraints, lbfgs_mode);
 
         *watchdog_active = false;
         *watchdog_trial_count = 0;
@@ -3334,8 +3351,7 @@ fn restore_after_solve_failure<P: NlpProblem>(
     if success {
         state.x = x_rest;
         state.alpha_primal = 0.0;
-        let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-        update_lbfgs_hessian(lbfgs_state, state);
+        let _ = evaluate_and_refresh_lbfgs(state, problem, lbfgs_state, linear_constraints, lbfgs_mode);
         return SolveRestoreOutcome::Continue;
     }
     SolveRestoreOutcome::Return(make_result(state, SolveStatus::NumericalError))
@@ -4224,8 +4240,7 @@ fn apply_restoration_recovery_strategy<P: NlpProblem>(
                 state.x[i] = state.x[i].min(state.x_u[i] - 1e-14);
             }
         }
-        let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-        update_lbfgs_hessian(lbfgs_state, state);
+        let _ = evaluate_and_refresh_lbfgs(state, problem, lbfgs_state, linear_constraints, lbfgs_mode);
     }
 }
 
@@ -4706,8 +4721,7 @@ fn try_early_perturbation_recovery<P: NlpProblem>(
                 state.z_u[i] = state.mu / slack;
             }
         }
-        let pert_eval_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-        update_lbfgs_hessian(lbfgs_state, state);
+        let pert_eval_ok = evaluate_and_refresh_lbfgs(state, problem, lbfgs_state, linear_constraints, lbfgs_mode);
         if pert_eval_ok && !state.obj.is_nan() && !state.obj.is_infinite()
             && !state.grad_f.iter().any(|v| v.is_nan() || v.is_infinite())
         {
@@ -4786,8 +4800,7 @@ fn try_gradient_descent_fallback<P: NlpProblem>(
         alpha_fb *= 0.5;
     }
     if fb_accepted {
-        let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-        update_lbfgs_hessian(lbfgs_state, state);
+        let _ = evaluate_and_refresh_lbfgs(state, problem, lbfgs_state, linear_constraints, lbfgs_mode);
         return true;
     }
     false
@@ -4846,8 +4859,7 @@ fn recover_from_factor_failure<P: NlpProblem>(
     if success {
         state.x = x_rest;
         state.alpha_primal = 0.0;
-        let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-        update_lbfgs_hessian(lbfgs_state, state);
+        let _ = evaluate_and_refresh_lbfgs(state, problem, lbfgs_state, linear_constraints, lbfgs_mode);
         return FactorDecision::Continue;
     }
 
@@ -4964,8 +4976,7 @@ fn try_last_resort_perturbation<P: NlpProblem>(
                 state.x[i] = state.x[i].min(state.x_u[i] - 1e-14);
             }
         }
-        let pert2_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-        update_lbfgs_hessian(lbfgs_state, state);
+        let pert2_ok = evaluate_and_refresh_lbfgs(state, problem, lbfgs_state, linear_constraints, lbfgs_mode);
         if pert2_ok && !state.obj.is_nan() && !state.obj.is_infinite() {
             reset_filter_with_current_theta(state, filter);
             return true;
@@ -6400,8 +6411,7 @@ fn restore_best_du_iterate<P: NlpProblem>(
     if let Some(ref bdy) = best_du_y { state.y.copy_from_slice(bdy); }
     if let Some(ref bdzl) = best_du_zl { state.z_l.copy_from_slice(bdzl); }
     if let Some(ref bdzu) = best_du_zu { state.z_u.copy_from_slice(bdzu); }
-    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-    update_lbfgs_hessian(lbfgs_state, state);
+    let _ = evaluate_and_refresh_lbfgs(state, problem, lbfgs_state, linear_constraints, lbfgs_mode);
 }
 
 fn handle_dual_stagnation<P: NlpProblem>(
@@ -6879,8 +6889,7 @@ fn initial_evaluate_with_recovery<P: NlpProblem>(
     n: usize,
     options: &SolverOptions,
 ) -> Result<(), SolveResult> {
-    let init_eval_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-    update_lbfgs_hessian(lbfgs_state, state);
+    let init_eval_ok = evaluate_and_refresh_lbfgs(state, problem, lbfgs_state, linear_constraints, lbfgs_mode);
 
     if init_eval_ok && !state.obj.is_nan() && !state.obj.is_infinite()
         && !state.grad_f.iter().any(|v| v.is_nan() || v.is_infinite())
@@ -6918,8 +6927,7 @@ fn initial_evaluate_with_recovery<P: NlpProblem>(
                 state.z_u[i] = options.mu_init / slack;
             }
         }
-        let perturb_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-        update_lbfgs_hessian(lbfgs_state, state);
+        let perturb_ok = evaluate_and_refresh_lbfgs(state, problem, lbfgs_state, linear_constraints, lbfgs_mode);
         if perturb_ok && !state.obj.is_nan() && !state.obj.is_infinite()
             && !state.grad_f.iter().any(|v| v.is_nan() || v.is_infinite())
         {
@@ -8260,8 +8268,7 @@ fn apply_restoration_success<P: NlpProblem>(
     state.x.copy_from_slice(x_new);
     state.alpha_primal = 0.0;
 
-    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-    update_lbfgs_hessian(lbfgs_state, state);
+    let _ = evaluate_and_refresh_lbfgs(state, problem, lbfgs_state, linear_constraints, lbfgs_mode);
 
     let nuclear_reset = reset_bound_multipliers_after_restoration(state, n);
     recompute_y_after_restoration(state, options, n, m);
