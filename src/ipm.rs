@@ -3399,10 +3399,7 @@ fn try_mehrotra_predictor(
     let (dx_aff, _) = kkt::solve_with_custom_rhs_refined(
         &kkt.matrix, kkt.n, kkt.dim, lin_solver, &rhs_aff,
     ).ok()?;
-    let (dz_l_aff, dz_u_aff) = kkt::recover_dz(
-        &state.x, &state.x_l, &state.x_u,
-        &state.z_l, &state.z_u, &dx_aff, 0.0,
-    );
+    let (dz_l_aff, dz_u_aff) = recover_dz_from_state(state, &dx_aff, 0.0);
     let tau_aff = 1.0 - 1e-3;
     let mut alpha_aff = fraction_to_boundary_dual_z_min(state, &dz_l_aff, &dz_u_aff, tau_aff)
         .min(1.0);
@@ -7185,9 +7182,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         // Mehrotra cross-term, so dz recovery uses the plain Fiacco formula
         // dz_L[i] = (mu - z_L*s_L)/s_L - (z_L/s_L)*dx[i] at mu_new.
         let mu_for_dz = mehrotra_aff.as_ref().map(|t| t.3).unwrap_or(state.mu);
-        let (dz_l, dz_u) = kkt::recover_dz(
-            &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, &dx, mu_for_dz,
-        );
+        let (dz_l, dz_u) = recover_dz_from_state(&state, &dx, mu_for_dz);
 
         install_step_directions(&mut state, dx, dy, dz_l, dz_u);
 
@@ -8861,6 +8856,18 @@ fn compute_clamped_trial_x(state: &SolverState, dx: &[f64], alpha: f64) -> Vec<f
         clamp_to_open_bounds(&mut x_trial, &state.x_l, &state.x_u, i);
     }
     x_trial
+}
+
+/// `kkt::recover_dz` (Fiacco bound-multiplier step recovery) at the
+/// current iterate's `state.{x, x_l, x_u, z_l, z_u}` for a given
+/// primal direction `dx` and centering target `mu`. Centralises the
+/// two callers — the main-step recovery in solve_for_search_direction
+/// and the Mehrotra affine-predictor probe.
+fn recover_dz_from_state(state: &SolverState, dx: &[f64], mu: f64) -> (Vec<f64>, Vec<f64>) {
+    kkt::recover_dz(
+        &state.x, &state.x_l, &state.x_u,
+        &state.z_l, &state.z_u, dx, mu,
+    )
 }
 
 /// `kkt::assemble_kkt` invoked with the standard `state.*` argument
