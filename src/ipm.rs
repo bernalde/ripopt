@@ -3972,10 +3972,7 @@ fn track_post_step_acceptable(state: &mut SolverState, options: &SolverOptions) 
         recover_active_set_z(state, &gj, n)
     };
     let post_du = dual_inf_with_z(state, &post_zl_opt, &post_zu_opt);
-    let post_du_unsc = convergence::dual_infeasibility_scaled(
-        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-        &state.y, &state.z_l, &state.z_u, n,
-    );
+    let post_du_unsc = compute_dual_inf_unscaled_at_state(state);
     let post_compl = convergence::complementarity_error(
         &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
     );
@@ -5603,7 +5600,6 @@ struct OptimalityMeasures {
 /// Extracted from `solve_ipm` as part of the v0.8 main-loop
 /// decomposition. Pure function of `state`.
 fn compute_optimality_measures(state: &SolverState) -> OptimalityMeasures {
-    let n = state.n;
     let primal_inf = state.constraint_violation();
     let primal_inf_max = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
 
@@ -5611,16 +5607,7 @@ fn compute_optimality_measures(state: &SolverState) -> OptimalityMeasures {
     // honest KKT residual. If iterative z is inconsistent with ∇f + J^T y the
     // residual stays large and iteration continues.
     let dual_inf = compute_dual_inf_at_state(state);
-    let dual_inf_unscaled = convergence::dual_infeasibility_scaled(
-        &state.grad_f,
-        &state.jac_rows,
-        &state.jac_cols,
-        &state.jac_vals,
-        &state.y,
-        &state.z_l,
-        &state.z_u,
-        n,
-    );
+    let dual_inf_unscaled = compute_dual_inf_unscaled_at_state(state);
     let compl_inf = compute_compl_err_at_state(state);
     OptimalityMeasures {
         primal_inf,
@@ -5842,10 +5829,7 @@ fn check_stall_near_tolerance_via_optimal_duals(
     let sc = primal_inf_max <= stall_fpr_tol
         && opt_du <= stall_fdu_tol
         && opt_co_best <= stall_fco_tol;
-    let du_u = convergence::dual_infeasibility_scaled(
-        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-        &state.y, &state.z_l, &state.z_u, n,
-    );
+    let du_u = compute_dual_inf_unscaled_at_state(state);
     let usc = primal_inf_max <= 10.0 * options.constr_viol_tol
         && du_u <= 10.0 * options.dual_inf_tol
         && opt_co_best <= 10.0 * options.compl_inf_tol;
@@ -7507,7 +7491,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     }
 
     finalize_after_max_iter(
-        &state, options, n, ever_feasible, &theta_history, theta_history_len,
+        &state, options, ever_feasible, &theta_history, theta_history_len,
         &timings, ipm_start,
     )
 }
@@ -7557,17 +7541,13 @@ fn try_classify_max_iter_infeasibility(
 fn print_max_iter_diagnostics(
     state: &SolverState,
     options: &SolverOptions,
-    n: usize,
 ) {
     if options.print_level < 5 {
         return;
     }
     let final_primal_inf = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
     let final_dual_inf = compute_dual_inf_at_state(state);
-    let final_dual_inf_unscaled = convergence::dual_infeasibility_scaled(
-        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-        &state.y, &state.z_l, &state.z_u, n,
-    );
+    let final_dual_inf_unscaled = compute_dual_inf_unscaled_at_state(state);
     let final_compl = compute_compl_err_at_state(state);
     let s_d = compute_s_d_at_state(state);
     rip_log!(
@@ -7583,14 +7563,13 @@ fn print_max_iter_diagnostics(
 fn finalize_after_max_iter(
     state: &SolverState,
     options: &SolverOptions,
-    n: usize,
     ever_feasible: bool,
     theta_history: &[f64],
     theta_history_len: usize,
     timings: &PhaseTimings,
     ipm_start: Instant,
 ) -> SolveResult {
-    print_max_iter_diagnostics(state, options, n);
+    print_max_iter_diagnostics(state, options);
 
     // Infeasibility detection (only when never feasible).
     let final_theta = state.constraint_violation();
@@ -8823,6 +8802,18 @@ fn dual_inf_with_z(state: &SolverState, z_l: &[f64], z_u: &[f64]) -> f64 {
     convergence::dual_infeasibility(
         &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
         &state.y, z_l, z_u, state.n,
+    )
+}
+
+/// `convergence::dual_infeasibility_scaled` at the current iterate
+/// using `state.{grad_f, jac_*, y, z_l, z_u}`. The unscaled (s_d=1)
+/// dual residual is what the optimality measures, the post-step
+/// diagnostic, the stall classifier, and the MaxIter diagnostic all
+/// compare against `options.dual_inf_tol`.
+fn compute_dual_inf_unscaled_at_state(state: &SolverState) -> f64 {
+    convergence::dual_infeasibility_scaled(
+        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+        &state.y, &state.z_l, &state.z_u, state.n,
     )
 }
 
