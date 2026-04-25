@@ -2968,6 +2968,58 @@ fn compute_mcc_alpha_max(
     alpha.clamp(0.0, 1.0)
 }
 
+/// Validate and apply one Gondzio corrector solution `(ddx, ddy)`.
+/// Rejects if `||(ddx,ddy)||_∞ > 1e10·||rhs||_∞.max(1)` (null-space
+/// blow-up on rank-deficient systems). Otherwise builds the
+/// corrected direction `(dx_c, dy_c, dz_l_c, dz_u_c)` and the new
+/// `α_max` along it. Accepts only when α has not shrunk by more than
+/// 10% (`α_new ≥ 0.9·α_mcc`); on accept, mutates `state.{dx,dy,dz_l,
+/// dz_u}` and returns `Some(α_new)`. Returns `None` (caller breaks)
+/// on rejection or insufficient α.
+fn try_apply_one_mcc_correction(
+    state: &mut SolverState,
+    iteration: usize,
+    alpha_mcc: f64,
+    tau_mcc: f64,
+    dx_norm_orig: f64,
+    rhs_mcc: &[f64],
+    ddx: &[f64],
+    ddy: &[f64],
+    n: usize,
+    m: usize,
+) -> Option<f64> {
+    let nrm_rhs: f64 = rhs_mcc.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+    let nrm_sol: f64 = ddx.iter().chain(ddy.iter()).map(|v| v.abs()).fold(0.0_f64, f64::max);
+    if nrm_sol > 1e10 * nrm_rhs.max(1.0) {
+        log::debug!(
+            "Gondzio MCC iter {}: ||sol||={:.2e}, ||rhs||={:.2e} — rejecting",
+            iteration, nrm_sol, nrm_rhs,
+        );
+        return None;
+    }
+    let (dx_c, dy_c, dz_l_c, dz_u_c) = build_mcc_corrected_direction(
+        state, ddx, ddy, iteration, n, m, dx_norm_orig,
+    );
+
+    let alpha_new = compute_mcc_alpha_max(
+        state, &dx_c, &dz_l_c, &dz_u_c, tau_mcc, n,
+    );
+
+    if alpha_new >= 0.9 * alpha_mcc {
+        state.dx = dx_c;
+        state.dy = dy_c;
+        state.dz_l = dz_l_c;
+        state.dz_u = dz_u_c;
+        log::debug!(
+            "Gondzio MCC iter {}: correction accepted, α_mcc={:.4}",
+            iteration, alpha_new
+        );
+        Some(alpha_new)
+    } else {
+        None
+    }
+}
+
 fn apply_gondzio_mcc(
     state: &mut SolverState,
     options: &SolverOptions,
@@ -3012,35 +3064,12 @@ fn apply_gondzio_mcc(
 
         match kkt::solve_with_custom_rhs_refined(&kkt.matrix, kkt.n, kkt.dim, lin_solver, &rhs_mcc) {
             Ok((ddx, ddy)) => {
-                let nrm_rhs: f64 = rhs_mcc.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
-                let nrm_sol: f64 = ddx.iter().chain(ddy.iter()).map(|v| v.abs()).fold(0.0_f64, f64::max);
-                if nrm_sol > 1e10 * nrm_rhs.max(1.0) {
-                    log::debug!(
-                        "Gondzio MCC iter {}: ||sol||={:.2e}, ||rhs||={:.2e} — rejecting",
-                        iteration, nrm_sol, nrm_rhs,
-                    );
-                    break;
-                }
-                let (dx_c, dy_c, dz_l_c, dz_u_c) = build_mcc_corrected_direction(
-                    state, &ddx, &ddy, iteration, n, m, dx_norm_orig,
-                );
-
-                let alpha_new = compute_mcc_alpha_max(
-                    state, &dx_c, &dz_l_c, &dz_u_c, tau_mcc, n,
-                );
-
-                if alpha_new >= 0.9 * alpha_mcc {
-                    state.dx = dx_c;
-                    state.dy = dy_c;
-                    state.dz_l = dz_l_c;
-                    state.dz_u = dz_u_c;
-                    alpha_mcc = alpha_new;
-                    log::debug!(
-                        "Gondzio MCC iter {}: correction accepted, α_mcc={:.4}",
-                        iteration, alpha_mcc
-                    );
-                } else {
-                    break;
+                match try_apply_one_mcc_correction(
+                    state, iteration, alpha_mcc, tau_mcc, dx_norm_orig,
+                    &rhs_mcc, &ddx, &ddy, n, m,
+                ) {
+                    Some(alpha_new) => alpha_mcc = alpha_new,
+                    None => break,
                 }
             }
             Err(_) => break,
