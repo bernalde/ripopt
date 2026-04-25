@@ -4419,7 +4419,29 @@ fn factor_kkt_with_recovery<P: NlpProblem>(
     }
 
     // Last resort: perturb x and retry.
-    let mut recovered_from_perturb = false;
+    if try_last_resort_perturbation(
+        state, problem, iteration, n, lbfgs_state, filter,
+        linear_constraints, lbfgs_mode,
+    ) {
+        return FactorDecision::Continue;
+    }
+    FactorDecision::Return(make_result(state, SolveStatus::NumericalError))
+}
+
+/// Last-resort perturbation after restoration has also failed: cumulatively
+/// perturb x at scales 1e-3, 1e-2, 1e-1 and accept the first scale at which
+/// problem evaluation produces a finite objective. On success the filter is
+/// reset and theta_min recomputed; returns true so the caller can continue.
+fn try_last_resort_perturbation<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    iteration: usize,
+    n: usize,
+    lbfgs_state: &mut Option<LbfgsIpmState>,
+    filter: &mut Filter,
+    linear_constraints: Option<&[bool]>,
+    lbfgs_mode: bool,
+) -> bool {
     for &perturb_scale in &[1e-3, 1e-2, 1e-1] {
         for i in 0..n {
             let mag = state.x[i].abs().max(1.0);
@@ -4435,17 +4457,13 @@ fn factor_kkt_with_recovery<P: NlpProblem>(
         let pert2_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
         update_lbfgs_hessian(lbfgs_state, state);
         if pert2_ok && !state.obj.is_nan() && !state.obj.is_infinite() {
-            recovered_from_perturb = true;
-            break;
+            filter.reset();
+            let theta_new = state.constraint_violation();
+            filter.set_theta_min_from_initial(theta_new);
+            return true;
         }
     }
-    if recovered_from_perturb {
-        filter.reset();
-        let theta_new = state.constraint_violation();
-        filter.set_theta_min_from_initial(theta_new);
-        return FactorDecision::Continue;
-    }
-    FactorDecision::Return(make_result(state, SolveStatus::NumericalError))
+    false
 }
 
 /// Update the barrier parameter μ (interior-point centering parameter) once
