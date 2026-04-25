@@ -4368,19 +4368,31 @@ fn attempt_soft_restoration<P: NlpProblem>(
     }
 }
 
+/// Snapshot of the lowest-objective feasible iterate seen so far. Used
+/// as the fallback iterate returned at `max_iter` exit and as the
+/// `best_x.is_some()` guard for the dual-stagnation revert.
+struct BestFeasibleIterate {
+    obj: f64,
+    x: Option<Vec<f64>>,
+}
+
+impl BestFeasibleIterate {
+    fn new() -> Self {
+        Self { obj: f64::INFINITY, x: None }
+    }
+}
+
 /// Record the current iterate as the best-feasible point seen so far
-/// if it satisfies `constr_viol_tol` and strictly improves `best_obj`.
-/// Used as the fallback iterate returned at `max_iter` exit.
+/// if it satisfies `constr_viol_tol` and strictly improves `best.obj`.
 fn track_best_feasible(
     state: &SolverState,
     options: &SolverOptions,
-    best_obj: &mut f64,
-    best_x: &mut Option<Vec<f64>>,
+    best: &mut BestFeasibleIterate,
 ) {
     let theta_now = state.constraint_violation();
-    if theta_now < options.constr_viol_tol && state.obj < *best_obj {
-        *best_obj = state.obj;
-        *best_x = Some(state.x.clone());
+    if theta_now < options.constr_viol_tol && state.obj < best.obj {
+        best.obj = state.obj;
+        best.x = Some(state.x.clone());
     }
 }
 
@@ -6175,7 +6187,7 @@ fn handle_dual_stagnation<P: NlpProblem>(
     inertia_params: &mut InertiaCorrectionParams,
     lbfgs_state: &mut Option<LbfgsIpmState>,
     dual_stall: &mut DualStallTracker,
-    best_x: &Option<Vec<f64>>,
+    best_feasible: &BestFeasibleIterate,
     best_du: &BestDuIterate,
     linear_constraints: Option<&[bool]>,
     lbfgs_mode: bool,
@@ -6194,7 +6206,7 @@ fn handle_dual_stagnation<P: NlpProblem>(
     if stall_iters < 500
         || dual_stall.triggered
         || current_du <= 100.0 * options.tol
-        || best_x.is_none()
+        || best_feasible.x.is_none()
     {
         return None;
     }
@@ -6866,8 +6878,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let mut theta_stall_count: usize = 0;
 
     // Best feasible point tracking: save the best (lowest obj) point that is feasible
-    let mut best_x: Option<Vec<f64>> = None;
-    let mut best_obj: f64 = f64::INFINITY;
+    let mut best_feasible = BestFeasibleIterate::new();
 
     // Best-du point tracking
     let mut best_du = BestDuIterate::new();
@@ -6943,7 +6954,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             &mut inertia_params,
             &mut lbfgs_state,
             &mut dual_stall,
-            &best_x,
+            &best_feasible,
             &best_du,
             linear_constraints.as_deref(),
             lbfgs_mode,
@@ -7367,7 +7378,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         }
 
         reset_slack_multipliers(&mut state, mu_ks);
-        track_best_feasible(&state, options, &mut best_obj, &mut best_x);
+        track_best_feasible(&state, options, &mut best_feasible);
 
         // --- Barrier parameter update (free/fixed mode) ---
         update_barrier_parameter(
