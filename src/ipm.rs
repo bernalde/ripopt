@@ -7698,6 +7698,42 @@ fn init_soc_constraint_residuals(
     (c_soc, latest_trial_c)
 }
 
+/// Fraction-to-boundary on `dx_soc` against the variable bounds, then
+/// build the bounded trial point `x_soc = x + α·dx_soc` (clamped strictly
+/// inside finite bounds by 1e-14). Returns `(x_soc, alpha_primal_soc)`.
+/// Shared across the three second-order-correction variants.
+fn compute_soc_alpha_and_trial_x(
+    state: &SolverState,
+    dx_soc: &[f64],
+    tau: f64,
+) -> (Vec<f64>, f64) {
+    let n = state.n;
+    let mut alpha_new: f64 = 1.0;
+    for i in 0..n {
+        if state.x_l[i].is_finite() && dx_soc[i] < 0.0 {
+            let slack = state.x[i] - state.x_l[i];
+            alpha_new = alpha_new.min(-tau * slack / dx_soc[i]);
+        }
+        if state.x_u[i].is_finite() && dx_soc[i] > 0.0 {
+            let slack = state.x_u[i] - state.x[i];
+            alpha_new = alpha_new.min(tau * slack / dx_soc[i]);
+        }
+    }
+    let alpha_primal_soc = alpha_new.clamp(0.0, 1.0);
+
+    let mut x_soc = vec![0.0; n];
+    for i in 0..n {
+        x_soc[i] = state.x[i] + alpha_primal_soc * dx_soc[i];
+        if state.x_l[i].is_finite() {
+            x_soc[i] = x_soc[i].max(state.x_l[i] + 1e-14);
+        }
+        if state.x_u[i].is_finite() {
+            x_soc[i] = x_soc[i].min(state.x_u[i] - 1e-14);
+        }
+    }
+    (x_soc, alpha_primal_soc)
+}
+
 /// Refresh `latest_trial_c` from a newly evaluated `g_soc`, using the
 /// same equality/lower/upper classification as
 /// `init_soc_constraint_residuals`.
@@ -7772,30 +7808,8 @@ fn attempt_soc<P: NlpProblem>(
         let dx_soc = &sol_soc[..n];
 
         // Fresh fraction-to-boundary alpha on dx_soc (Ipopt IpFilterLSAcceptor.cpp:617-620).
-        let mut alpha_new: f64 = 1.0;
-        for i in 0..n {
-            if state.x_l[i].is_finite() && dx_soc[i] < 0.0 {
-                let slack = state.x[i] - state.x_l[i];
-                alpha_new = alpha_new.min(-tau * slack / dx_soc[i]);
-            }
-            if state.x_u[i].is_finite() && dx_soc[i] > 0.0 {
-                let slack = state.x_u[i] - state.x[i];
-                alpha_new = alpha_new.min(tau * slack / dx_soc[i]);
-            }
-        }
-        alpha_primal_soc = alpha_new.clamp(0.0, 1.0);
-
-        #[allow(clippy::needless_range_loop)]
-        let mut x_soc = vec![0.0; n];
-        for i in 0..n {
-            x_soc[i] = state.x[i] + alpha_primal_soc * dx_soc[i];
-            if state.x_l[i].is_finite() {
-                x_soc[i] = x_soc[i].max(state.x_l[i] + 1e-14);
-            }
-            if state.x_u[i].is_finite() {
-                x_soc[i] = x_soc[i].min(state.x_u[i] - 1e-14);
-            }
-        }
+        let (x_soc, alpha_primal_soc_new) = compute_soc_alpha_and_trial_x(state, dx_soc, tau);
+        alpha_primal_soc = alpha_primal_soc_new;
 
         let mut obj_soc = f64::INFINITY;
         if !problem.objective(&x_soc, true, &mut obj_soc) || !obj_soc.is_finite() { return None; }
@@ -7880,30 +7894,8 @@ fn attempt_soc_condensed<P: NlpProblem>(
             Err(_) => return None,
         };
 
-        let mut alpha_new: f64 = 1.0;
-        for i in 0..n {
-            if state.x_l[i].is_finite() && dx_soc[i] < 0.0 {
-                let slack = state.x[i] - state.x_l[i];
-                alpha_new = alpha_new.min(-tau * slack / dx_soc[i]);
-            }
-            if state.x_u[i].is_finite() && dx_soc[i] > 0.0 {
-                let slack = state.x_u[i] - state.x[i];
-                alpha_new = alpha_new.min(tau * slack / dx_soc[i]);
-            }
-        }
-        alpha_primal_soc = alpha_new.clamp(0.0, 1.0);
-
-        #[allow(clippy::needless_range_loop)]
-        let mut x_soc = vec![0.0; n];
-        for i in 0..n {
-            x_soc[i] = state.x[i] + alpha_primal_soc * dx_soc[i];
-            if state.x_l[i].is_finite() {
-                x_soc[i] = x_soc[i].max(state.x_l[i] + 1e-14);
-            }
-            if state.x_u[i].is_finite() {
-                x_soc[i] = x_soc[i].min(state.x_u[i] - 1e-14);
-            }
-        }
+        let (x_soc, alpha_primal_soc_new) = compute_soc_alpha_and_trial_x(state, &dx_soc, tau);
+        alpha_primal_soc = alpha_primal_soc_new;
 
         let mut obj_soc = f64::INFINITY;
         if !problem.objective(&x_soc, true, &mut obj_soc) || !obj_soc.is_finite() { return None; }
@@ -7977,25 +7969,8 @@ fn attempt_soc_sparse_condensed<P: NlpProblem>(
             Err(_) => return None,
         };
 
-        let mut alpha_new: f64 = 1.0;
-        for i in 0..n {
-            if state.x_l[i].is_finite() && dx_soc[i] < 0.0 {
-                let slack = state.x[i] - state.x_l[i];
-                alpha_new = alpha_new.min(-tau * slack / dx_soc[i]);
-            }
-            if state.x_u[i].is_finite() && dx_soc[i] > 0.0 {
-                let slack = state.x_u[i] - state.x[i];
-                alpha_new = alpha_new.min(tau * slack / dx_soc[i]);
-            }
-        }
-        alpha_primal_soc = alpha_new.clamp(0.0, 1.0);
-
-        let mut x_soc = vec![0.0; n];
-        for i in 0..n {
-            x_soc[i] = state.x[i] + alpha_primal_soc * dx_soc[i];
-            if state.x_l[i].is_finite() { x_soc[i] = x_soc[i].max(state.x_l[i] + 1e-14); }
-            if state.x_u[i].is_finite() { x_soc[i] = x_soc[i].min(state.x_u[i] - 1e-14); }
-        }
+        let (x_soc, alpha_primal_soc_new) = compute_soc_alpha_and_trial_x(state, &dx_soc, tau);
+        alpha_primal_soc = alpha_primal_soc_new;
 
         let mut obj_soc = f64::INFINITY;
         if !problem.objective(&x_soc, true, &mut obj_soc) || !obj_soc.is_finite() { return None; }
