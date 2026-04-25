@@ -5045,6 +5045,25 @@ fn apply_free_mode_sufficient_progress_update(
     reset_filter_with_current_theta(state, filter);
 }
 
+/// Conservative μ decrease for the "stay in Free, neither sufficient
+/// nor switch-to-Fixed" branch. Only fires when the barrier
+/// subproblem is approximately solved — without that gate μ would
+/// collapse unconditionally even when the line search is making no
+/// progress (observed on cho parmest: μ 0.1 → 0.02 at iter 1
+/// despite barrier_err=1.4e4). Uses `avg_compl/kappa` clamped to
+/// `[μ_min, 1e5]` when active complementarity products exist;
+/// otherwise falls back to `mu_linear_decrease_factor·μ`.
+fn apply_free_mode_conservative_decrease(state: &mut SolverState, options: &SolverOptions) {
+    let avg_compl = compute_avg_complementarity(state);
+    if avg_compl > 0.0 {
+        let mu_floor = options.mu_min;
+        state.mu = (avg_compl / options.kappa).clamp(mu_floor, 1e5);
+    } else {
+        state.mu = (options.mu_linear_decrease_factor * state.mu)
+            .max(options.mu_min);
+    }
+}
+
 /// Free-mode (adaptive) barrier-parameter update. Three branches:
 /// 1) Sufficient progress + barrier subproblem solved: pick a new mu via
 ///    the Loqo oracle (when quality_function is on) or rate-limited Loqo
@@ -5078,20 +5097,7 @@ fn update_barrier_parameter_free_mode(
         if mu_state.consecutive_insufficient >= 2 || du_stagnant {
             switch_to_fixed_mode_with_adaptive_init(state, mu_state, filter, options);
         } else if barrier_subproblem_solved {
-            // Stay in Free mode with conservative mu decrease —
-            // only when the barrier subproblem is approximately
-            // solved. Without this gate, mu collapses unconditionally
-            // even when the line search is making no progress
-            // (observed on cho parmest: mu 0.1 -> 0.02 at iter 1
-            // despite barrier_err=1.4e4).
-            let avg_compl = compute_avg_complementarity(state);
-            if avg_compl > 0.0 {
-                let mu_floor = options.mu_min;
-                state.mu = (avg_compl / options.kappa).clamp(mu_floor, 1e5);
-            } else {
-                state.mu = (options.mu_linear_decrease_factor * state.mu)
-                    .max(options.mu_min);
-            }
+            apply_free_mode_conservative_decrease(state, options);
         }
         // When !barrier_subproblem_solved, mu stays put and we
         // wait for the line search to make progress on the current
