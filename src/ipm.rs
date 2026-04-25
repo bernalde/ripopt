@@ -3523,6 +3523,102 @@ fn solve_dense_condensed_direction<P: NlpProblem>(
 /// Mirrors `IpPDSearchDirCalc.cpp:81-110` / `IpPDFullSpaceSolver.cpp`
 /// in Ipopt.
 #[allow(clippy::too_many_arguments)]
+/// Outcome of `solve_full_augmented_direction`.
+enum FullAugmentedOutcome {
+    Solved {
+        dx: Vec<f64>,
+        dy: Vec<f64>,
+        mehrotra_aff: Option<(Vec<f64>, Vec<f64>, Vec<f64>, f64)>,
+    },
+    Continue,
+    Return(SolveResult),
+}
+
+/// Solve the full (n+m)×(n+m) augmented KKT system with optional
+/// Mehrotra predictor-corrector and quality-escalation pivoting. On
+/// solver failure, attempts the gradient-descent fallback and then
+/// restoration. The Mehrotra branch saves the original RHS,
+/// substitutes the corrector RHS, and reverts the deflection
+/// post-solve when the corrector overshot. δ_w/δ_c escalations are
+/// applied in-place to kkt_system_opt and the solver instance.
+#[allow(clippy::too_many_arguments)]
+fn solve_full_augmented_direction<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    options: &SolverOptions,
+    iteration: usize,
+    n: usize,
+    m: usize,
+    kkt_system_opt: &mut Option<kkt::KktSystem>,
+    lin_solver: &mut dyn LinearSolver,
+    inertia_params: &mut InertiaCorrectionParams,
+    ic_delta_w: f64,
+    ic_delta_c: f64,
+    filter: &Filter,
+    restoration: &mut RestorationPhase,
+    lbfgs_state: &mut Option<LbfgsIpmState>,
+    lbfgs_mode: bool,
+    linear_constraints: Option<&[bool]>,
+    last_mehrotra_sigma: &mut Option<f64>,
+    deadline: Option<Instant>,
+) -> FullAugmentedOutcome {
+    let saved_rhs = if options.mehrotra_pc {
+        kkt_system_opt.as_ref().map(|k| k.rhs.clone())
+    } else {
+        None
+    };
+    let mut mehrotra_applied = false;
+    let mut mehrotra_aff: Option<(Vec<f64>, Vec<f64>, Vec<f64>, f64)> = None;
+
+    if options.mehrotra_pc {
+        let has_bounds = (0..n).any(|i| state.x_l[i].is_finite() || state.x_u[i].is_finite());
+        if has_bounds {
+            let pc_result = try_mehrotra_predictor(
+                state, options, kkt_system_opt.as_ref().unwrap(), lin_solver,
+                iteration, n, last_mehrotra_sigma,
+            );
+            if let Some((new_rhs, dx_aff_v, dz_l_aff_v, dz_u_aff_v, mu_pc_used)) = pc_result {
+                kkt_system_opt.as_mut().unwrap().rhs = new_rhs;
+                mehrotra_applied = true;
+                mehrotra_aff = Some((dx_aff_v, dz_l_aff_v, dz_u_aff_v, mu_pc_used));
+            }
+        }
+    }
+
+    // Escalated (δ_w, δ_c) values are not read again — the helper mutates
+    // kkt_system.matrix, inertia_params, and lin_solver in place, which
+    // carries the escalation effect into subsequent iterations.
+    let (dir_result, _, _) = solve_with_quality_escalation(
+        kkt_system_opt, lin_solver, inertia_params, ic_delta_w, ic_delta_c, n, m,
+    );
+    let (mut dx_dir, mut dy_dir) = match dir_result {
+        Ok(d) => d,
+        Err(e) => {
+            log::warn!("KKT solve failed: {}", e);
+            if let Some(fallback) = gradient_descent_fallback(state) {
+                fallback
+            } else {
+                match restore_after_solve_failure(
+                    state, problem, options, n, m, filter, restoration,
+                    lbfgs_state, lbfgs_mode, linear_constraints, deadline,
+                ) {
+                    SolveRestoreOutcome::Continue => return FullAugmentedOutcome::Continue,
+                    SolveRestoreOutcome::Return(r) => return FullAugmentedOutcome::Return(r),
+                }
+            }
+        }
+    };
+
+    if mehrotra_applied {
+        maybe_revert_mehrotra_deflection(
+            &mut dx_dir, &mut dy_dir, &mut mehrotra_aff,
+            &saved_rhs, kkt_system_opt, lin_solver,
+        );
+    }
+
+    FullAugmentedOutcome::Solved { dx: dx_dir, dy: dy_dir, mehrotra_aff }
+}
+
 fn solve_for_search_direction<P: NlpProblem>(
     state: &mut SolverState,
     problem: &P,
@@ -3568,62 +3664,18 @@ fn solve_for_search_direction<P: NlpProblem>(
             state, sc, sigma, n, m, use_sparse, lin_solver, inertia_params,
         )
     } else {
-        // Full augmented KKT with optional Mehrotra PC.
-        let saved_rhs = if options.mehrotra_pc {
-            kkt_system_opt.as_ref().map(|k| k.rhs.clone())
-        } else {
-            None
-        };
-        let mut mehrotra_applied = false;
-
-        if options.mehrotra_pc {
-            let has_bounds = (0..n).any(|i| state.x_l[i].is_finite() || state.x_u[i].is_finite());
-            if has_bounds {
-                let pc_result = try_mehrotra_predictor(
-                    state, options, kkt_system_opt.as_ref().unwrap(), lin_solver,
-                    iteration, n, last_mehrotra_sigma,
-                );
-                if let Some((new_rhs, dx_aff_v, dz_l_aff_v, dz_u_aff_v, mu_pc_used)) = pc_result {
-                    kkt_system_opt.as_mut().unwrap().rhs = new_rhs;
-                    mehrotra_applied = true;
-                    mehrotra_aff = Some((dx_aff_v, dz_l_aff_v, dz_u_aff_v, mu_pc_used));
-                }
+        match solve_full_augmented_direction(
+            state, problem, options, iteration, n, m, kkt_system_opt, lin_solver,
+            inertia_params, ic_delta_w, ic_delta_c, filter, restoration,
+            lbfgs_state, lbfgs_mode, linear_constraints, last_mehrotra_sigma, deadline,
+        ) {
+            FullAugmentedOutcome::Solved { dx, dy, mehrotra_aff: aff } => {
+                mehrotra_aff = aff;
+                (dx, dy)
             }
+            FullAugmentedOutcome::Continue => return DirectionSolveDecision::Continue,
+            FullAugmentedOutcome::Return(r) => return DirectionSolveDecision::Return(r),
         }
-
-        // Escalated (δ_w, δ_c) values are not read again — the helper
-        // mutates `kkt_system.matrix`, `inertia_params`, and `lin_solver`
-        // in place, which carries the escalation effect into subsequent
-        // iterations.
-        let (dir_result, _, _) = solve_with_quality_escalation(
-            kkt_system_opt, lin_solver, inertia_params, ic_delta_w, ic_delta_c, n, m,
-        );
-        let (mut dx_dir, mut dy_dir) = match dir_result {
-            Ok(d) => d,
-            Err(e) => {
-                log::warn!("KKT solve failed: {}", e);
-                if let Some(fallback) = gradient_descent_fallback(state) {
-                    fallback
-                } else {
-                    match restore_after_solve_failure(
-                        state, problem, options, n, m, filter, restoration,
-                        lbfgs_state, lbfgs_mode, linear_constraints, deadline,
-                    ) {
-                        SolveRestoreOutcome::Continue => return DirectionSolveDecision::Continue,
-                        SolveRestoreOutcome::Return(r) => return DirectionSolveDecision::Return(r),
-                    }
-                }
-            }
-        };
-
-        if mehrotra_applied {
-            maybe_revert_mehrotra_deflection(
-                &mut dx_dir, &mut dy_dir, &mut mehrotra_aff,
-                &saved_rhs, kkt_system_opt, lin_solver,
-            );
-        }
-
-        (dx_dir, dy_dir)
     };
 
     DirectionSolveDecision::Proceed {
