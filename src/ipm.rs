@@ -311,6 +311,13 @@ struct MuState {
     consecutive_restoration_failures: usize,
     /// Count of consecutive insufficient-progress iterations in Free mode.
     consecutive_insufficient: usize,
+    /// Number of consecutive iterations that have been accepted via the
+    /// soft-restoration path (Ipopt's `soft_resto_counter_`,
+    /// `IpBacktrackingLineSearch.cpp:442-444`). Capped at
+    /// `max_soft_resto_iters = 10` before escalating to full
+    /// restoration. Reset whenever the regular line search accepts a
+    /// step or the full restoration cascade runs.
+    consecutive_soft_restoration: usize,
     /// Sliding window of dual infeasibility values for stagnation detection.
     dual_inf_window: Vec<f64>,
 }
@@ -326,6 +333,7 @@ impl MuState {
             first_iter_in_mode: true,
             consecutive_restoration_failures: 0,
             consecutive_insufficient: 0,
+            consecutive_soft_restoration: 0,
             dual_inf_window: Vec::with_capacity(4),
         }
     }
@@ -4211,6 +4219,12 @@ fn run_post_ls_restoration_cascade<P: NlpProblem>(
 ) -> RestorationCascadeDecision {
     state.diagnostics.filter_rejects += 1;
 
+    // Cascade is the escalation point past soft restoration; reset the soft
+    // counter so a future post-cascade soft attempt starts fresh
+    // (Ipopt's `IpBacktrackingLineSearch.cpp:442-444` resets on any
+    // non-soft accept).
+    mu_state.consecutive_soft_restoration = 0;
+
     // Add current point to filter before entering restoration (Ipopt convention).
     // augment_for_restoration adds the margin entry
     // (phi - gamma_phi*theta, (1-gamma_theta)*theta) AND bumps theta_max —
@@ -4394,49 +4408,143 @@ fn reset_slack_multipliers(state: &mut SolverState, mu_ks: f64) {
     }
 }
 
-/// Ipopt's TrySoftRestoStep: before invoking the expensive GN restoration,
-/// try the current search direction with `alpha = min(alpha_primal_max, alpha_dual_max)`
-/// and accept it if the constraint violation drops by at least `1e-4` relative
-/// and the trial passes the filter. Returns `true` if the step was taken.
+/// Cap on consecutive accepted soft-restoration iterates before forcing
+/// the full GN/NLP restoration cascade. Matches Ipopt's
+/// `max_soft_resto_iters = 10` (`IpBacktrackingLineSearch.cpp:442-444`).
+const MAX_SOFT_RESTO_ITERS: usize = 10;
+
+/// Snapshot of the iterate fields mutated by [`attempt_soft_restoration`]
+/// so a rejected trial can be rolled back cleanly. Keeps allocations
+/// off the success path that would otherwise dominate the helper.
+struct SoftRestoSnapshot {
+    x: Vec<f64>,
+    y: Vec<f64>,
+    z_l: Vec<f64>,
+    z_u: Vec<f64>,
+    obj: f64,
+    g: Vec<f64>,
+    grad_f: Vec<f64>,
+    jac_vals: Vec<f64>,
+    alpha_primal: f64,
+}
+impl SoftRestoSnapshot {
+    fn take(state: &SolverState) -> Self {
+        Self {
+            x: state.x.clone(),
+            y: state.y.clone(),
+            z_l: state.z_l.clone(),
+            z_u: state.z_u.clone(),
+            obj: state.obj,
+            g: state.g.clone(),
+            grad_f: state.grad_f.clone(),
+            jac_vals: state.jac_vals.clone(),
+            alpha_primal: state.alpha_primal,
+        }
+    }
+    fn restore(self, state: &mut SolverState) {
+        state.x = self.x;
+        state.y = self.y;
+        state.z_l = self.z_l;
+        state.z_u = self.z_u;
+        state.obj = self.obj;
+        state.g = self.g;
+        state.grad_f = self.grad_f;
+        state.jac_vals = self.jac_vals;
+        state.alpha_primal = self.alpha_primal;
+    }
+}
+
+/// Ipopt's `TrySoftRestoStep` (`IpBacktrackingLineSearch.cpp:1113-1217`):
+/// before invoking the expensive GN/NLP restoration cascade, take the
+/// computed search direction at `α = min(α_primal_max, α_dual_max)` for
+/// primals AND duals, re-evaluate the NLP, and accept if either
+///
+///   - the parent filter accepts the trial (θ_trial, φ_trial), OR
+///   - the averaged primal-dual barrier error drops:
+///     `E_μ(trial) ≤ 0.9999 · E_μ(current)`
+///
+/// Up to `MAX_SOFT_RESTO_ITERS` consecutive soft accepts are allowed
+/// before the cascade is forced. Returns `true` iff the step was taken
+/// (in which case the iterate already reflects the trial and the
+/// counter has been advanced).
+#[allow(clippy::too_many_arguments)]
 fn attempt_soft_restoration<P: NlpProblem>(
     state: &mut SolverState,
     problem: &P,
+    options: &SolverOptions,
     filter: &mut Filter,
+    mu_state: &mut MuState,
+    linear_constraints: Option<&[bool]>,
+    lbfgs_mode: bool,
     alpha_primal_max: f64,
     alpha_dual_max: f64,
     theta_current: f64,
     phi_current: f64,
 ) -> bool {
+    if mu_state.consecutive_soft_restoration >= MAX_SOFT_RESTO_ITERS {
+        return false;
+    }
+
+    let n = state.n;
     let m = state.m;
-    let soft_alpha = alpha_primal_max.min(alpha_dual_max);
-    let x_soft = compute_clamped_trial_x(state, &state.dx, soft_alpha);
-    let mut obj_soft = 0.0;
-    let obj_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        problem.objective(&x_soft, true, &mut obj_soft)
+    let alpha_p = alpha_primal_max.min(alpha_dual_max);
+    if !alpha_p.is_finite() || alpha_p <= 0.0 {
+        return false;
+    }
+    let alpha_d = alpha_dual_max;
+
+    let pderror_curr = compute_pderror_e_mu(state, state.mu);
+
+    let snapshot = SoftRestoSnapshot::take(state);
+
+    // Step primals (clamped to the open box) and duals together.
+    let x_trial = compute_clamped_trial_x(state, &state.dx, alpha_p);
+    state.x = x_trial;
+    for i in 0..m {
+        state.y[i] += alpha_d * state.dy[i];
+    }
+    for i in 0..n {
+        state.z_l[i] = (state.z_l[i] + alpha_d * state.dz_l[i]).max(0.0);
+        state.z_u[i] = (state.z_u[i] + alpha_d * state.dz_u[i]).max(0.0);
+    }
+
+    // Re-evaluate obj + grad + constraints + jac (skip Hessian — soft test
+    // only inspects gradient-level info).
+    let eval_ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        state.evaluate_with_linear(problem, 1.0, linear_constraints, true)
     }));
-    if !matches!(obj_result, Ok(true)) {
+    let evaluated = matches!(eval_ok, Ok(true));
+    if !evaluated || !state.obj.is_finite() {
+        snapshot.restore(state);
         return false;
     }
-    let mut g_soft = vec![0.0; m];
-    if !problem.constraints(&x_soft, false, &mut g_soft) {
-        return false;
-    }
-    let theta_soft = theta_for_g(state, &g_soft);
-    if theta_soft < (1.0 - 1e-4) * theta_current
-        && filter.is_acceptable(theta_soft, obj_soft)
-    {
+
+    let theta_trial = theta_for_g(state, &state.g);
+    let phi_trial = compute_barrier_phi(
+        state.obj, &state.x, &state.g, state, n, m, options.constraint_slack_barrier,
+    );
+
+    let filter_ok = filter.is_acceptable(theta_trial, phi_trial);
+    let pderror_trial = compute_pderror_e_mu(state, state.mu);
+    let pderror_ok = pderror_trial <= 0.9999 * pderror_curr;
+
+    if filter_ok || pderror_ok {
         log::debug!(
-            "Soft restoration accepted: theta {:.2e} -> {:.2e}",
-            theta_current,
-            theta_soft
+            "Soft restoration accepted (filter={} pderror={}): theta {:.2e} -> {:.2e}, E_mu {:.2e} -> {:.2e}",
+            filter_ok, pderror_ok, theta_current, theta_trial, pderror_curr, pderror_trial,
         );
-        commit_trial_point(state, x_soft, obj_soft, g_soft, soft_alpha);
+        // Suppress lbfgs_mode warning when feature disabled.
+        let _ = lbfgs_mode;
+        state.alpha_primal = alpha_p;
+        mu_state.consecutive_soft_restoration += 1;
         filter.add(theta_current, phi_current);
         true
     } else {
+        snapshot.restore(state);
         false
     }
 }
+
 
 /// Snapshot of the lowest-objective feasible iterate seen so far. Used
 /// as the fallback iterate returned at `max_iter` exit and as the
@@ -7522,16 +7630,22 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             LineSearchOutcome::Return(result) => return result,
         }
 
+        let mut accepted_by_soft_resto = false;
         if !step_accepted {
             step_accepted = attempt_soft_restoration(
                 &mut state,
                 problem,
+                options,
                 &mut filter,
+                &mut mu_state,
+                linear_constraints.as_deref(),
+                lbfgs_mode,
                 alpha_primal_max,
                 alpha_dual_max,
                 theta_current,
                 phi_current,
             );
+            accepted_by_soft_resto = step_accepted;
         }
 
         if !step_accepted {
@@ -7561,8 +7675,15 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             }
         }
 
-        // Step was accepted — reset consecutive restoration failure counter
+        // Step was accepted — reset consecutive restoration failure counter.
+        // Only the *regular* line search resets the soft-restoration counter;
+        // a step taken via the soft path keeps it so the 10-iteration cap
+        // (`MAX_SOFT_RESTO_ITERS`) bites after a sustained run of soft accepts
+        // (Ipopt's `soft_resto_counter_`, `IpBacktrackingLineSearch.cpp:442-444`).
         mu_state.consecutive_restoration_failures = 0;
+        if !accepted_by_soft_resto {
+            mu_state.consecutive_soft_restoration = 0;
+        }
 
         match update_watchdog(
             &mut state,
@@ -9151,6 +9272,61 @@ fn compute_compl_err_at_state(state: &SolverState) -> f64 {
     convergence::complementarity_error(
         &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
     )
+}
+
+/// Average 1-norm primal-dual barrier system error E_μ used by the
+/// soft restoration acceptance test. Mirrors Ipopt's
+/// `curr_primal_dual_system_error(mu)` at
+/// `IpIpoptCalculatedQuantities.cpp:3198-3256`:
+///
+///   E_μ = ||grad_lag||_1 / n_dual
+///       + ||primal_inf||_1 / n_pri
+///       + ||compl - μ·e||_1 / n_compl
+///
+/// Each component is averaged by the count of contributing entries
+/// (variables, constraints, finite bounds). Soft restoration accepts a
+/// trial step when E_μ(trial) ≤ 0.9999 · E_μ(current) OR the trial
+/// passes the filter (`IpBacktrackingLineSearch.cpp:1187-1200`).
+fn compute_pderror_e_mu(state: &SolverState, mu: f64) -> f64 {
+    let n = state.n;
+    let m = state.m;
+    let n_dual = n.max(1) as f64;
+    let n_pri = m.max(1) as f64;
+
+    // Dual residual r_i = grad_f_i + (J^T y)_i - z_l_i + z_u_i, 1-norm.
+    let mut residual = vec![0.0; n];
+    residual[..n].copy_from_slice(&state.grad_f[..n]);
+    for (idx, (&row, &col)) in state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate() {
+        residual[col] += state.jac_vals[idx] * state.y[row];
+    }
+    for i in 0..n {
+        residual[i] -= state.z_l[i];
+        residual[i] += state.z_u[i];
+    }
+    let dual_l1: f64 = residual.iter().map(|r| r.abs()).sum();
+
+    let primal_l1 = convergence::primal_infeasibility(&state.g, &state.g_l, &state.g_u);
+
+    // Complementarity 1-norm: |slack·z - μ| over finite bounds, averaged
+    // by the count of contributing entries (n_compl). When there are no
+    // finite bounds, drop the term.
+    let mut compl_l1 = 0.0f64;
+    let mut n_compl = 0usize;
+    for i in 0..n {
+        if state.x_l[i].is_finite() {
+            let slack = (state.x[i] - state.x_l[i]).max(0.0);
+            compl_l1 += (slack * state.z_l[i] - mu).abs();
+            n_compl += 1;
+        }
+        if state.x_u[i].is_finite() {
+            let slack = (state.x_u[i] - state.x[i]).max(0.0);
+            compl_l1 += (slack * state.z_u[i] - mu).abs();
+            n_compl += 1;
+        }
+    }
+    let compl_term = if n_compl == 0 { 0.0 } else { compl_l1 / n_compl as f64 };
+
+    dual_l1 / n_dual + primal_l1 / n_pri + compl_term
 }
 
 /// True iff the current objective and gradient evaluation are

@@ -70,9 +70,15 @@ where a reader short on time should start.
 11. **rmumps: real MC64 scaling.** The current `compute_mc64_kkt_scaling`
     is a bespoke heuristic; a true MC64 would let the pivot threshold
     drop from 0.01 toward Ipopt's 1e-6 without losing stability.
-12. **ripopt: soft-restoration phase.** When filter rejects, Ipopt first
-    tries a primal-dual soft restoration before restarting a nested
-    IPM. ripopt jumps directly to full restoration or failure.
+12. ~~**ripopt: soft-restoration phase.**~~
+    **DONE.** `attempt_soft_restoration` (`src/ipm.rs`) now mirrors
+    Ipopt's `TrySoftRestoStep` (`IpBacktrackingLineSearch.cpp:1113-1217`):
+    take primals AND duals at `α = min(α_p_max, α_d_max)`, re-evaluate,
+    accept on filter OR `E_μ(trial) ≤ 0.9999·E_μ(current)` where
+    `E_μ` is the averaged 1-norm primal-dual barrier system error
+    matching `IpIpoptCalculatedQuantities.cpp:3198-3256`. Capped at
+    10 consecutive soft accepts (`MAX_SOFT_RESTO_ITERS`), counter
+    reset on regular LS accept and at restoration cascade entry.
 13. ~~**ripopt: port `RestoFilterConvCheck`.**~~
     **DONE.** `restoration.rs` success criteria now follow the Ipopt
     `IpRestoFilterConvCheck.cpp:53-80` three-gate test:
@@ -144,7 +150,7 @@ equivalent.
 | Armijo on phi | Faithful | `src/filter.rs:102-110` | `IpFilterLSAcceptor.cpp` |
 | Second-order correction (SOC) | Faithful (full + condensed + sparse variants, up to `max_soc`) | `src/ipm.rs:5554-5995` | `IpFilterLSAcceptor.cpp`, `IpBacktrackingLineSearch.cpp` |
 | Watchdog (max `watchdog_trial_iter_max` steps, rollback to `watchdog_saved`) | Faithful | `src/ipm.rs:4895-4977` | `IpBacktrackingLineSearch.cpp:376-...` |
-| Soft-restoration phase (`SoftRestoLSAcceptor`, pderror_reduction) | **Absent** | n/a | `IpBacktrackingLineSearch.cpp:173-220` |
+| Soft-restoration phase (`SoftRestoLSAcceptor`, pderror_reduction) | Faithful (filter OR averaged 1-norm `E_μ` reduction; cap 10) | `src/ipm.rs:attempt_soft_restoration`, `compute_pderror_e_mu` | `IpBacktrackingLineSearch.cpp:1113-1217`, `IpIpoptCalculatedQuantities.cpp:3198-3256` |
 | Fraction-to-boundary with tau_min | Faithful | `src/ipm.rs:4217,4381,4408,5576` (tau = max(1-mu, tau_min)) | `IpFilterLSAcceptor.cpp` |
 | Alpha_min floor (filter-problem-dependent) | Faithful | `src/filter.rs:186-204` | `IpFilterLSAcceptor.cpp:450-469` |
 | Filter augmentation at restoration entry | Faithful | `src/filter.rs:211-216` | `IpFilterLSAcceptor.cpp:898-901` |
