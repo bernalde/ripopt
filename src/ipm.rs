@@ -5438,6 +5438,32 @@ fn reset_filter_with_current_theta(state: &SolverState, filter: &mut Filter) {
     filter.set_theta_min_from_initial(theta);
 }
 
+/// Overall-progress stall tracker: best primal/dual infeasibility seen
+/// so far and the consecutive-no-progress counter. Threaded through
+/// the stall-detection helpers (`detect_and_handle_progress_stall` and
+/// the μ-boost recovery paths) instead of three parallel locals.
+struct ProgressStallTracker {
+    best_pr: f64,
+    best_du: f64,
+    no_progress_count: usize,
+}
+
+impl ProgressStallTracker {
+    fn new() -> Self {
+        Self {
+            best_pr: f64::INFINITY,
+            best_du: f64::INFINITY,
+            no_progress_count: 0,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.best_pr = f64::INFINITY;
+        self.best_du = f64::INFINITY;
+        self.no_progress_count = 0;
+    }
+}
+
 /// Stall-recovery cleanup: re-seed the filter from the current θ and
 /// clear the no-progress window so the next iteration starts fresh.
 /// Used by every branch in `handle_near_tolerance_stall` /
@@ -5446,14 +5472,10 @@ fn reset_filter_with_current_theta(state: &SolverState, filter: &mut Filter) {
 fn reset_stall_counters_and_filter(
     state: &SolverState,
     filter: &mut Filter,
-    stall_no_progress_count: &mut usize,
-    stall_best_pr: &mut f64,
-    stall_best_du: &mut f64,
+    stall: &mut ProgressStallTracker,
 ) {
     reset_filter_with_current_theta(state, filter);
-    *stall_no_progress_count = 0;
-    *stall_best_pr = f64::INFINITY;
-    *stall_best_du = f64::INFINITY;
+    stall.reset();
 }
 
 /// Per-iteration KKT residuals used by the log row, filter, and
@@ -5762,9 +5784,7 @@ fn handle_near_tolerance_stall(
     s_d_for_acc: f64,
     filter: &mut Filter,
     mu_state: &mut MuState,
-    stall_no_progress_count: &mut usize,
-    stall_best_pr: &mut f64,
-    stall_best_du: &mut f64,
+    stall: &mut ProgressStallTracker,
 ) -> StallDecision {
     if state.mu < primal_inf_max * 0.01 && primal_inf_max > options.constr_viol_tol {
         let new_mu = (primal_inf_max * 0.1).max(1e-6);
@@ -5775,8 +5795,7 @@ fn handle_near_tolerance_stall(
             );
         }
         boost_mu_and_switch_to_fixed_with_stall_reset(
-            state, new_mu, mu_state, filter,
-            stall_no_progress_count, stall_best_pr, stall_best_du,
+            state, new_mu, mu_state, filter, stall,
         );
         return StallDecision::Continue;
     }
@@ -5791,10 +5810,7 @@ fn handle_near_tolerance_stall(
             );
         }
         state.mu = new_mu;
-        reset_stall_counters_and_filter(
-            state, filter,
-            stall_no_progress_count, stall_best_pr, stall_best_du,
-        );
+        reset_stall_counters_and_filter(state, filter, stall);
         return StallDecision::Continue;
     }
     let acc_pr_ok = primal_inf_max <= 1e-2;
@@ -5832,9 +5848,7 @@ fn try_boost_mu_for_stall(
     filter: &mut Filter,
     mu_state: &mut MuState,
     primal_inf_max: f64,
-    stall_no_progress_count: &mut usize,
-    stall_best_pr: &mut f64,
-    stall_best_du: &mut f64,
+    stall: &mut ProgressStallTracker,
 ) -> Option<StallDecision> {
     if !(primal_inf_max < 0.1 && state.mu < primal_inf_max * 0.01) {
         return None;
@@ -5847,8 +5861,7 @@ fn try_boost_mu_for_stall(
         );
     }
     boost_mu_and_switch_to_fixed_with_stall_reset(
-        state, new_mu, mu_state, filter,
-        stall_no_progress_count, stall_best_pr, stall_best_du,
+        state, new_mu, mu_state, filter, stall,
     );
     Some(StallDecision::Continue)
 }
@@ -5896,9 +5909,7 @@ fn detect_and_handle_progress_stall<P: NlpProblem>(
     s_d_for_acc: f64,
     filter: &mut Filter,
     mu_state: &mut MuState,
-    stall_no_progress_count: &mut usize,
-    stall_best_pr: &mut f64,
-    stall_best_du: &mut f64,
+    stall: &mut ProgressStallTracker,
     best_du: &BestDuIterate,
     linear_constraints: Option<&[bool]>,
     lbfgs_mode: bool,
@@ -5909,24 +5920,24 @@ fn detect_and_handle_progress_stall<P: NlpProblem>(
     let n = state.n;
     let m = state.m;
 
-    let pr_improved = primal_inf_max < 0.99 * *stall_best_pr;
-    let du_improved = dual_inf < 0.99 * *stall_best_du;
+    let pr_improved = primal_inf_max < 0.99 * stall.best_pr;
+    let du_improved = dual_inf < 0.99 * stall.best_du;
     if pr_improved {
-        *stall_best_pr = primal_inf_max;
+        stall.best_pr = primal_inf_max;
     }
     if du_improved {
-        *stall_best_du = dual_inf;
+        stall.best_du = dual_inf;
     }
     if pr_improved || du_improved {
-        *stall_no_progress_count = 0;
+        stall.no_progress_count = 0;
         return StallDecision::Proceed;
     }
-    *stall_no_progress_count += 1;
+    stall.no_progress_count += 1;
     let tiny_alpha = state.alpha_primal < 1e-8 && state.alpha_dual < 1e-4;
     // Terminate after half the limit with truly negligible steps, or the full
     // limit with no metric improvement regardless of step size.
     let stall_limit = if tiny_alpha { options.stall_iter_limit / 2 } else { options.stall_iter_limit };
-    if *stall_no_progress_count < stall_limit {
+    if stall.no_progress_count < stall_limit {
         return StallDecision::Proceed;
     }
 
@@ -5939,8 +5950,7 @@ fn detect_and_handle_progress_stall<P: NlpProblem>(
     if stall_pr_ok && stall_du_ok && stall_co_ok {
         return handle_near_tolerance_stall(
             state, options, primal_inf, primal_inf_max, dual_inf, compl_inf,
-            s_d_for_acc, filter, mu_state,
-            stall_no_progress_count, stall_best_pr, stall_best_du,
+            s_d_for_acc, filter, mu_state, stall,
         );
     }
     if let Some(decision) = check_stall_near_tolerance_via_optimal_duals(
@@ -5949,8 +5959,7 @@ fn detect_and_handle_progress_stall<P: NlpProblem>(
         return decision;
     }
     if let Some(decision) = try_boost_mu_for_stall(
-        state, options, filter, mu_state,
-        primal_inf_max, stall_no_progress_count, stall_best_pr, stall_best_du,
+        state, options, filter, mu_state, primal_inf_max, stall,
     ) {
         return decision;
     }
@@ -5961,7 +5970,7 @@ fn detect_and_handle_progress_stall<P: NlpProblem>(
     if options.print_level >= 3 {
         rip_log!(
             "ripopt: Stalled for {} iterations without progress (alpha_p={:.2e}, pr={:.2e}, du={:.2e}), terminating",
-            *stall_no_progress_count, state.alpha_primal, primal_inf, dual_inf
+            stall.no_progress_count, state.alpha_primal, primal_inf, dual_inf
         );
     }
     StallDecision::Return(make_result(state, SolveStatus::NumericalError))
@@ -6793,9 +6802,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
     // Overall progress stall detection: if neither primal nor dual infeasibility
     // improves by at least 1% over many consecutive iterations, terminate early.
-    let mut stall_best_pr: f64 = f64::INFINITY;
-    let mut stall_best_du: f64 = f64::INFINITY;
-    let mut stall_no_progress_count: usize = 0;
+    let mut stall = ProgressStallTracker::new();
 
     // Line-search backtrack count for the previous iteration (printed in table).
     let mut ls_steps: usize = 0;
@@ -7028,9 +7035,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             s_d_for_acc,
             &mut filter,
             &mut mu_state,
-            &mut stall_no_progress_count,
-            &mut stall_best_pr,
-            &mut stall_best_du,
+            &mut stall,
             &best_du,
             linear_constraints.as_deref(),
             lbfgs_mode,
@@ -8757,15 +8762,10 @@ fn boost_mu_and_switch_to_fixed_with_stall_reset(
     new_mu: f64,
     mu_state: &mut MuState,
     filter: &mut Filter,
-    stall_no_progress_count: &mut usize,
-    stall_best_pr: &mut f64,
-    stall_best_du: &mut f64,
+    stall: &mut ProgressStallTracker,
 ) {
     state.mu = new_mu;
-    reset_stall_counters_and_filter(
-        state, filter,
-        stall_no_progress_count, stall_best_pr, stall_best_du,
-    );
+    reset_stall_counters_and_filter(state, filter, stall);
     mu_state.mode = MuMode::Fixed;
     mu_state.first_iter_in_mode = true;
 }
