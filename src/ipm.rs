@@ -8376,24 +8376,39 @@ fn classify_restoration_outcome(
     RestorationOutcome::Failed
 }
 
-/// Compute average complementarity for recomputing mu after restoration.
-/// Quality function for barrier parameter selection.
+/// Quality-function barrier-parameter oracle (Ipopt
+/// `IpQualityFunctionMuOracle.cpp:507-664`).
 ///
-/// Evaluates Q(mu) = dual_inf² + primal_inf² + compl_err(mu)² for log-spaced
-/// candidate mu values and returns the minimizer. The first two terms are fixed
-/// at the current iterate; only the complementarity term varies with mu.
+/// Evaluates `q(mu) = dual_inf + primal_inf + compl_inf [+ centrality]`
+/// for log-spaced candidate mu values and returns the minimizer.
+/// `dual_inf` and `primal_inf` are fixed at the current iterate (the
+/// affine direction is not reused here); only `compl_inf` and the
+/// optional centrality term vary with mu. Norms follow the Ipopt
+/// 2-norm-averaged convention (`sqrt(sum_sq) / sqrt(n_*)`), so the
+/// three terms are commensurate and additive.
 ///
-/// This replaces the Loqo oracle (mu = avg_compl / kappa) with a global search
-/// that can make aggressive mu decreases when the iterate is well-centered.
+/// When `options.quality_function_centrality` is true, adds the
+/// `CEN_RECIPROCAL` penalty `compl_inf / xi`, where
+/// `xi = min(z·s) / avg(z·s)` is the centrality measure at the trial
+/// mu. Default is false (matching Ipopt's `centrality=none`).
+///
+/// Reference implementation; the production Free-mode oracle is the
+/// Loqo σ = 0.1·min(0.05·(1-ξ)/ξ, 2)³ formula at `compute_loqo_mu`,
+/// which already incorporates centrality via ξ.
 #[allow(dead_code)]
-fn quality_function_mu(state: &SolverState, mu_lower: f64, mu_upper: f64, n_candidates: usize) -> f64 {
+fn quality_function_mu(
+    state: &SolverState,
+    options: &SolverOptions,
+    mu_lower: f64,
+    mu_upper: f64,
+    n_candidates: usize,
+) -> f64 {
     if mu_upper <= mu_lower || n_candidates < 2 {
         return mu_upper;
     }
 
     let pi = state.constraint_violation();
     let di = compute_dual_inf_at_state(state);
-    let fixed_part = pi * pi + di * di;
 
     let log_min = mu_lower.max(1e-20).ln();
     let log_max = mu_upper.ln();
@@ -8408,7 +8423,21 @@ fn quality_function_mu(state: &SolverState, mu_lower: f64, mu_upper: f64, n_cand
         let ci = convergence::complementarity_error(
             &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, mu_candidate,
         );
-        let q = fixed_part + ci * ci;
+
+        let mut q = pi + di + ci;
+
+        if options.quality_function_centrality {
+            // Centrality at the candidate mu: xi = min(z·s)/avg(z·s).
+            // Both products are taken at the current iterate (consistent
+            // with Ipopt's affine-projection formula at mu_candidate).
+            let avg = compute_avg_complementarity(state);
+            let xi = compute_centrality_xi(state, avg);
+            if xi > 1e-20 {
+                q += ci / xi;
+            } else {
+                q = f64::INFINITY;
+            }
+        }
 
         if q < best_q {
             best_q = q;
@@ -10024,9 +10053,10 @@ mod tests {
     fn test_quality_function_mu_degenerate_range() {
         // mu_upper <= mu_lower → returns mu_upper unchanged
         let state = minimal_state(1, 0);
-        let mu = quality_function_mu(&state, 1.0, 1.0, 5);
+        let opts = SolverOptions::default();
+        let mu = quality_function_mu(&state, &opts, 1.0, 1.0, 5);
         assert_eq!(mu, 1.0);
-        let mu2 = quality_function_mu(&state, 2.0, 1.0, 5);
+        let mu2 = quality_function_mu(&state, &opts, 2.0, 1.0, 5);
         assert_eq!(mu2, 1.0, "lower > upper still returns upper");
     }
 
@@ -10034,28 +10064,55 @@ mod tests {
     fn test_quality_function_mu_too_few_candidates() {
         // n_candidates < 2 → returns mu_upper
         let state = minimal_state(1, 0);
-        let mu = quality_function_mu(&state, 1e-6, 1e-3, 1);
+        let opts = SolverOptions::default();
+        let mu = quality_function_mu(&state, &opts, 1e-6, 1e-3, 1);
         assert_eq!(mu, 1e-3);
-        let mu0 = quality_function_mu(&state, 1e-6, 1e-3, 0);
+        let mu0 = quality_function_mu(&state, &opts, 1e-6, 1e-3, 0);
         assert_eq!(mu0, 1e-3);
     }
 
     #[test]
     fn test_quality_function_mu_picks_candidate_in_range() {
-        // Well-posed state: 1 lower-bound-active variable. The quality function
-        // q(mu) = pi^2 + di^2 + ci(mu)^2 where ci is complementarity_error.
-        // With pi=di=0 (satisfied primal/dual) and slack*z = 0.5*0.2 = 0.1,
-        // ci(mu) is minimized at mu ≈ 0.1 (interior of [1e-6, 1e-1]).
+        // Well-posed state: 1 lower-bound-active variable. The quality
+        // function q(mu) = pi + di + ci(mu) where ci is the
+        // 2-norm-averaged complementarity error.  With pi=di=0 and
+        // slack*z = 0.5*0.2 = 0.1, ci(mu) is minimized at mu ≈ 0.1.
         let mut state = minimal_state(1, 0);
         state.x = vec![1.5];
         state.x_l = vec![1.0];
         state.z_l = vec![0.2];
-        let mu = quality_function_mu(&state, 1e-6, 1e-1, 11);
-        // Candidate grid is log-spaced over [1e-6, 1e-1]; ci(mu=0.1)=0 exactly.
-        // exp(ln(1e-1)) has a ~1e-16 rounding overshoot, so allow a slack margin.
+        let opts = SolverOptions::default();
+        let mu = quality_function_mu(&state, &opts, 1e-6, 1e-1, 11);
         assert!(mu >= 1e-6 * (1.0 - 1e-12) && mu <= 1e-1 * (1.0 + 1e-12),
             "mu must lie in range, got {}", mu);
         // The exact optimum 0.1 is grid point k=10 with n_candidates=11.
         assert!((mu - 0.1).abs() < 1e-10, "expected mu≈0.1, got {}", mu);
+    }
+
+    #[test]
+    fn test_quality_function_mu_centrality_term_changes_pick() {
+        // Construct an off-center state (one product much smaller than
+        // the others) so xi << 1.  With centrality off the QF prefers
+        // the smallest-mu candidate that minimises ci(mu); with
+        // centrality on the `compl_inf / xi` penalty pushes the choice
+        // toward the larger-mu, more-central candidates.
+        let mut state = minimal_state(2, 0);
+        state.x = vec![1.5, 1.5];
+        state.x_l = vec![1.0, 1.0];
+        // First product = 0.5*0.001 = 5e-4, second = 0.5*1.0 = 0.5.
+        state.z_l = vec![0.001, 1.0];
+
+        let mut opts_off = SolverOptions::default();
+        opts_off.quality_function_centrality = false;
+        let mu_off = quality_function_mu(&state, &opts_off, 1e-6, 1.0, 21);
+
+        let mut opts_on = SolverOptions::default();
+        opts_on.quality_function_centrality = true;
+        let mu_on = quality_function_mu(&state, &opts_on, 1e-6, 1.0, 21);
+
+        // Centrality on must pick a strictly larger mu (penalty on
+        // 1/xi steers away from aggressive small-mu candidates).
+        assert!(mu_on >= mu_off,
+            "centrality should raise mu, off={mu_off:e} on={mu_on:e}");
     }
 }

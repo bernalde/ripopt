@@ -177,6 +177,15 @@ pub struct SolverOptions {
     /// oracle when the iterate is well-centered.
     /// Default: true.
     pub mu_oracle_quality_function: bool,
+    /// Add a centrality penalty term `1 / xi` to the quality function,
+    /// where `xi = min(z·s) / avg(z·s)` is evaluated at the candidate mu.
+    /// Mirrors `IpQualityFunctionMuOracle` `centrality=reciprocal` mode
+    /// (`IpQualityFunctionMuOracle.cpp:622`). Off by default, matching
+    /// Ipopt 3.14's default of `centrality=none`. Enable on problems
+    /// where the iterate drifts off-center and the plain quality
+    /// function picks aggressive small-mu candidates.
+    /// Default: false.
+    pub quality_function_centrality: bool,
     /// User-provided objective scaling factor. When `Some`, bypasses automatic
     /// gradient-based scaling and uses this value directly.
     pub user_obj_scaling: Option<f64>,
@@ -257,6 +266,7 @@ impl Default for SolverOptions {
             stall_iter_limit: 30,
             early_stall_timeout: 120.0,
             mu_oracle_quality_function: true,
+            quality_function_centrality: false,
             user_obj_scaling: None,
             user_g_scaling: None,
             user_x_scaling: None,

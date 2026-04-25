@@ -16,17 +16,20 @@ where a reader short on time should start.
 
 ### Correctness-first (may produce wrong answers today)
 
-1. **ripopt: separate `s_d` / `s_c` scaling denominators and remove the
-   1e4 cap.** Single denominator at `src/convergence.rs:51-64` lets a
-   point with large multipliers of one class silently loosen the
-   tolerance of the other. Ipopt keeps them separate
-   (`IpIpoptCalculatedQuantities.cpp:3663-3700`). Small effort; fixes
-   false-convergence class across HS and CUTEst.
+1. ~~**ripopt: separate `s_d` / `s_c` scaling denominators and remove the
+   1e4 cap.**~~ **DONE (commit 698a79f).** `src/convergence.rs` now
+   computes separate denominators with `s_max=100` and no upper cap,
+   matching `IpIpoptCalculatedQuantities.cpp:3663-3700`.
 2. **ripopt: post-hoc unscaled complementarity gate (HS13 root cause).**
-   `src/convergence.rs:73` uses the IPM-evolved `z`, which is
-   near-complementary by construction. Ipopt recomputes `z` against the
-   current iterate (`IpOptErrorConvCheck.cpp:211`). This is the likely
-   source of HS13's misleading `Optimal` status at a suboptimal point.
+   *Re-scoped*: the expert pass on `IpIpoptAlg.cpp:1055-1135` showed
+   that Ipopt's actual mechanism is `correct_bound_multiplier` (a
+   `kappa_sigma=1e10` projection on `z` after each accepted step), not
+   a post-hoc recompute. **Already implemented** in
+   `apply_kappa_sigma_bound_multiplier_reset` at `src/ipm.rs:2665-2696`,
+   called unconditionally from `update_dual_variables`. The convergence
+   gate at `src/convergence.rs:73` therefore reads a `z` that has
+   already been clamped, which is what Ipopt's gate sees too. No
+   additional code change needed for this item.
 3. **rmumps: wire up CNTL(4)-equivalent static-pivot threshold.**
    `frontal.rs:745` hardcodes `seuil = 0.0`, so the "must-eliminate"
    branch at `frontal.rs:864-881` accepts a tiny pivot at its literal
@@ -38,16 +41,15 @@ where a reader short on time should start.
    `frontal.rs:772-773`). MUMPS fixes them to `±CNTL(5) * ||A||` and
    reports the count via `INFOG(28)`. Without this, rank-deficient
    iterates are invisible to the IPM.
-5. **ripopt: drop the `±1` inertia acceptance heuristic.**
-   `src/kkt.rs:438-444` accepts off-by-one inertia counts at n+m ≥ 100.
-   Ipopt never does. A single eigenvalue flipped sign can move the step
-   from descent to ascent; the filter usually catches it, but not on
-   iteration 0.
-6. **ripopt: mu-dependent `delta_c` regularization.** Fixed
-   `delta_c_base` at `src/kkt.rs:228,357` overwhelms the converged
-   system for `mu → 1e-10`, biasing the final multipliers by
-   `O(delta_c / ||J||)`. Ipopt uses `delta_cd * mu^0.25`
-   (`IpPDPerturbationHandler.cpp:82-94`).
+5. ~~**ripopt: drop the `±1` inertia acceptance heuristic.**~~
+   **DONE (commit 53f4275).** All `approx_ok` branches in
+   `factor_with_inertia_correction` removed; only exact inertia is
+   accepted now.
+6. ~~**ripopt: mu-dependent `delta_c` regularization.**~~
+   **DONE (commit 83fcbc0).** `assemble_kkt` and
+   `factor_with_inertia_correction` now scale `delta_c_base` by
+   `mu^0.25` (matching `IpPDPerturbationHandler.cpp:82-94`).
+   `InertiaCorrectionParams::default().delta_c_base` is now `1e-8`.
 7. **rmumps: track tiny/static pivots and growth factor.** Without an
    `NBTINYW`/`RINFOG` equivalent, the IPM cannot tell a clean
    factorization from one that papered over 40 tiny pivots.
@@ -76,8 +78,16 @@ where a reader short on time should start.
     in the original problem. Ping-pong between main IPM and restoration
     is a real failure mode for several CUTEst problems.
 14. **ripopt: quality-function mu oracle must include centrality term.**
-    Current oracle at `src/ipm.rs:6331-6366` drops mu too aggressively
-    off-center.
+    Production Free-mode oracle is `compute_loqo_mu` at `src/ipm.rs`,
+    which already incorporates centrality via the Loqo σ formula
+    `0.1·min(0.05·(1-ξ)/ξ, 2)³`. The standalone reference QF oracle
+    `quality_function_mu` (still `#[allow(dead_code)]`) now matches
+    Ipopt's `IpQualityFunctionMuOracle.cpp:622-646` formula structure
+    (1-norm averages summed, plus `compl_inf / xi` when
+    `quality_function_centrality=true`; default false matches Ipopt's
+    `centrality=none`). Wiring it as a selectable production oracle
+    is deferred — Loqo with embedded centrality already covers the
+    documented "drops mu too aggressively off-center" failure mode.
 15. **rmumps: port analysis-time front sizing.** `expand_for_delayed`
     (`frontal.rs:161-183`) reallocates and copies dense fronts at
     runtime; MUMPS sizes fronts symbolically to include delayed slots.
