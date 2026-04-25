@@ -5031,6 +5031,26 @@ fn update_barrier_parameter_fixed_mode(
     }
 }
 
+/// Bounded ring of recent dual-infeasibility values + parallel ring of
+/// (x, y, z_l, z_u) snapshots, with a one-shot `tried` flag guarding the
+/// iterate-averaging promotion. Owned by solve_ipm; mutated each
+/// iteration via `record` and consumed by `try_iterate_averaging_promotion`.
+struct IterateAveragingState {
+    du_history: Vec<f64>,
+    iterate_history: Vec<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>)>,
+    tried: bool,
+}
+
+impl IterateAveragingState {
+    fn new() -> Self {
+        Self {
+            du_history: Vec::with_capacity(AVG_WINDOW + 1),
+            iterate_history: Vec::new(),
+            tried: false,
+        }
+    }
+}
+
 /// State threaded through the convergence-check promotion attempts.
 ///
 /// Groups the loop-spanning history + one-shot promotion flags so the
@@ -5038,9 +5058,7 @@ fn update_barrier_parameter_fixed_mode(
 /// signature. All fields live in `solve_ipm`'s stack frame; this struct is
 /// only a bundle of mutable references.
 struct ConvergenceWorkspace<'a> {
-    du_history: &'a mut Vec<f64>,
-    iterate_history: &'a mut Vec<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>)>,
-    tried_iterate_averaging: &'a mut bool,
+    avg: &'a mut IterateAveragingState,
     tried_active_set: &'a mut bool,
     tried_compl_polish: &'a mut bool,
 }
@@ -5147,13 +5165,13 @@ fn try_iterate_averaging_promotion<P: NlpProblem>(
     linear_constraints: Option<&[bool]>,
     lbfgs_mode: bool,
 ) -> Option<SolveResult> {
-    if *ws.tried_iterate_averaging || ws.du_history.len() != AVG_WINDOW {
+    if ws.avg.tried || ws.avg.du_history.len() != AVG_WINDOW {
         return None;
     }
     let mut sign_changes = 0;
-    for w in 1..ws.du_history.len() - 1 {
-        let d1 = ws.du_history[w] - ws.du_history[w - 1];
-        let d2 = ws.du_history[w + 1] - ws.du_history[w];
+    for w in 1..ws.avg.du_history.len() - 1 {
+        let d1 = ws.avg.du_history[w] - ws.avg.du_history[w - 1];
+        let d2 = ws.avg.du_history[w + 1] - ws.avg.du_history[w];
         if d1 * d2 < 0.0 {
             sign_changes += 1;
         }
@@ -5161,9 +5179,9 @@ fn try_iterate_averaging_promotion<P: NlpProblem>(
     if sign_changes < AVG_WINDOW / 2 {
         return None;
     }
-    *ws.tried_iterate_averaging = true;
+    ws.avg.tried = true;
     let (avg_x, avg_y, avg_zl, avg_zu) =
-        compute_iterate_average(ws.iterate_history, state, n, m);
+        compute_iterate_average(&ws.avg.iterate_history, state, n, m);
     let saved = SavedIterate::snapshot(state);
     state.x.copy_from_slice(&avg_x);
     state.y.copy_from_slice(&avg_y);
@@ -5327,13 +5345,13 @@ fn check_convergence_and_handle_promotions<P: NlpProblem>(
     };
 
     // Track iterate history for oscillation detection (Strategy 1)
-    ws.du_history.push(dual_inf);
-    ws.iterate_history.push((
+    ws.avg.du_history.push(dual_inf);
+    ws.avg.iterate_history.push((
         state.x.clone(), state.y.clone(), state.z_l.clone(), state.z_u.clone(),
     ));
-    if ws.du_history.len() > AVG_WINDOW {
-        ws.du_history.remove(0);
-        ws.iterate_history.remove(0);
+    if ws.avg.du_history.len() > AVG_WINDOW {
+        ws.avg.du_history.remove(0);
+        ws.avg.iterate_history.remove(0);
     }
 
     match check_convergence(&conv_info, options, state.consecutive_acceptable) {
@@ -6849,9 +6867,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let mut dual_stall = DualStallTracker::new();
 
     // Strategy 1: Iterate averaging for oscillation recovery
-    let mut du_history: Vec<f64> = Vec::with_capacity(AVG_WINDOW + 1);
-    let mut iterate_history: Vec<(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>)> = Vec::new(); // (x, y, z_l, z_u)
-    let mut tried_iterate_averaging: bool = false;
+    let mut avg_state = IterateAveragingState::new();
 
     // Strategy 2: Damped multiplier updates when oscillation detected
     let mut dy_tracker = DyOscillationTracker::new(m);
@@ -6970,9 +6986,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         let multiplier_count = m + 2 * n;
 
         let mut conv_ws = ConvergenceWorkspace {
-            du_history: &mut du_history,
-            iterate_history: &mut iterate_history,
-            tried_iterate_averaging: &mut tried_iterate_averaging,
+            avg: &mut avg_state,
             tried_active_set: &mut tried_active_set,
             tried_compl_polish: &mut _tried_compl_polish,
         };
