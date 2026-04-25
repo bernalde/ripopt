@@ -7844,9 +7844,7 @@ fn recompute_y_after_restoration(
     if let Some(y_ls) = y_accepted {
         state.y.copy_from_slice(&y_ls);
     } else {
-        for i in 0..m {
-            state.y[i] = 0.0;
-        }
+        state.y.fill(0.0);
     }
 }
 
@@ -9320,9 +9318,7 @@ fn try_active_set_solve<P: NlpProblem>(
     }
 
     // Update y from the solve
-    for i in 0..m {
-        state.y[i] = sol[n_free + i];
-    }
+    state.y.copy_from_slice(&sol[n_free..n_free + m]);
 
     // Re-evaluate at the new point
     let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
