@@ -5988,6 +5988,40 @@ fn revert_to_best_du_iterate_if_better<P: NlpProblem>(
     }
 }
 
+/// Update best-so-far primal/dual metrics and the no-progress counter,
+/// and return `true` when the stall limit has been reached.
+///
+/// Counts an iteration as "improving" when either `primal_inf_max` or
+/// `dual_inf` shrinks by at least 1% of the previous best. Improving
+/// resets the no-progress counter; non-improving increments it. The
+/// effective stall limit is halved when both step lengths are
+/// negligible (`alpha_primal < 1e-8 && alpha_dual < 1e-4`) so truly
+/// stuck iterations terminate sooner.
+fn update_stall_counters_and_check_limit(
+    stall: &mut ProgressStallTracker,
+    state: &SolverState,
+    options: &SolverOptions,
+    primal_inf_max: f64,
+    dual_inf: f64,
+) -> bool {
+    let pr_improved = primal_inf_max < 0.99 * stall.best_pr;
+    let du_improved = dual_inf < 0.99 * stall.best_du;
+    if pr_improved {
+        stall.best_pr = primal_inf_max;
+    }
+    if du_improved {
+        stall.best_du = dual_inf;
+    }
+    if pr_improved || du_improved {
+        stall.no_progress_count = 0;
+        return false;
+    }
+    stall.no_progress_count += 1;
+    let tiny_alpha = state.alpha_primal < 1e-8 && state.alpha_dual < 1e-4;
+    let stall_limit = if tiny_alpha { options.stall_iter_limit / 2 } else { options.stall_iter_limit };
+    stall.no_progress_count >= stall_limit
+}
+
 fn detect_and_handle_progress_stall<P: NlpProblem>(
     state: &mut SolverState,
     problem: &P,
@@ -6011,24 +6045,9 @@ fn detect_and_handle_progress_stall<P: NlpProblem>(
     let n = state.n;
     let m = state.m;
 
-    let pr_improved = primal_inf_max < 0.99 * stall.best_pr;
-    let du_improved = dual_inf < 0.99 * stall.best_du;
-    if pr_improved {
-        stall.best_pr = primal_inf_max;
-    }
-    if du_improved {
-        stall.best_du = dual_inf;
-    }
-    if pr_improved || du_improved {
-        stall.no_progress_count = 0;
-        return StallDecision::Proceed;
-    }
-    stall.no_progress_count += 1;
-    let tiny_alpha = state.alpha_primal < 1e-8 && state.alpha_dual < 1e-4;
-    // Terminate after half the limit with truly negligible steps, or the full
-    // limit with no metric improvement regardless of step size.
-    let stall_limit = if tiny_alpha { options.stall_iter_limit / 2 } else { options.stall_iter_limit };
-    if stall.no_progress_count < stall_limit {
+    if !update_stall_counters_and_check_limit(
+        stall, state, options, primal_inf_max, dual_inf,
+    ) {
         return StallDecision::Proceed;
     }
 
