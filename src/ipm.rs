@@ -7418,6 +7418,50 @@ fn try_classify_max_iter_infeasibility(
     None
 }
 
+/// At print_level >= 5, log a one-line MaxIter summary with the
+/// scaled/unscaled dual infeasibility, complementarity, mu, dual
+/// scaling factor s_d (Ipopt formula), and the acceptable-iter
+/// counter. Pure side-effect helper — caller branches separately.
+fn print_max_iter_diagnostics(
+    state: &SolverState,
+    options: &SolverOptions,
+    n: usize,
+    m: usize,
+) {
+    if options.print_level < 5 {
+        return;
+    }
+    let final_primal_inf = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
+    let final_dual_inf = convergence::dual_infeasibility(
+        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+        &state.y, &state.z_l, &state.z_u, n,
+    );
+    let final_dual_inf_unscaled = convergence::dual_infeasibility_scaled(
+        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+        &state.y, &state.z_l, &state.z_u, n,
+    );
+    let final_compl = convergence::complementarity_error(
+        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
+    );
+    let mult_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
+        + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
+        + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
+    let s_max: f64 = 100.0;
+    let s_d = if (m + 2 * n) > 0 {
+        ((s_max.max(mult_sum / (m + 2 * n) as f64)) / s_max).min(1e4)
+    } else {
+        1.0
+    };
+    rip_log!(
+        "ripopt: MaxIter diag: pr={:.2e} du={:.2e}(t={:.2e}) du_u={:.2e}(t={:.0e}) co={:.2e}(t={:.2e}) mu={:.2e} sd={:.1} ac={}",
+        final_primal_inf,
+        final_dual_inf, options.tol * s_d,
+        final_dual_inf_unscaled, options.dual_inf_tol,
+        final_compl, 10.0 * options.compl_inf_tol,
+        state.mu, s_d, state.consecutive_acceptable,
+    );
+}
+
 fn finalize_after_max_iter(
     state: &SolverState,
     options: &SolverOptions,
@@ -7429,37 +7473,7 @@ fn finalize_after_max_iter(
     timings: &PhaseTimings,
     ipm_start: Instant,
 ) -> SolveResult {
-    if options.print_level >= 5 {
-        let final_primal_inf = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
-        let final_dual_inf = convergence::dual_infeasibility(
-            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-            &state.y, &state.z_l, &state.z_u, n,
-        );
-        let final_dual_inf_unscaled = convergence::dual_infeasibility_scaled(
-            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-            &state.y, &state.z_l, &state.z_u, n,
-        );
-        let final_compl = convergence::complementarity_error(
-            &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
-        );
-        let mult_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
-            + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
-            + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
-        let s_max: f64 = 100.0;
-        let s_d = if (m + 2 * n) > 0 {
-            ((s_max.max(mult_sum / (m + 2 * n) as f64)) / s_max).min(1e4)
-        } else {
-            1.0
-        };
-        rip_log!(
-            "ripopt: MaxIter diag: pr={:.2e} du={:.2e}(t={:.2e}) du_u={:.2e}(t={:.0e}) co={:.2e}(t={:.2e}) mu={:.2e} sd={:.1} ac={}",
-            final_primal_inf,
-            final_dual_inf, options.tol * s_d,
-            final_dual_inf_unscaled, options.dual_inf_tol,
-            final_compl, 10.0 * options.compl_inf_tol,
-            state.mu, s_d, state.consecutive_acceptable,
-        );
-    }
+    print_max_iter_diagnostics(state, options, n, m);
 
     // Infeasibility detection (only when never feasible).
     let final_theta = state.constraint_violation();
