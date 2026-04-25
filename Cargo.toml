@@ -3,7 +3,7 @@ members = [".", "rmumps", "ripopt-py"]
 
 [package]
 name = "ripopt"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 license = "EPL-2.0"
 description = "A memory-safe interior point optimizer in Rust"
@@ -24,6 +24,10 @@ exclude = [
     "*.ipynb",
     "RIPOPT_VS_IPOPT.md",
     ".github/",
+    "CLAUDE.md",
+    "narrative-history.org",
+    "reflections.org",
+    "examples/debug_tp*.rs",
 ]
 
 [lib]

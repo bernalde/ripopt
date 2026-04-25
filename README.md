@@ -51,7 +51,7 @@ It implements a primal-dual interior point method with a barrier formulation, si
 - **Multi-solver fallback architecture**: L-BFGS, Augmented Lagrangian, SQP, and explicit slack reformulation
 - **Parametric sensitivity analysis**: sIPOPT-style post-optimal sensitivity (`ds/dp = -M⁻¹ · Nₚ`) for computing how the optimal solution changes under parameter perturbations, plus reduced Hessian extraction for covariance estimation
 - **C API** mirroring the Ipopt C interface for direct linking from C/C++/Python/Julia
-- **AMPL NL interface** with Pyomo integration via `SolverFactory('ripopt')`, with `--help` listing all options
+- **AMPL NL interface** with Pyomo integration via `SolverFactory('ripopt')`, with `--help` listing all options. Supports AMPL **external functions** via the `funcadd_ASL` ABI (e.g. IDAES `cbrt`, custom property-package libraries) at solve time.
 - **GAMS solver link** enabling `option nlp = ripopt;` in GAMS models via the GMO API
 - **Julia/JuMP interface** (`Ripopt.jl`) via MathOptInterface, enabling `Model(Ripopt.Optimizer)` with full JuMP support
 
@@ -66,28 +66,30 @@ It implements a primal-dual interior point method with a barrier formulation, si
 | ripopt only     | 2                  | --                    |
 | Ipopt only      | --                 | 0                     |
 
-On 116 commonly-solved problems: **15.0x geometric mean speedup**, median 14.2x, ripopt faster on 113/116 (97%).
+On 116 commonly-solved problems: **20.8x geometric mean speedup**, median 20.9x, ripopt faster on 114/116 (98%).
 
 ### CUTEst Benchmark Suite (727 problems)
 
 | Metric        | ripopt              | Ipopt (C++ with MUMPS) |
 |---------------|---------------------|------------------------|
-| Total solved  | **562/727 (77.3%)** | 561/727 (77.2%)        |
-| Both solve    | 525                 | 525                    |
-| ripopt only   | **37**              | --                     |
-| Ipopt only    | --                  | **36**                 |
+| Total solved  | 556/727 (76.5%)     | 556/727 (76.5%)        |
+| Both solve    | 521                 | 521                    |
+| ripopt only   | 38                  | --                     |
+| Ipopt only    | --                  | 40                     |
 
-On 525 commonly-solved problems:
+ripopt and native Ipopt are tied on CUTEst strict-Optimal at v0.7.1; v0.7.0 had ripopt at +4. The v0.7.0 → v0.7.1 cycle had churn of 20 regressions and 16 gains (net -4 problems), concentrated on least-squares / rank-deficient Jacobians; see CHANGELOG for details.
+
+On 521 commonly-solved problems:
 
 | Metric                          | Value            |
 |---------------------------------|------------------|
-| Geometric mean speedup          | **9.9x**         |
-| Median speedup                  | **18.9x**        |
-| Problems where ripopt is faster | 440/525 (84%)    |
-| ripopt 10x+ faster              | 332/525 (63%)    |
-| Problems where Ipopt is faster  | 85/525 (16%)     |
+| Geometric mean speedup          | **12.0x**        |
+| Median speedup                  | **21.0x**        |
+| Problems where ripopt is faster | 454/521 (87%)    |
+| ripopt 10x+ faster              | 340/521 (65%)    |
+| Problems where Ipopt is faster  | 67/521 (13%)     |
 
-**Interpreting the speed numbers.** Most CUTEst problems are small (n < 10) and solve in microseconds for ripopt, while Ipopt has a ~1-3ms floor from internal initialization. The per-iteration speedup on small problems comes from stack allocation, the absence of C/Fortran interop, and cache-efficient dense linear algebra. On larger problems, ripopt switches to sparse multifrontal LDL^T with SuiteSparse AMD ordering, and Ipopt's Fortran MUMPS has a per-factorization advantage. Ipopt uses fewer iterations on average on CUTEst (ripopt mean 84.1 vs Ipopt 43.0), reflecting its more mature barrier parameter tuning.
+**Interpreting the speed numbers.** Most CUTEst problems are small (n < 10) and solve in microseconds for ripopt, while Ipopt has a ~1-3ms floor from internal initialization. The per-iteration speedup on small problems comes from stack allocation, the absence of C/Fortran interop, and cache-efficient dense linear algebra. On larger problems, ripopt switches to sparse multifrontal LDL^T with SuiteSparse AMD ordering, and Ipopt's Fortran MUMPS has a per-factorization advantage. Ipopt uses fewer iterations on average on CUTEst (ripopt mean 62.3 vs Ipopt 39.5), reflecting its more mature barrier parameter tuning.
 
 The speed advantage comes from:
 
@@ -499,7 +501,7 @@ Include `ripopt.h` (repo root) in your C project. It defines version macros, cal
 #include "ripopt.h"
 
 // Check version at compile time
-printf("ripopt %s\n", RIPOPT_VERSION);  // "0.7.0"
+printf("ripopt %s\n", RIPOPT_VERSION);  // "0.7.1"
 ```
 
 ### Callback signatures

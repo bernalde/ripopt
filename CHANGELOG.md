@@ -1,5 +1,134 @@
 # Changelog
 
+## [0.7.1] - 2026-04-25
+
+Patch release focused on the **Reference-Gap Roadmap**: porting concrete
+behavioral details from Ipopt 3.14 that the v0.7.0 ripopt-vs-Ipopt audit
+flagged as missing. The biggest functional gains come from a faithful
+`IpScaledNLP`-equivalent x-scaling wrapper, the Ipopt
+`PDPerturbationHandler` δ-escalation schedule, the soft restoration
+phase (`TrySoftRestoStep` with the E_μ test), the restoration
+convergence three-gate, and a μ-dependent δ_c regularization. The cycle
+also picked up first-class AMPL external-function support and a much
+larger unit-test footprint for the filter, μ-oracle, and inertia
+correction components. The body of the work (~200 commits) is internal
+refactoring of `src/ipm.rs` into named helper functions to keep the
+control flow legible as the IPM main loop grows.
+
+### Added
+- **AMPL external functions**: `.nl` parser now recognizes external
+  function declarations and evaluates them through the
+  `funcadd_ASL` ABI at solve time, so models that depend on
+  user-supplied function libraries (e.g. IDAES `cbrt`, Sundials, custom
+  property packages) load and solve in ripopt without modification.
+  Previously these problems errored out at parse.
+- **`warm_start_target_mu`** option (roadmap #18): allows callers
+  warm-starting from a previous solve to override `mu_init` to the μ
+  the prior run finished at, removing the cold-start ramp-up.
+- **Centrality term in the Quality-Function μ oracle** (roadmap #14):
+  optional centrality penalty in the QF objective, matching Ipopt's
+  `centrality_term` knob.
+
+### Changed
+- **Full `IpScaledNLP`-equivalent x-scaling wrapper** (roadmap #6).
+  ripopt's x-scaling now wraps the NLP exactly like Ipopt's
+  `IpScaledNLP`, so all evaluations (objective, gradient, constraints,
+  Jacobian, Hessian) see the scaled iterate consistently and the
+  convergence check unscales correctly. Closes the largest remaining
+  scaling gap from the reference-gap audit.
+- **Ipopt `PDPerturbationHandler` δ-escalation** (roadmap #19): the
+  KKT inertia-correction routine now follows the exact δ_w / δ_c
+  escalation schedule from `IpPDPerturbationHandler.cpp` instead of an
+  ad-hoc geometric ramp.
+- **Soft restoration phase** (roadmap #12): port of Ipopt's
+  `TrySoftRestoStep` with the E_μ acceptance test. When the line
+  search fails but the iterate is still close to feasibility, ripopt
+  now attempts the cheap soft-restoration step before falling through
+  to the full restoration NLP.
+- **Restoration convergence three-gate** (roadmap #13): port of
+  `RestoFilterConvCheck`. Restoration now terminates on the same
+  three-gate criterion Ipopt uses (filter acceptance, KKT residual,
+  feasibility), matching the reference behavior at the boundary
+  between restoration and the main IPM.
+- **Convergence: separate `s_d` / `s_c` scales, drop the 1e4 cap**
+  (roadmap #1). The dual-infeasibility and complementarity scaling
+  factors are now computed independently as in Ipopt, and the legacy
+  `1e4` clamp on the scaled error has been removed. Some problems
+  that previously declared `Optimal` early on a loose scaled metric now
+  run to the correct stopping point; some that hung at a scaled
+  plateau now converge.
+
+### Fixed
+- **μ-dependent δ_c regularization** (roadmap #6): the constraint
+  regularization now scales with μ as in Ipopt, instead of being held
+  fixed.
+- **Drop the ±1 inertia acceptance heuristic** (roadmap #5): the KKT
+  inertia check now demands the exact `(n, m, 0)` signature Ipopt
+  requires; the previous `±1` slack was hiding genuine inertia
+  failures.
+- **`user_x_scaling` is now rejected with a clear error** (roadmap
+  #9) instead of being silently ignored. (No-op acceptance was the
+  root cause of several "ripopt doesn't honor my scaling" reports.)
+- **Preprocessing redundancy heuristic** (roadmap #8): guarded
+  against the degenerate probe case where the heuristic could divide
+  by zero on certain rank-deficient Jacobians.
+
+### Refactored
+- **~200 `refactor(ipm)` commits** extracting named helpers from
+  `src/ipm.rs` (e.g. `compute_barrier_phi`, `apply_gondzio_mcc`,
+  `run_line_search_loop`, `run_post_ls_restoration_cascade`,
+  `try_soft_restoration`, `try_nlp_restoration_phase`,
+  `update_barrier_parameter_free_mode` /
+  `_fixed_mode`, all the per-phase trial / commit / snapshot helpers).
+  No behavioral change — the IPM main loop now reads as a sequence of
+  named phases instead of a 3000-line control-flow blob. Several
+  pieces of state that were previously loose locals (`Watchdog`,
+  `FeasibilityTracker`, `ProgressStallTracker`, `DualStallTracker`,
+  `BestDuIterate`, iterate-averaging, dy-oscillation tracking) are now
+  consolidated into named structs.
+- **IPM iteration log gains a `compl` column** so users can see why an
+  iterate that "looks converged" on `inf_pr`/`inf_du` is still
+  rejected (complementarity not yet at tolerance).
+
+### Tests
+- **Component-level unit tests** for the filter, μ-oracle, and
+  inertia-correction modules (previously only exercised via
+  end-to-end solver runs).
+- **NL external-function coverage** via the IDAES `cbrt` exact-arity
+  type-0 path.
+- **HS / CUTEst / electrolyte / grid benchmark fixtures refreshed**
+  against the v0.8 work-in-progress.
+
+### Notes
+- 216 commits since v0.7.0; ~200 are pure internal refactoring with no
+  behavioral change.
+- **HS pass rate is unchanged**: ripopt 118/120, native Ipopt 116/120,
+  same as v0.7.0.
+- **CUTEst pass rate regressed by 4 problems**: ripopt Optimal 560 (v0.7.0)
+  → 556 (v0.7.1); native Ipopt is unchanged at 556. Net result: ripopt's
+  +4 advantage on CUTEst at v0.7.0 has been wiped out and the two solvers
+  are now tied at 556/727 strict-Optimal. Per-problem churn is much larger
+  than the net (-4) suggests: 20 problems regressed from `Optimal` (mostly
+  to `NumericalError` or `LocalInfeasibility`) and 16 problems newly reach
+  `Optimal`. The regressions are concentrated in least-squares /
+  rank-deficient Jacobian families (CERI651, MGH, OET, PALMER, NET1,
+  HYDC20LS, DECONVBNE, DUALC8, QPCBLEND, SNAKE, FLETCHER, TFI1, TAX13322).
+  The most plausible suspects are the stricter `s_d` / `s_c` convergence
+  metric (the dropped `1e4` cap means a few iterates that previously
+  declared `Optimal` early now run past their numerically-clean stopping
+  point) and the new μ-dependent δ_c regularization in factorization.
+  Tagged comparison artifacts: `benchmarks/cutest/results_v0.7.0.json`
+  vs `benchmarks/cutest/results_v0.7.1.json`.
+- Speed on commonly-solved problems improved: HS geo-mean speedup vs
+  native Ipopt rose from ~15× to ~21× (median 21×, 114/116 faster);
+  CUTEst geo-mean rose from ~10× to ~12× on 521 commonly-solved
+  problems.
+- Mittelmann ampl-nlp benchmark harness moved from `mittelmann/` to
+  `benchmarks/mittelmann/`. ripopt v0.7.1 still cannot run Mittelmann
+  problems within the 7200 s timeout — the dense linear solver is the
+  bottleneck. The sparse linear-solver swap planned for v0.9 targets
+  this benchmark.
+
 ## [0.7.0] - 2026-04-23
 
 First release where ripopt solves strictly more HS **and** more CUTEst

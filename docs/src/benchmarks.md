@@ -16,11 +16,11 @@ On 116 commonly solved problems (strict `Optimal` status required):
 
 | Metric | Value |
 |---|---|
-| Geometric mean speedup | **15.0x** |
-| Median speedup | **14.2x** |
-| ripopt faster | 113/116 (97%) |
-| ripopt 10x+ faster | 84/116 (72%) |
-| Matching objectives (rel diff < 1e-4) | 110/116 (95%) |
+| Geometric mean speedup | **20.8x** |
+| Median speedup | **20.9x** |
+| ripopt faster | 114/116 (98%) |
+| ripopt 10x+ faster | 103/116 (89%) |
+| Matching objectives (rel diff < 1e-4) | 111/116 (96%) |
 
 Run: `make hs-run`
 
@@ -30,19 +30,21 @@ CUTEst covers a wide range of problem types, sizes, and structures. Problems ran
 
 | Metric | ripopt | Ipopt (MUMPS) |
 |---|---|---|
-| Total solved | **562/727 (77.3%)** | 561/727 (77.2%) |
-| Solved by ripopt only | **37** | — |
-| Solved by Ipopt only | — | 36 |
+| Total solved | 556/727 (76.5%) | 556/727 (76.5%) |
+| Solved by ripopt only | 38 | — |
+| Solved by Ipopt only | — | 40 |
 
-On 525 commonly solved problems:
+ripopt and native Ipopt are tied on CUTEst strict-Optimal at v0.7.1; v0.7.0 had ripopt at +4. The v0.7.0 → v0.7.1 cycle had churn of 20 regressions and 16 gains (net -4 problems), concentrated on least-squares / rank-deficient Jacobians.
+
+On 521 commonly solved problems:
 
 | Metric | Value |
 |---|---|
-| Geometric mean speedup | **9.9x** |
-| Median speedup | **18.9x** |
-| ripopt faster | 440/525 (84%) |
-| ripopt 10x+ faster | 332/525 (63%) |
-| Matching objectives (rel diff < 1e-4) | 436/525 (83.0%) |
+| Geometric mean speedup | **12.0x** |
+| Median speedup | **21.0x** |
+| ripopt faster | 454/521 (87%) |
+| ripopt 10x+ faster | 340/521 (65%) |
+| Matching objectives (rel diff < 1e-4) | 447/521 (85.8%) |
 
 Run: `make benchmark` (full suite, ~2 hours) or individual problems:
 ```bash
