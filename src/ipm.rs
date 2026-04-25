@@ -5253,6 +5253,24 @@ fn compute_iterate_average(
     (avg_x, avg_y, avg_zl, avg_zu)
 }
 
+/// Count the number of sign changes in consecutive differences of
+/// `du_history` — i.e. interior indices `w` where
+/// `(h[w]-h[w-1])·(h[w+1]-h[w]) < 0`. Used by
+/// `try_iterate_averaging_promotion` to detect dual-infeasibility
+/// oscillation: ≥ `AVG_WINDOW/2` sign changes flag a stalled
+/// oscillating iterate that averaging may resolve.
+fn count_du_history_sign_changes(du_history: &[f64]) -> usize {
+    let mut sign_changes = 0;
+    for w in 1..du_history.len().saturating_sub(1) {
+        let d1 = du_history[w] - du_history[w - 1];
+        let d2 = du_history[w + 1] - du_history[w];
+        if d1 * d2 < 0.0 {
+            sign_changes += 1;
+        }
+    }
+    sign_changes
+}
+
 /// Strategy 1 (Acceptable promotion): if the dual-infeasibility history has
 /// `AVG_WINDOW` entries and shows oscillation (>= AVG_WINDOW/2 sign changes
 /// in consecutive differences), average the last `AVG_WINDOW` iterates and
@@ -5273,15 +5291,7 @@ fn try_iterate_averaging_promotion<P: NlpProblem>(
     if ws.avg.tried || ws.avg.du_history.len() != AVG_WINDOW {
         return None;
     }
-    let mut sign_changes = 0;
-    for w in 1..ws.avg.du_history.len() - 1 {
-        let d1 = ws.avg.du_history[w] - ws.avg.du_history[w - 1];
-        let d2 = ws.avg.du_history[w + 1] - ws.avg.du_history[w];
-        if d1 * d2 < 0.0 {
-            sign_changes += 1;
-        }
-    }
-    if sign_changes < AVG_WINDOW / 2 {
+    if count_du_history_sign_changes(&ws.avg.du_history) < AVG_WINDOW / 2 {
         return None;
     }
     ws.avg.tried = true;
