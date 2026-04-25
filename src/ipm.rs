@@ -5637,46 +5637,64 @@ fn detect_unbounded(
 /// Extracted from `solve_ipm` as part of the v0.8 main-loop
 /// decomposition. Returns `true` when the caller should force
 /// restoration on the next step.
+/// Tracks consecutive primal-infeasibility increases so the divergence
+/// detector can force restoration after a sustained run of growth.
+/// `prev` is the previous iteration's primal_inf, `start` snapshots
+/// `prev` at the moment the run began.
+struct PrimalDivergenceTracker {
+    consecutive_increase: usize,
+    prev: f64,
+    start: f64,
+}
+
+impl PrimalDivergenceTracker {
+    fn new() -> Self {
+        Self {
+            consecutive_increase: 0,
+            prev: f64::INFINITY,
+            start: f64::INFINITY,
+        }
+    }
+}
+
 fn detect_primal_divergence(
     options: &SolverOptions,
     iteration: usize,
     primal_inf: f64,
-    consecutive_pr_increase: &mut usize,
-    pr_prev_for_divergence: &mut f64,
-    pr_at_divergence_start: &mut f64,
+    pd: &mut PrimalDivergenceTracker,
     m: usize,
 ) -> bool {
     let mut force_restoration = false;
     if m > 0 && iteration > 5 && primal_inf > options.constr_viol_tol {
-        if primal_inf > *pr_prev_for_divergence * (1.0 + 1e-6) {
-            if *consecutive_pr_increase == 0 {
-                *pr_at_divergence_start = *pr_prev_for_divergence;
+        if primal_inf > pd.prev * (1.0 + 1e-6) {
+            if pd.consecutive_increase == 0 {
+                pd.start = pd.prev;
             }
-            *consecutive_pr_increase += 1;
+            pd.consecutive_increase += 1;
         } else {
-            *consecutive_pr_increase = 0;
+            pd.consecutive_increase = 0;
         }
         // After 8 consecutive increases AND cumulative growth of at least
         // 20%, force restoration. The growth check prevents triggering on
         // tiny numerical oscillations.
-        if *consecutive_pr_increase >= 8 && primal_inf > 1.2 * *pr_at_divergence_start {
+        if pd.consecutive_increase >= 8 && primal_inf > 1.2 * pd.start {
             log::info!(
                 "Primal divergence at iter {}: pr grew for {} consecutive iterations ({:.2e} -> {:.2e}), forcing restoration",
-                iteration, *consecutive_pr_increase, *pr_at_divergence_start, primal_inf
+                iteration, pd.consecutive_increase, pd.start, primal_inf
             );
             if options.print_level >= 3 {
                 rip_log!(
                     "ripopt: Primal divergence detected (pr grew {:.2e} -> {:.2e} over {} iters), re-entering restoration",
-                    *pr_at_divergence_start, primal_inf, *consecutive_pr_increase
+                    pd.start, primal_inf, pd.consecutive_increase
                 );
             }
             force_restoration = true;
-            *consecutive_pr_increase = 0;
+            pd.consecutive_increase = 0;
         }
     } else {
-        *consecutive_pr_increase = 0;
+        pd.consecutive_increase = 0;
     }
-    *pr_prev_for_divergence = primal_inf;
+    pd.prev = primal_inf;
     force_restoration
 }
 
@@ -6830,9 +6848,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     // Primal divergence detection: track consecutive iterations where pr is growing.
     // When pr grows steadily post-restoration, re-trigger restoration rather than
     // continuing for many iterations with worsening feasibility.
-    let mut pr_prev_for_divergence: f64 = f64::INFINITY;
-    let mut pr_at_divergence_start: f64 = f64::INFINITY;
-    let mut consecutive_pr_increase: usize = 0;
+    let mut pd_tracker = PrimalDivergenceTracker::new();
 
     // Consecutive iterations with obj < -1e20 for robust unbounded detection
     let mut consecutive_unbounded: usize = 0;
@@ -7062,9 +7078,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             options,
             iteration,
             primal_inf,
-            &mut consecutive_pr_increase,
-            &mut pr_prev_for_divergence,
-            &mut pr_at_divergence_start,
+            &mut pd_tracker,
             m,
         );
 
