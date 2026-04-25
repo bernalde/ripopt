@@ -4051,9 +4051,7 @@ fn classify_exhausted_restoration_attempt(
     options: &SolverOptions,
     iteration: usize,
     fail_count: usize,
-    ever_feasible: bool,
-    theta_history: &[f64],
-    theta_history_len: usize,
+    feas: &FeasibilityTracker,
 ) -> SolveResult {
     log::warn!(
         "Restoration failed at iteration {} (attempt #{})",
@@ -4061,7 +4059,7 @@ fn classify_exhausted_restoration_attempt(
     );
     let current_theta = state.constraint_violation();
 
-    if current_theta > options.constr_viol_tol && !ever_feasible {
+    if current_theta > options.constr_viol_tol && !feas.ever_feasible {
         let grad_theta_norm = compute_grad_theta_norm(state);
         let stationarity_tol = 1e-4 * current_theta.max(1.0);
         if grad_theta_norm < stationarity_tol {
@@ -4073,10 +4071,10 @@ fn classify_exhausted_restoration_attempt(
         }
     }
 
-    if !ever_feasible && current_theta > 1e4 && iteration > 500
-        && theta_history.len() >= theta_history_len
+    if !feas.ever_feasible && current_theta > 1e4 && iteration > 500
+        && feas.history.len() >= feas.history_len
     {
-        let min_theta = slice_min(theta_history);
+        let min_theta = slice_min(&feas.history);
         if current_theta > 0.01 * min_theta {
             return make_result(state, SolveStatus::Infeasible);
         }
@@ -4112,11 +4110,9 @@ fn run_post_ls_restoration_cascade<P: NlpProblem>(
     start_time: Instant,
     deadline: Option<Instant>,
     early_timeout: f64,
-    ever_feasible: bool,
+    feas: &FeasibilityTracker,
     theta_current: f64,
     phi_current: f64,
-    theta_history: &[f64],
-    theta_history_len: usize,
 ) -> RestorationCascadeDecision {
     state.diagnostics.filter_rejects += 1;
 
@@ -4162,8 +4158,7 @@ fn run_post_ls_restoration_cascade<P: NlpProblem>(
     let max_restore_attempts = if kkt_dim > 50000 { 3 } else { 6 };
     if fail_count > max_restore_attempts {
         return RestorationCascadeDecision::Return(classify_exhausted_restoration_attempt(
-            state, options, iteration, fail_count, ever_feasible,
-            theta_history, theta_history_len,
+            state, options, iteration, fail_count, feas,
         ));
     }
 
@@ -5632,6 +5627,29 @@ impl PrimalDivergenceTracker {
     }
 }
 
+/// Constraint-violation history with auxiliary flags driving infeasibility
+/// detection: `history` is a bounded ring of recent θ values, `ever_feasible`
+/// is sticky once any θ falls below `constr_viol_tol`, and `stall_count`
+/// counts consecutive iterations where θ has stagnated within the history
+/// window. Owned by the main IPM loop.
+struct FeasibilityTracker {
+    history: Vec<f64>,
+    history_len: usize,
+    ever_feasible: bool,
+    stall_count: usize,
+}
+
+impl FeasibilityTracker {
+    fn new(history_len: usize) -> Self {
+        Self {
+            history: Vec::with_capacity(history_len),
+            history_len,
+            ever_feasible: false,
+            stall_count: 0,
+        }
+    }
+}
+
 fn detect_primal_divergence(
     options: &SolverOptions,
     iteration: usize,
@@ -5991,40 +6009,37 @@ fn track_feasibility_and_detect_infeasibility(
     options: &SolverOptions,
     iteration: usize,
     primal_inf: f64,
-    theta_history: &mut Vec<f64>,
-    theta_history_len: usize,
-    theta_stall_count: &mut usize,
-    ever_feasible: &mut bool,
+    feas: &mut FeasibilityTracker,
 ) -> Option<SolveResult> {
     let m = state.m;
 
-    if theta_history.len() >= theta_history_len {
-        theta_history.remove(0);
+    if feas.history.len() >= feas.history_len {
+        feas.history.remove(0);
     }
-    theta_history.push(primal_inf);
+    feas.history.push(primal_inf);
 
     if primal_inf < options.constr_viol_tol {
-        *ever_feasible = true;
+        feas.ever_feasible = true;
     }
 
     // Proactive infeasibility detection: if θ has stagnated over the history
     // window AND ‖∇θ‖_∞ is near zero, declare infeasibility instead of
     // waiting for restoration to reach the same conclusion.
     if options.proactive_infeasibility_detection
-        && !*ever_feasible
+        && !feas.ever_feasible
         && m > 0
         && iteration >= 50
         && primal_inf > options.constr_viol_tol
-        && theta_history.len() >= theta_history_len
+        && feas.history.len() >= feas.history_len
     {
-        let theta_min_h = slice_min(theta_history);
-        let theta_max_h = theta_history.iter().cloned().fold(0.0f64, f64::max);
+        let theta_min_h = slice_min(&feas.history);
+        let theta_max_h = feas.history.iter().cloned().fold(0.0f64, f64::max);
         if theta_max_h > 0.0 && (theta_max_h - theta_min_h) < 0.01 * primal_inf {
-            *theta_stall_count += 1;
+            feas.stall_count += 1;
         } else {
-            *theta_stall_count = 0;
+            feas.stall_count = 0;
         }
-        if *theta_stall_count >= 10 {
+        if feas.stall_count >= 10 {
             let grad_theta_norm = compute_grad_theta_norm(state);
             let stationarity_tol = 1e-3 * primal_inf.max(1.0);
             if grad_theta_norm < stationarity_tol {
@@ -6035,10 +6050,10 @@ fn track_feasibility_and_detect_infeasibility(
                 return Some(make_result(state, SolveStatus::LocalInfeasibility));
             }
             // Stationarity not met — reset counter to check again next window.
-            *theta_stall_count = 0;
+            feas.stall_count = 0;
         }
-    } else if *ever_feasible {
-        *theta_stall_count = 0;
+    } else if feas.ever_feasible {
+        feas.stall_count = 0;
     }
     None
 }
@@ -6798,13 +6813,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     // Watchdog mechanism state
     let mut watchdog = Watchdog::new();
 
-    // Constraint violation history for infeasibility detection
-    let theta_history_len: usize = 100;
-    let mut theta_history: Vec<f64> = Vec::with_capacity(theta_history_len);
-
-    // Track whether the problem was ever feasible (theta < constr_viol_tol)
-    // to prevent false infeasibility declarations on feasible problems.
-    let mut ever_feasible = false;
+    // Constraint violation history + ever_feasible / stall_count flags
+    // driving infeasibility detection.
+    let mut feas = FeasibilityTracker::new(100);
 
     // Tiny step counter (Ipopt: accept full step when relative step < 10*eps for 2 consecutive)
     let mut consecutive_tiny_steps: usize = 0;
@@ -6825,10 +6836,6 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 
     // Consecutive iterations with obj < -1e20 for robust unbounded detection
     let mut consecutive_unbounded: usize = 0;
-
-    // Consecutive iterations where theta (primal infeasibility) stagnated.
-    // Used by proactive infeasibility detection to exit early.
-    let mut theta_stall_count: usize = 0;
 
     // Best feasible point tracking: save the best (lowest obj) point that is feasible
     let mut best_feasible = BestFeasibleIterate::new();
@@ -7005,10 +7012,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             options,
             iteration,
             primal_inf,
-            &mut theta_history,
-            theta_history_len,
-            &mut theta_stall_count,
-            &mut ever_feasible,
+            &mut feas,
         ) {
             return result;
         }
@@ -7270,11 +7274,9 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
                 start_time,
                 deadline,
                 early_timeout,
-                ever_feasible,
+                &feas,
                 theta_current,
                 phi_current,
-                &theta_history,
-                theta_history_len,
             ) {
                 RestorationCascadeDecision::Continue => continue,
                 RestorationCascadeDecision::Return(result) => return result,
@@ -7343,8 +7345,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     }
 
     finalize_after_max_iter(
-        &state, options, ever_feasible, &theta_history, theta_history_len,
-        &timings, ipm_start,
+        &state, options, &feas, &timings, ipm_start,
     )
 }
 
@@ -7368,8 +7369,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 fn try_classify_max_iter_infeasibility(
     state: &SolverState,
     final_theta: f64,
-    theta_history: &[f64],
-    theta_history_len: usize,
+    feas: &FeasibilityTracker,
 ) -> Option<SolveResult> {
     let grad_theta_norm = compute_grad_theta_norm(state);
     let stationarity_tol = 1e-4 * final_theta.max(1.0);
@@ -7377,8 +7377,8 @@ fn try_classify_max_iter_infeasibility(
         return Some(make_result(state, SolveStatus::LocalInfeasibility));
     }
 
-    if final_theta > 1e4 && theta_history.len() >= theta_history_len {
-        let min_theta = slice_min(theta_history);
+    if final_theta > 1e4 && feas.history.len() >= feas.history_len {
+        let min_theta = slice_min(&feas.history);
         if final_theta > 0.01 * min_theta {
             return Some(make_result(state, SolveStatus::Infeasible));
         }
@@ -7415,9 +7415,7 @@ fn print_max_iter_diagnostics(
 fn finalize_after_max_iter(
     state: &SolverState,
     options: &SolverOptions,
-    ever_feasible: bool,
-    theta_history: &[f64],
-    theta_history_len: usize,
+    feas: &FeasibilityTracker,
     timings: &PhaseTimings,
     ipm_start: Instant,
 ) -> SolveResult {
@@ -7425,9 +7423,9 @@ fn finalize_after_max_iter(
 
     // Infeasibility detection (only when never feasible).
     let final_theta = state.constraint_violation();
-    if !ever_feasible && final_theta > options.constr_viol_tol {
+    if !feas.ever_feasible && final_theta > options.constr_viol_tol {
         if let Some(result) = try_classify_max_iter_infeasibility(
-            state, final_theta, theta_history, theta_history_len,
+            state, final_theta, feas,
         ) {
             return result;
         }
