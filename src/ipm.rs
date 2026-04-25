@@ -4213,6 +4213,41 @@ fn run_post_ls_restoration_cascade<P: NlpProblem>(
     RestorationCascadeDecision::Continue
 }
 
+/// Recover from a post-step evaluation failure by halving α (and
+/// α_dual) up to 5 times, retracting `state.x` toward `x_pre_step`
+/// each time, and re-evaluating the problem. Returns `true` on the
+/// first α at which evaluation succeeds (with `state.alpha_primal`,
+/// `state.alpha_dual`, and the L-BFGS Hessian refreshed); `false`
+/// when all 5 halvings fail. Mirrors Ipopt's
+/// `IpBacktrackingLineSearch.cpp:776-784` post-step Eval_Error
+/// backtrack.
+fn try_alpha_halving_post_step_recovery<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    lbfgs_state: &mut Option<LbfgsIpmState>,
+    x_pre_step: &[f64],
+    linear_constraints: Option<&[bool]>,
+    lbfgs_mode: bool,
+    n: usize,
+) -> bool {
+    let mut retry_alpha = state.alpha_primal;
+    let mut retry_alpha_dual = state.alpha_dual;
+    for _ in 0..5 {
+        retry_alpha *= 0.5;
+        retry_alpha_dual *= 0.5;
+        for i in 0..n {
+            state.x[i] = x_pre_step[i] + retry_alpha * state.dx[i];
+        }
+        if state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode) {
+            state.alpha_primal = retry_alpha;
+            state.alpha_dual = retry_alpha_dual;
+            update_lbfgs_hessian(lbfgs_state, state);
+            return true;
+        }
+    }
+    false
+}
+
 /// Outcome of the post-step re-evaluation with α-halving recovery.
 enum PostStepEvalDecision {
     Proceed,
@@ -4258,21 +4293,11 @@ fn reevaluate_after_step<P: NlpProblem>(
         return PostStepEvalDecision::Proceed;
     }
 
-    // Post-step evaluation failure: α-halving.
-    let mut retry_alpha = state.alpha_primal;
-    let mut retry_alpha_dual = state.alpha_dual;
-    for _ in 0..5 {
-        retry_alpha *= 0.5;
-        retry_alpha_dual *= 0.5;
-        for i in 0..n {
-            state.x[i] = x_pre_step[i] + retry_alpha * state.dx[i];
-        }
-        if state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode) {
-            state.alpha_primal = retry_alpha;
-            state.alpha_dual = retry_alpha_dual;
-            update_lbfgs_hessian(lbfgs_state, state);
-            return PostStepEvalDecision::Continue;
-        }
+    if try_alpha_halving_post_step_recovery(
+        state, problem, lbfgs_state, x_pre_step,
+        linear_constraints, lbfgs_mode, n,
+    ) {
+        return PostStepEvalDecision::Continue;
     }
 
     // α halving exhausted: try restoration.
