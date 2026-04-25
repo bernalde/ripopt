@@ -7720,7 +7720,7 @@ fn run_soc_loop<P: NlpProblem, F: FnMut(&[f64]) -> Option<Vec<f64>>>(
 
     let (mut c_soc, mut latest_trial_c) = init_soc_constraint_residuals(state, g_trial);
     let mut alpha_primal_soc = alpha;
-    let mut theta_prev_soc = convergence::primal_infeasibility(g_trial, &state.g_l, &state.g_u);
+    let mut theta_prev_soc = theta_for_g(state, g_trial);
 
     for _soc_iter in 0..options.max_soc {
         for i in 0..m {
