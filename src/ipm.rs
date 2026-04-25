@@ -4807,6 +4807,99 @@ struct ConvergenceWorkspace<'a> {
 /// Extracted from `solve_ipm` as part of the v0.8 main-loop decomposition
 /// (pre-work step 2).
 #[allow(clippy::too_many_arguments)]
+/// Strategy 1 (Acceptable promotion): if the dual-infeasibility history has
+/// `AVG_WINDOW` entries and shows oscillation (>= AVG_WINDOW/2 sign changes
+/// in consecutive differences), average the last `AVG_WINDOW` iterates and
+/// re-check convergence at the averaged point. On success returns
+/// `Some(Optimal)`; otherwise restores the original state and returns None.
+/// One-shot (guarded by `ws.tried_iterate_averaging`).
+#[allow(clippy::too_many_arguments)]
+fn try_iterate_averaging_promotion<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    options: &SolverOptions,
+    ws: &mut ConvergenceWorkspace,
+    avg_window: usize,
+    n: usize,
+    m: usize,
+    linear_constraints: Option<&[bool]>,
+    lbfgs_mode: bool,
+) -> Option<SolveResult> {
+    if *ws.tried_iterate_averaging || ws.du_history.len() != avg_window {
+        return None;
+    }
+    let mut sign_changes = 0;
+    for w in 1..ws.du_history.len() - 1 {
+        let d1 = ws.du_history[w] - ws.du_history[w - 1];
+        let d2 = ws.du_history[w + 1] - ws.du_history[w];
+        if d1 * d2 < 0.0 {
+            sign_changes += 1;
+        }
+    }
+    if sign_changes < avg_window / 2 {
+        return None;
+    }
+    *ws.tried_iterate_averaging = true;
+    let len = ws.iterate_history.len() as f64;
+    let mut avg_x = vec![0.0; n];
+    let mut avg_y = vec![0.0; m];
+    let mut avg_zl = vec![0.0; n];
+    let mut avg_zu = vec![0.0; n];
+    for (hx, hy, hzl, hzu) in ws.iterate_history.iter() {
+        for i in 0..n { avg_x[i] += hx[i] / len; }
+        for i in 0..m { avg_y[i] += hy[i] / len; }
+        for i in 0..n { avg_zl[i] += hzl[i] / len; }
+        for i in 0..n { avg_zu[i] += hzu[i] / len; }
+    }
+    for i in 0..n {
+        avg_x[i] = avg_x[i].clamp(
+            if state.x_l[i].is_finite() { state.x_l[i] + 1e-15 } else { f64::NEG_INFINITY },
+            if state.x_u[i].is_finite() { state.x_u[i] - 1e-15 } else { f64::INFINITY },
+        );
+        avg_zl[i] = avg_zl[i].max(0.0);
+        avg_zu[i] = avg_zu[i].max(0.0);
+    }
+    let saved_x = state.x.clone();
+    let saved_y = state.y.clone();
+    let saved_zl = state.z_l.clone();
+    let saved_zu = state.z_u.clone();
+    state.x.copy_from_slice(&avg_x);
+    state.y.copy_from_slice(&avg_y);
+    state.z_l.copy_from_slice(&avg_zl);
+    state.z_u.copy_from_slice(&avg_zu);
+    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+    let avg_pr = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
+    let avg_du = convergence::dual_infeasibility(
+        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+        &avg_y, &avg_zl, &avg_zu, n,
+    );
+    let avg_compl = convergence::complementarity_error(
+        &avg_x, &state.x_l, &state.x_u, &avg_zl, &avg_zu, 0.0,
+    );
+    let avg_conv = ConvergenceInfo {
+        primal_inf: avg_pr, dual_inf: avg_du,
+        dual_inf_unscaled: avg_du,
+        compl_inf: avg_compl,
+        mu: state.mu, objective: state.obj,
+        multiplier_sum: avg_y.iter().map(|v| v.abs()).sum::<f64>()
+            + avg_zl.iter().map(|v| v.abs()).sum::<f64>()
+            + avg_zu.iter().map(|v| v.abs()).sum::<f64>(),
+        multiplier_count: m + 2 * n,
+    };
+    if let ConvergenceStatus::Converged = check_convergence(&avg_conv, options, 0) {
+        if options.print_level >= 3 {
+            rip_log!("ripopt: Iterate averaging promoted near-tolerance -> Optimal (du={:.2e})", avg_du);
+        }
+        return Some(make_result(state, SolveStatus::Optimal));
+    }
+    state.x.copy_from_slice(&saved_x);
+    state.y.copy_from_slice(&saved_y);
+    state.z_l.copy_from_slice(&saved_zl);
+    state.z_u.copy_from_slice(&saved_zu);
+    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+    None
+}
+
 fn check_convergence_and_handle_promotions<P: NlpProblem>(
     state: &mut SolverState,
     problem: &P,
@@ -4858,80 +4951,11 @@ fn check_convergence_and_handle_promotions<P: NlpProblem>(
         }
         ConvergenceStatus::Acceptable => {
             // Strategy 1: Try iterate averaging before declaring Acceptable
-            if !*ws.tried_iterate_averaging && ws.du_history.len() == AVG_WINDOW {
-                // Check for oscillation: count sign changes in du differences
-                let mut sign_changes = 0;
-                for w in 1..ws.du_history.len() - 1 {
-                    let d1 = ws.du_history[w] - ws.du_history[w - 1];
-                    let d2 = ws.du_history[w + 1] - ws.du_history[w];
-                    if d1 * d2 < 0.0 {
-                        sign_changes += 1;
-                    }
-                }
-                if sign_changes >= AVG_WINDOW / 2 {
-                    *ws.tried_iterate_averaging = true;
-                    // Average the iterates
-                    let len = ws.iterate_history.len() as f64;
-                    let mut avg_x = vec![0.0; n];
-                    let mut avg_y = vec![0.0; m];
-                    let mut avg_zl = vec![0.0; n];
-                    let mut avg_zu = vec![0.0; n];
-                    for (hx, hy, hzl, hzu) in ws.iterate_history.iter() {
-                        for i in 0..n { avg_x[i] += hx[i] / len; }
-                        for i in 0..m { avg_y[i] += hy[i] / len; }
-                        for i in 0..n { avg_zl[i] += hzl[i] / len; }
-                        for i in 0..n { avg_zu[i] += hzu[i] / len; }
-                    }
-                    // Clamp averaged point to bounds and ensure z >= 0
-                    for i in 0..n {
-                        avg_x[i] = avg_x[i].clamp(
-                            if state.x_l[i].is_finite() { state.x_l[i] + 1e-15 } else { f64::NEG_INFINITY },
-                            if state.x_u[i].is_finite() { state.x_u[i] - 1e-15 } else { f64::INFINITY },
-                        );
-                        avg_zl[i] = avg_zl[i].max(0.0);
-                        avg_zu[i] = avg_zu[i].max(0.0);
-                    }
-                    // Evaluate convergence at averaged point
-                    let saved_x = state.x.clone();
-                    let saved_y = state.y.clone();
-                    let saved_zl = state.z_l.clone();
-                    let saved_zu = state.z_u.clone();
-                    state.x.copy_from_slice(&avg_x);
-                    state.y.copy_from_slice(&avg_y);
-                    state.z_l.copy_from_slice(&avg_zl);
-                    state.z_u.copy_from_slice(&avg_zu);
-                    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-                    let avg_pr = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
-                    let avg_du = convergence::dual_infeasibility(
-                        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-                        &avg_y, &avg_zl, &avg_zu, n,
-                    );
-                    let avg_compl = convergence::complementarity_error(
-                        &avg_x, &state.x_l, &state.x_u, &avg_zl, &avg_zu, 0.0,
-                    );
-                    let avg_conv = ConvergenceInfo {
-                        primal_inf: avg_pr, dual_inf: avg_du,
-                        dual_inf_unscaled: avg_du,
-                        compl_inf: avg_compl,
-                        mu: state.mu, objective: state.obj,
-                        multiplier_sum: avg_y.iter().map(|v| v.abs()).sum::<f64>()
-                            + avg_zl.iter().map(|v| v.abs()).sum::<f64>()
-                            + avg_zu.iter().map(|v| v.abs()).sum::<f64>(),
-                        multiplier_count: m + 2 * n,
-                    };
-                    if let ConvergenceStatus::Converged = check_convergence(&avg_conv, options, 0) {
-                        if options.print_level >= 3 {
-                            rip_log!("ripopt: Iterate averaging promoted near-tolerance -> Optimal (du={:.2e})", avg_du);
-                        }
-                        return Some(make_result(state, SolveStatus::Optimal));
-                    }
-                    // Restore original state if averaging didn't help
-                    state.x.copy_from_slice(&saved_x);
-                    state.y.copy_from_slice(&saved_y);
-                    state.z_l.copy_from_slice(&saved_zl);
-                    state.z_u.copy_from_slice(&saved_zu);
-                    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-                }
+            if let Some(result) = try_iterate_averaging_promotion(
+                state, problem, options, ws, AVG_WINDOW, n, m,
+                linear_constraints, lbfgs_mode,
+            ) {
+                return Some(result);
             }
 
             // Strategy 3: Try active set identification + reduced solve
