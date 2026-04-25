@@ -8403,6 +8403,35 @@ fn attempt_nlp_restoration<P: NlpProblem>(
     (x_nlp, outcome)
 }
 
+/// Check whether the restored `(theta_new, phi_new)` is acceptable
+/// to the current filter. Mirrors the inline filter test but without
+/// triggering an `add` — used by `classify_restoration_outcome` to
+/// decide whether a 10–50% θ reduction qualifies as Success when
+/// the new point is also filter-acceptable. NaN inputs and
+/// `theta_new > theta_max` reject; otherwise rejects on any entry
+/// where both `(1-γ_θ)·θ_e ≤ θ_new` and `φ_e − γ_φ·θ_e ≤ φ_new`.
+fn filter_accepts_restored_iterate(
+    filter: &Filter,
+    theta_new: f64,
+    phi_new: f64,
+) -> bool {
+    let theta_max = filter.theta_max();
+    let gamma_theta = filter.gamma_theta();
+    let gamma_phi = filter.gamma_phi();
+
+    if theta_new.is_nan() || phi_new.is_nan() || theta_new > theta_max {
+        return false;
+    }
+    for entry in filter.entries() {
+        if theta_new >= (1.0 - gamma_theta) * entry.theta
+            && phi_new >= entry.phi - gamma_phi * entry.theta
+        {
+            return false;
+        }
+    }
+    true
+}
+
 /// Classify the outcome of a completed restoration solve. Decision tree:
 /// 1. theta_new < constr_viol_tol → Success (achieved feasibility).
 /// 2. theta_new ≤ 0.5*theta_current → Success (50% reduction, stricter than
@@ -8427,31 +8456,10 @@ fn classify_restoration_outcome(
     if theta_new <= 0.5 * theta_current {
         return RestorationOutcome::Success;
     }
-    if theta_new < 0.9 * theta_current {
-        let filter_acceptable = {
-            let entries = filter.entries();
-            let theta_max = filter.theta_max();
-            let gamma_theta = filter.gamma_theta();
-            let gamma_phi = filter.gamma_phi();
-
-            if theta_new.is_nan() || phi_new.is_nan() || theta_new > theta_max {
-                false
-            } else {
-                let mut ok = true;
-                for entry in entries {
-                    if theta_new >= (1.0 - gamma_theta) * entry.theta
-                        && phi_new >= entry.phi - gamma_phi * entry.theta
-                    {
-                        ok = false;
-                        break;
-                    }
-                }
-                ok
-            }
-        };
-        if filter_acceptable {
-            return RestorationOutcome::Success;
-        }
+    if theta_new < 0.9 * theta_current
+        && filter_accepts_restored_iterate(filter, theta_new, phi_new)
+    {
+        return RestorationOutcome::Success;
     }
     if inner_converged {
         return RestorationOutcome::LocalInfeasibility;
