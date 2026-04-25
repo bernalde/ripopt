@@ -2441,9 +2441,7 @@ fn compute_barrier_phi(
     }
     if constraint_slack_barrier {
         for i in 0..m {
-            let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
-                && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
-            if is_eq {
+            if constraint_is_equality(state, i) {
                 continue;
             }
             if state.g_l[i].is_finite() {
@@ -6780,9 +6778,7 @@ fn detect_linear_constraint_flags<P: NlpProblem>(
 /// skipped. Mirrors Ipopt's `IpDefaultIterateInitializer.cpp`.
 fn initialize_constraint_slack_multipliers(state: &mut SolverState, m: usize, options: &SolverOptions) {
     for i in 0..m {
-        let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
-            && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
-        if is_eq {
+        if constraint_is_equality(state, i) {
             continue;
         }
         if state.g_l[i].is_finite() {
@@ -7776,9 +7772,7 @@ fn init_soc_constraint_residuals(
     let mut c_soc = vec![0.0; m];
     let mut latest_trial_c = vec![0.0; m];
     for i in 0..m {
-        let is_equality = state.g_l[i].is_finite() && state.g_u[i].is_finite()
-            && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
-        if is_equality || state.g_l[i].is_finite() {
+        if constraint_is_equality(state, i) || state.g_l[i].is_finite() {
             c_soc[i] = state.g[i] - state.g_l[i];
             latest_trial_c[i] = g_trial[i] - state.g_l[i];
         } else if state.g_u[i].is_finite() {
@@ -7902,9 +7896,7 @@ fn update_soc_latest_trial_c(
     latest_trial_c: &mut [f64],
 ) {
     for i in 0..state.m {
-        let is_equality = state.g_l[i].is_finite() && state.g_u[i].is_finite()
-            && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
-        if is_equality || state.g_l[i].is_finite() {
+        if constraint_is_equality(state, i) || state.g_l[i].is_finite() {
             latest_trial_c[i] = g_soc[i] - state.g_l[i];
         } else if state.g_u[i].is_finite() {
             latest_trial_c[i] = g_soc[i] - state.g_u[i];
@@ -8161,9 +8153,7 @@ fn reset_constraint_slack_multipliers_after_restoration(
 ) {
     let mu_r = state.mu;
     for i in 0..m {
-        let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
-            && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
-        if is_eq {
+        if constraint_is_equality(state, i) {
             state.v_l[i] = 0.0;
             state.v_u[i] = 0.0;
             continue;
@@ -8828,9 +8818,7 @@ fn compute_grad_theta_norm(state: &SolverState) -> f64 {
     let m = state.m;
     let mut violation = vec![0.0; m];
     for i in 0..m {
-        let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
-            && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
-        if is_eq {
+        if constraint_is_equality(state, i) {
             violation[i] = state.g[i] - state.g_l[i];
         } else if state.g_l[i].is_finite() && state.g[i] < state.g_l[i] {
             violation[i] = state.g[i] - state.g_l[i];
@@ -8872,6 +8860,17 @@ fn compute_compl_err_at_state(state: &SolverState) -> f64 {
 /// on the objective + gradient pair (`IpIpoptCalculatedQuantities`).
 fn obj_and_grad_finite(state: &SolverState) -> bool {
     state.obj.is_finite() && state.grad_f.iter().all(|v| v.is_finite())
+}
+
+/// True iff constraint `i` is an equality (g_l[i] = g_u[i] within
+/// 1e-15). Used everywhere ripopt needs to distinguish equality rows
+/// (which have a single c-residual `g[i] - g_l[i]` and zero slack
+/// multipliers) from inequality rows (which have separate lower/upper
+/// slacks). The 1e-15 tolerance matches Ipopt's `equality_tolerance`
+/// for `c(x) = 0` vs. `c_L ≤ c(x) ≤ c_U` row classification.
+fn constraint_is_equality(state: &SolverState, i: usize) -> bool {
+    state.g_l[i].is_finite() && state.g_u[i].is_finite()
+        && (state.g_l[i] - state.g_u[i]).abs() < 1e-15
 }
 
 /// Re-seed the bound multipliers `z_l`, `z_u` from the current
