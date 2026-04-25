@@ -4938,6 +4938,41 @@ fn switch_to_fixed_mode_with_adaptive_init(
     reset_filter_with_current_theta(state, filter);
 }
 
+/// Sufficient-progress branch of the Free-mode μ update: reset the
+/// insufficient-progress counter, remember the accepted KKT error,
+/// and select a new μ. Picks the Loqo oracle when
+/// `mu_oracle_quality_function` is on, falls back to a rate-limited
+/// `avg_compl/kappa` (with a `μ/5` floor when the barrier subproblem
+/// is not approximately solved), or to `mu_linear_decrease_factor·μ`
+/// when no active complementarity products exist. Resets the filter
+/// at the new μ per Ipopt's `IpFilterLSAcceptor.cpp:524-532`.
+fn apply_free_mode_sufficient_progress_update(
+    state: &mut SolverState,
+    mu_state: &mut MuState,
+    filter: &mut Filter,
+    options: &SolverOptions,
+    kkt_error: f64,
+) {
+    mu_state.consecutive_insufficient = 0;
+    mu_state.remember_accepted(kkt_error);
+    let avg_compl = compute_avg_complementarity(state);
+    if options.mu_oracle_quality_function && avg_compl > 0.0 {
+        state.mu = compute_loqo_mu(state, options, avg_compl);
+    } else if avg_compl > 0.0 {
+        let barrier_err = compute_barrier_error(state);
+        let mu_floor = if barrier_err <= options.barrier_tol_factor * state.mu {
+            options.mu_min
+        } else {
+            (state.mu / 5.0).max(options.mu_min)
+        };
+        state.mu = (avg_compl / options.kappa).clamp(mu_floor, 1e5);
+    } else {
+        state.mu = (options.mu_linear_decrease_factor * state.mu)
+            .max(options.mu_min);
+    }
+    reset_filter_with_current_theta(state, filter);
+}
+
 /// Free-mode (adaptive) barrier-parameter update. Three branches:
 /// 1) Sufficient progress + barrier subproblem solved: pick a new mu via
 ///    the Loqo oracle (when quality_function is on) or rate-limited Loqo
@@ -4962,31 +4997,9 @@ fn update_barrier_parameter_free_mode(
     // Consume Mehrotra sigma for use as quality function candidate
     let _sigma_mu = last_mehrotra_sigma.take();
     if sufficient && !mu_state.tiny_step && barrier_subproblem_solved {
-        mu_state.consecutive_insufficient = 0;
-        mu_state.remember_accepted(kkt_error);
-        let avg_compl = compute_avg_complementarity(state);
-        if options.mu_oracle_quality_function && avg_compl > 0.0 {
-            state.mu = compute_loqo_mu(state, options, avg_compl);
-        } else if avg_compl > 0.0 {
-            // Loqo fallback with rate limit (at most 5x decrease if subproblem not solved)
-            let barrier_err = compute_barrier_error(state);
-            let mu_floor = if barrier_err <= options.barrier_tol_factor * state.mu {
-                options.mu_min
-            } else {
-                (state.mu / 5.0).max(options.mu_min)
-            };
-            state.mu = (avg_compl / options.kappa).clamp(mu_floor, 1e5);
-        } else {
-            // No complementarity products (all bounds inactive) → decrease mu
-            state.mu = (options.mu_linear_decrease_factor * state.mu)
-                .max(options.mu_min);
-        }
-        // Reset filter on mu change (Ipopt convention,
-        // IpFilterLSAcceptor.cpp:524-532). Now that the barrier-
-        // stop gate above ensures mu only changes when the
-        // subproblem is approximately solved, this happens at
-        // the same low frequency as in Ipopt — not every iter.
-        reset_filter_with_current_theta(state, filter);
+        apply_free_mode_sufficient_progress_update(
+            state, mu_state, filter, options, kkt_error,
+        );
     } else {
         let du_stagnant = compute_du_stagnant_in_free_mode(mu_state, options);
         mu_state.consecutive_insufficient += 1;
