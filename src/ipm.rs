@@ -3996,7 +3996,6 @@ fn adjust_sparse_condensed_bandwidth<P: NlpProblem>(
 /// handling owns resets.
 fn track_post_step_acceptable(state: &mut SolverState, options: &SolverOptions) {
     let n = state.n;
-    let m = state.m;
     let post_primal = state.constraint_violation();
     let (post_zl_opt, post_zu_opt) = {
         let mut gj = state.grad_f.clone();
@@ -4038,7 +4037,7 @@ fn track_post_step_acceptable(state: &mut SolverState, options: &SolverOptions) 
         &state.x, &state.x_l, &state.x_u, &post_zl_opt, &post_zu_opt, 0.0,
     );
     let post_compl_best = post_compl.min(post_compl_opt);
-    let post_sd = compute_s_d_scaling(compute_multiplier_sum(state), m + 2 * n);
+    let post_sd = compute_s_d_at_state(state);
     let post_near_scaled = post_primal <= 100.0 * options.tol
         && post_du <= 100.0 * options.tol * post_sd
         && post_compl_best <= 100.0 * options.tol * post_sd;
@@ -6313,13 +6312,11 @@ fn track_feasibility_and_detect_infeasibility(
 fn check_restored_point_near_tolerance(
     state: &SolverState,
     options: &SolverOptions,
-    n: usize,
-    m: usize,
 ) -> Option<SolveResult> {
     let rest_pr = state.constraint_violation();
     let rest_du = compute_dual_inf_at_state(state);
     let rest_co = compute_compl_err_at_state(state);
-    let s_d = compute_s_d_scaling(compute_multiplier_sum(state), m + 2 * n);
+    let s_d = compute_s_d_at_state(state);
     let near_tol = 100.0 * options.tol;
     let du_tol = (near_tol * s_d).max(1e-2);
     let co_tol = (near_tol * s_d).max(1e-2);
@@ -6381,8 +6378,6 @@ fn handle_dual_stagnation<P: NlpProblem>(
     if iteration == 0 {
         return None;
     }
-    let n = state.n;
-    let m = state.m;
 
     let current_du = compute_dual_inf_at_state(state);
     if current_du < 0.5 * *last_good_du {
@@ -6422,7 +6417,7 @@ fn handle_dual_stagnation<P: NlpProblem>(
     mu_state.consecutive_restoration_failures = 0;
     inertia_params.delta_w_last = 0.0;
 
-    if let Some(result) = check_restored_point_near_tolerance(state, options, n, m) {
+    if let Some(result) = check_restored_point_near_tolerance(state, options) {
         return Some(result);
     }
 
@@ -7631,7 +7626,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     }
 
     finalize_after_max_iter(
-        &state, options, n, m, ever_feasible, &theta_history, theta_history_len,
+        &state, options, n, ever_feasible, &theta_history, theta_history_len,
         &timings, ipm_start,
     )
 }
@@ -7682,7 +7677,6 @@ fn print_max_iter_diagnostics(
     state: &SolverState,
     options: &SolverOptions,
     n: usize,
-    m: usize,
 ) {
     if options.print_level < 5 {
         return;
@@ -7694,7 +7688,7 @@ fn print_max_iter_diagnostics(
         &state.y, &state.z_l, &state.z_u, n,
     );
     let final_compl = compute_compl_err_at_state(state);
-    let s_d = compute_s_d_scaling(compute_multiplier_sum(state), m + 2 * n);
+    let s_d = compute_s_d_at_state(state);
     rip_log!(
         "ripopt: MaxIter diag: pr={:.2e} du={:.2e}(t={:.2e}) du_u={:.2e}(t={:.0e}) co={:.2e}(t={:.2e}) mu={:.2e} sd={:.1} ac={}",
         final_primal_inf,
@@ -7709,14 +7703,13 @@ fn finalize_after_max_iter(
     state: &SolverState,
     options: &SolverOptions,
     n: usize,
-    m: usize,
     ever_feasible: bool,
     theta_history: &[f64],
     theta_history_len: usize,
     timings: &PhaseTimings,
     ipm_start: Instant,
 ) -> SolveResult {
-    print_max_iter_diagnostics(state, options, n, m);
+    print_max_iter_diagnostics(state, options, n);
 
     // Infeasibility detection (only when never feasible).
     let final_theta = state.constraint_violation();
@@ -8803,6 +8796,15 @@ fn compute_s_d_scaling(multiplier_sum: f64, multiplier_count: usize) -> f64 {
     }
 }
 
+/// `compute_s_d_scaling` evaluated at the current iterate, with the
+/// multiplier sum drawn from `state` and the multiplier count fixed at
+/// `m + 2*n` (one λ per equality, two z per variable). Used everywhere
+/// ripopt needs the unscaled-tolerance dual scaling without manually
+/// passing through the full (multiplier_sum, multiplier_count) pair.
+fn compute_s_d_at_state(state: &SolverState) -> f64 {
+    compute_s_d_scaling(compute_multiplier_sum(state), state.m + 2 * state.n)
+}
+
 /// L-infinity norm of `J^T * c_violation`, where `c_violation` is the
 /// signed constraint residual (g - g_l for equalities or below-lower
 /// violations, g - g_u for above-upper violations, 0 otherwise). Used
@@ -9412,14 +9414,12 @@ fn gradient_descent_fallback(state: &SolverState) -> Option<(Vec<f64>, Vec<f64>)
 /// factor `s_d` from the multiplier sum. Same formulas as
 /// `check_convergence`.
 fn populate_final_diagnostics(state: &SolverState) -> SolverDiagnostics {
-    let n = state.n;
-    let m = state.m;
     let mut diag = state.diagnostics.clone();
     diag.final_mu = state.mu;
     diag.final_primal_inf = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
     diag.final_dual_inf = compute_dual_inf_at_state(state);
     diag.final_compl = compute_compl_err_at_state(state);
-    diag.final_s_d = compute_s_d_scaling(compute_multiplier_sum(state), m + 2 * n);
+    diag.final_s_d = compute_s_d_at_state(state);
     diag
 }
 
