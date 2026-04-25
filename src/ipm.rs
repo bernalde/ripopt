@@ -5337,24 +5337,12 @@ fn try_complementarity_polish_promotion(
             state.z_u[i] = 0.0;
         }
     }
-    let snap_du = compute_dual_inf_at_state(state);
-    let snap_compl = compute_compl_err_at_state(state);
-    let snap_mult_sum = compute_multiplier_sum(state);
-    let snap_conv = ConvergenceInfo {
-        primal_inf: conv_info.primal_inf,
-        dual_inf: snap_du,
-        dual_inf_unscaled: snap_du,
-        compl_inf: snap_compl,
-        mu: state.mu,
-        objective: state.obj,
-        multiplier_sum: snap_mult_sum,
-        multiplier_count: m + 2 * n,
-    };
+    let snap_conv = compute_convergence_info_from_state(state, state.mu, n, m);
     if let ConvergenceStatus::Converged = check_convergence(&snap_conv, options, 0) {
         if options.print_level >= 3 {
             rip_log!(
                 "ripopt: Complementarity snap promoted near-tolerance -> Optimal (compl {:.2e} -> {:.2e}, du {:.2e})",
-                compl_inf_now, snap_compl, snap_du
+                compl_inf_now, snap_conv.compl_inf, snap_conv.dual_inf
             );
         }
         return Some(make_result(state, SolveStatus::Optimal));
