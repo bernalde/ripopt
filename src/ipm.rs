@@ -5812,6 +5812,38 @@ fn check_stall_near_tolerance_via_optimal_duals(
     None
 }
 
+/// In Fixed (monotone) μ mode, when stall recovery hasn't already kicked
+/// in via a μ boost and μ is still above mu_min, force a μ decrease at
+/// the min(linear, superlinear) rate. Resets stall counters and the
+/// filter. Returns true when the decrease was applied (caller should
+/// `continue` the loop), false when the gate didn't fire.
+#[allow(clippy::too_many_arguments)]
+fn try_force_mu_decrease_in_fixed_mode(
+    state: &mut SolverState,
+    options: &SolverOptions,
+    primal_inf: f64,
+    dual_inf: f64,
+    compl_inf: f64,
+    filter: &mut Filter,
+    stall: &mut ProgressStallTracker,
+) -> bool {
+    if !(!options.mu_strategy_adaptive && state.mu > options.mu_min) {
+        return false;
+    }
+    let new_mu = (options.mu_linear_decrease_factor * state.mu)
+        .min(state.mu.powf(options.mu_superlinear_decrease_power))
+        .max(options.mu_min);
+    if options.print_level >= 3 {
+        rip_log!(
+            "ripopt: Fixed mode stall near tolerance (pr={:.2e}, du={:.2e}, co={:.2e}), forcing mu {:.2e} -> {:.2e}",
+            primal_inf, dual_inf, compl_inf, state.mu, new_mu
+        );
+    }
+    state.mu = new_mu;
+    reset_stall_counters_and_filter(state, filter, stall);
+    true
+}
+
 /// Handle a stall whose current iterate is near-tolerance (1000x tol on
 /// each metric). Three sub-decisions in priority order:
 /// 1. mu has outrun feasibility (mu < 0.01*pr_max while pr_max above
@@ -5848,18 +5880,9 @@ fn handle_near_tolerance_stall(
         );
         return StallDecision::Continue;
     }
-    if !options.mu_strategy_adaptive && state.mu > options.mu_min {
-        let new_mu = (options.mu_linear_decrease_factor * state.mu)
-            .min(state.mu.powf(options.mu_superlinear_decrease_power))
-            .max(options.mu_min);
-        if options.print_level >= 3 {
-            rip_log!(
-                "ripopt: Fixed mode stall near tolerance (pr={:.2e}, du={:.2e}, co={:.2e}), forcing mu {:.2e} -> {:.2e}",
-                primal_inf, dual_inf, compl_inf, state.mu, new_mu
-            );
-        }
-        state.mu = new_mu;
-        reset_stall_counters_and_filter(state, filter, stall);
+    if try_force_mu_decrease_in_fixed_mode(
+        state, options, primal_inf, dual_inf, compl_inf, filter, stall,
+    ) {
         return StallDecision::Continue;
     }
     let acc_pr_ok = primal_inf_max <= 1e-2;
