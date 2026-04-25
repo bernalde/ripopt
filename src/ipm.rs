@@ -7651,6 +7651,40 @@ fn recompute_y_after_restoration(
     }
 }
 
+/// Reset constraint-slack barrier multipliers v_L, v_U after restoration,
+/// mirroring the nuclear-reset semantics of bound multipliers. Equality
+/// constraints get v=0 (no slack barrier). For inequality constraints, if
+/// the bound-multiplier reset triggered the all-to-1.0 path, also reset v
+/// to 1.0; else use v = mu/slack uncapped.
+fn reset_constraint_slack_multipliers_after_restoration(
+    state: &mut SolverState,
+    m: usize,
+    nuclear_reset: bool,
+) {
+    let mu_r = state.mu;
+    for i in 0..m {
+        let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
+            && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
+        if is_eq {
+            state.v_l[i] = 0.0;
+            state.v_u[i] = 0.0;
+            continue;
+        }
+        if state.g_l[i].is_finite() {
+            let slack = (state.g[i] - state.g_l[i]).max(1e-12);
+            state.v_l[i] = if nuclear_reset { 1.0 } else { mu_r / slack };
+        } else {
+            state.v_l[i] = 0.0;
+        }
+        if state.g_u[i].is_finite() {
+            let slack = (state.g_u[i] - state.g[i]).max(1e-12);
+            state.v_u[i] = if nuclear_reset { 1.0 } else { mu_r / slack };
+        } else {
+            state.v_u[i] = 0.0;
+        }
+    }
+}
+
 /// Apply post-restoration success handling: update state, reset multipliers, filter, and mu.
 fn apply_restoration_success<P: NlpProblem>(
     state: &mut SolverState,
@@ -7674,31 +7708,7 @@ fn apply_restoration_success<P: NlpProblem>(
     let nuclear_reset = reset_bound_multipliers_after_restoration(state, n);
     recompute_y_after_restoration(state, options, n, m);
 
-    // Reset constraint slack barrier multipliers v_l, v_u, mirroring the
-    // nuclear-reset semantics above. If bound multipliers triggered the
-    // all-to-1.0 path, also reset v to 1.0; else use v = mu/slack uncapped.
-    let mu_r = state.mu;
-    for i in 0..m {
-        let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
-            && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
-        if is_eq {
-            state.v_l[i] = 0.0;
-            state.v_u[i] = 0.0;
-            continue;
-        }
-        if state.g_l[i].is_finite() {
-            let slack = (state.g[i] - state.g_l[i]).max(1e-12);
-            state.v_l[i] = if nuclear_reset { 1.0 } else { mu_r / slack };
-        } else {
-            state.v_l[i] = 0.0;
-        }
-        if state.g_u[i].is_finite() {
-            let slack = (state.g_u[i] - state.g[i]).max(1e-12);
-            state.v_u[i] = if nuclear_reset { 1.0 } else { mu_r / slack };
-        } else {
-            state.v_u[i] = 0.0;
-        }
-    }
+    reset_constraint_slack_multipliers_after_restoration(state, m, nuclear_reset);
 
     // Reset filter and re-initialize from restored point
     filter.reset();
