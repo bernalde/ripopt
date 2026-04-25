@@ -4109,7 +4109,7 @@ fn classify_exhausted_restoration_attempt(
     if !ever_feasible && current_theta > 1e4 && iteration > 500
         && theta_history.len() >= theta_history_len
     {
-        let min_theta = theta_history.iter().cloned().fold(f64::INFINITY, f64::min);
+        let min_theta = slice_min(theta_history);
         if current_theta > 0.01 * min_theta {
             return make_result(state, SolveStatus::Infeasible);
         }
@@ -6012,7 +6012,7 @@ fn track_feasibility_and_detect_infeasibility(
         && primal_inf > options.constr_viol_tol
         && theta_history.len() >= theta_history_len
     {
-        let theta_min_h = theta_history.iter().cloned().fold(f64::INFINITY, f64::min);
+        let theta_min_h = slice_min(theta_history);
         let theta_max_h = theta_history.iter().cloned().fold(0.0f64, f64::max);
         if theta_max_h > 0.0 && (theta_max_h - theta_min_h) < 0.01 * primal_inf {
             *theta_stall_count += 1;
@@ -7402,7 +7402,7 @@ fn try_classify_max_iter_infeasibility(
     }
 
     if final_theta > 1e4 && theta_history.len() >= theta_history_len {
-        let min_theta = theta_history.iter().cloned().fold(f64::INFINITY, f64::min);
+        let min_theta = slice_min(theta_history);
         if final_theta > 0.01 * min_theta {
             return Some(make_result(state, SolveStatus::Infeasible));
         }
@@ -8874,6 +8874,16 @@ fn linf_norm(v: &[f64]) -> f64 {
 /// (norm_orig, norm_pc) in maybe_revert_mehrotra_deflection.
 fn l2_norm(v: &[f64]) -> f64 {
     v.iter().map(|x| x * x).sum::<f64>().sqrt()
+}
+
+/// Minimum of a slice. Centralises the three sites that spell out
+/// `v.iter().cloned().fold(f64::INFINITY, f64::min)` inline — the
+/// theta-history lookback in classify_exhausted_restoration_attempt,
+/// the theta-stall detector in the main loop, and the
+/// final-infeasibility check in finalize_after_max_iter. Returns
+/// `f64::INFINITY` for an empty slice.
+fn slice_min(v: &[f64]) -> f64 {
+    v.iter().cloned().fold(f64::INFINITY, f64::min)
 }
 
 /// `kkt::compute_sigma` at the current iterate's
