@@ -1674,6 +1674,80 @@ fn polish_ls_solution_with_newton<P: NlpProblem>(
     }
 }
 
+/// LS reformulation reported infeasibility on a square or non-converged
+/// system — fall back to the constrained IPM on the original problem,
+/// then optionally to the augmented-Lagrangian solver. Honors the
+/// outer wall-clock deadline by trimming `fallback_opts.max_wall_time`
+/// and short-circuiting to `MaxIterations` if no time is left. Always
+/// returns a final `SolveResult`; callers wrap it in `Some(...)`.
+fn run_ne_constrained_ipm_fallback<P: NlpProblem>(
+    problem: &P,
+    options: &SolverOptions,
+    solve_start: Instant,
+    ls_result: &SolveResult,
+    g_out: &[f64],
+    theta: f64,
+    m: usize,
+) -> SolveResult {
+    if options.print_level >= 5 {
+        rip_log!(
+            "ripopt: LS reformulation reports infeasibility (theta={:.4e}, ls_status={:?}), falling back to constrained IPM",
+            theta, ls_result.status
+        );
+    }
+    let mut fallback_opts = options.clone();
+    if options.max_wall_time > 0.0 {
+        let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
+        if remaining <= 0.1 {
+            return SolveResult {
+                x: ls_result.x.clone(),
+                objective: 0.0,
+                constraint_multipliers: vec![0.0; m],
+                bound_multipliers_lower: ls_result.bound_multipliers_lower.clone(),
+                bound_multipliers_upper: ls_result.bound_multipliers_upper.clone(),
+                constraint_values: g_out.to_vec(),
+                status: SolveStatus::MaxIterations,
+                iterations: ls_result.iterations,
+                diagnostics: SolverDiagnostics::default(),
+            };
+        }
+        fallback_opts.max_wall_time = remaining;
+    }
+    let ipm_result = solve_ipm(problem, &fallback_opts);
+    if matches!(ipm_result.status, SolveStatus::Optimal) {
+        return ipm_result;
+    }
+    // IPM fallback failed — try AL for square NE systems
+    if options.enable_al_fallback {
+        if options.print_level >= 5 {
+            rip_log!(
+                "ripopt: NE constrained IPM fallback failed ({:?}), trying AL",
+                ipm_result.status
+            );
+        }
+        let mut al_opts = options.clone();
+        al_opts.max_iter = options.max_iter.min(500).max(options.max_iter / 3);
+        if options.max_wall_time > 0.0 {
+            let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
+            if remaining <= 0.1 {
+                return ipm_result;
+            }
+            al_opts.max_wall_time = remaining;
+        }
+        let al_result = crate::augmented_lagrangian::solve(problem, &al_opts);
+        if matches!(al_result.status, SolveStatus::Optimal) {
+            if options.print_level >= 5 {
+                rip_log!(
+                    "ripopt: NE AL fallback succeeded ({:?}, obj={:.6e})",
+                    al_result.status, al_result.objective
+                );
+            }
+            return al_result;
+        }
+    }
+    ipm_result
+}
+
 /// Detect an overdetermined nonlinear equation problem (f ≡ 0, all equalities,
 /// m ≥ n) and, if detected, solve it by reformulating as the unconstrained
 /// least-squares problem `min 0.5·||g(x) − target||²` via
@@ -1758,63 +1832,9 @@ fn try_ne_to_ls_reformulation<P: NlpProblem>(
     // Fall back to constrained IPM when LS reports infeasibility.
     let ls_converged = matches!(ls_result.status, SolveStatus::Optimal);
     if status == SolveStatus::LocalInfeasibility && (m == n || !ls_converged) {
-        if options.print_level >= 5 {
-            rip_log!(
-                "ripopt: LS reformulation reports infeasibility (theta={:.4e}, ls_status={:?}), falling back to constrained IPM",
-                theta, ls_result.status
-            );
-        }
-        let mut fallback_opts = options.clone();
-        if options.max_wall_time > 0.0 {
-            let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
-            if remaining <= 0.1 {
-                return Some(SolveResult {
-                    x: ls_result.x,
-                    objective: 0.0,
-                    constraint_multipliers: vec![0.0; m],
-                    bound_multipliers_lower: ls_result.bound_multipliers_lower,
-                    bound_multipliers_upper: ls_result.bound_multipliers_upper,
-                    constraint_values: g_out,
-                    status: SolveStatus::MaxIterations,
-                    iterations: ls_result.iterations,
-                    diagnostics: SolverDiagnostics::default(),
-                });
-            }
-            fallback_opts.max_wall_time = remaining;
-        }
-        let ipm_result = solve_ipm(problem, &fallback_opts);
-        if matches!(ipm_result.status, SolveStatus::Optimal) {
-            return Some(ipm_result);
-        }
-        // IPM fallback failed — try AL for square NE systems
-        if options.enable_al_fallback {
-            if options.print_level >= 5 {
-                rip_log!(
-                    "ripopt: NE constrained IPM fallback failed ({:?}), trying AL",
-                    ipm_result.status
-                );
-            }
-            let mut al_opts = options.clone();
-            al_opts.max_iter = options.max_iter.min(500).max(options.max_iter / 3);
-            if options.max_wall_time > 0.0 {
-                let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
-                if remaining <= 0.1 {
-                    return Some(ipm_result);
-                }
-                al_opts.max_wall_time = remaining;
-            }
-            let al_result = crate::augmented_lagrangian::solve(problem, &al_opts);
-            if matches!(al_result.status, SolveStatus::Optimal) {
-                if options.print_level >= 5 {
-                    rip_log!(
-                        "ripopt: NE AL fallback succeeded ({:?}, obj={:.6e})",
-                        al_result.status, al_result.objective
-                    );
-                }
-                return Some(al_result);
-            }
-        }
-        return Some(ipm_result);
+        return Some(run_ne_constrained_ipm_fallback(
+            problem, options, solve_start, &ls_result, &g_out, theta, m,
+        ));
     }
 
     // L-BFGS retry on LS problem when IPM found a local min with nonzero residual
