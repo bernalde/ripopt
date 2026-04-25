@@ -6039,6 +6039,48 @@ fn track_feasibility_and_detect_infeasibility(
 /// decomposition. Returns `Some(SolveResult)` only when the restored
 /// point already meets the near-tolerance acceptable level.
 #[allow(clippy::too_many_arguments)]
+/// After reverting to the best-du iterate during dual-stagnation
+/// recovery, check whether the restored point already meets a relaxed
+/// near-tolerance bound (pr ≤ max(100·tol, 10·constr_viol_tol),
+/// du and co ≤ max(100·tol·s_d, 1e-2)). When it does, the solver can
+/// terminate cleanly with NumericalError rather than burning more
+/// iterations on a marginal improvement. Returns Some when the bound
+/// is met, None to continue the cascade.
+fn check_restored_point_near_tolerance(
+    state: &SolverState,
+    options: &SolverOptions,
+    n: usize,
+    m: usize,
+) -> Option<SolveResult> {
+    let rest_pr = state.constraint_violation();
+    let rest_du = convergence::dual_infeasibility(
+        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+        &state.y, &state.z_l, &state.z_u, n,
+    );
+    let rest_co = convergence::complementarity_error(
+        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
+    );
+    let s_max = 100.0_f64;
+    let mult_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
+        + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
+        + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
+    let s_d = if (m + 2 * n) > 0 {
+        (s_max.max(mult_sum / (m + 2 * n) as f64) / s_max).min(1e4)
+    } else { 1.0 };
+    let near_tol = 100.0 * options.tol;
+    let du_tol = (near_tol * s_d).max(1e-2);
+    let co_tol = (near_tol * s_d).max(1e-2);
+    let pr_tol = near_tol.max(10.0 * options.constr_viol_tol);
+    if rest_pr <= pr_tol && rest_du <= du_tol && rest_co <= co_tol {
+        log::debug!(
+            "Restored best-du point passes near-tolerance (pr={:.2e}, du={:.2e}, co={:.2e})",
+            rest_pr, rest_du, rest_co
+        );
+        return Some(make_result(state, SolveStatus::NumericalError));
+    }
+    None
+}
+
 fn handle_dual_stagnation<P: NlpProblem>(
     state: &mut SolverState,
     problem: &P,
@@ -6110,32 +6152,8 @@ fn handle_dual_stagnation<P: NlpProblem>(
     mu_state.consecutive_restoration_failures = 0;
     inertia_params.delta_w_last = 0.0;
 
-    // Check if the restored point meets acceptable convergence.
-    let rest_pr = state.constraint_violation();
-    let rest_du = convergence::dual_infeasibility(
-        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-        &state.y, &state.z_l, &state.z_u, n,
-    );
-    let rest_co = convergence::complementarity_error(
-        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
-    );
-    let s_max = 100.0_f64;
-    let mult_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
-        + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
-        + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
-    let s_d = if (m + 2 * n) > 0 {
-        (s_max.max(mult_sum / (m + 2 * n) as f64) / s_max).min(1e4)
-    } else { 1.0 };
-    let near_tol = 100.0 * options.tol;
-    let du_tol = (near_tol * s_d).max(1e-2);
-    let co_tol = (near_tol * s_d).max(1e-2);
-    let pr_tol = near_tol.max(10.0 * options.constr_viol_tol);
-    if rest_pr <= pr_tol && rest_du <= du_tol && rest_co <= co_tol {
-        log::debug!(
-            "Restored best-du point passes near-tolerance (pr={:.2e}, du={:.2e}, co={:.2e})",
-            rest_pr, rest_du, rest_co
-        );
-        return Some(make_result(state, SolveStatus::NumericalError));
+    if let Some(result) = check_restored_point_near_tolerance(state, options, n, m) {
+        return Some(result);
     }
 
     *triggered = true;
