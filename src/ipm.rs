@@ -5351,13 +5351,7 @@ fn try_complementarity_polish_promotion(
         return None;
     }
     let compl_inf_now = conv_info.compl_inf;
-    let s_d_now = {
-        let s_max: f64 = 100.0;
-        let s_d_max: f64 = 1e4;
-        if conv_info.multiplier_count > 0 {
-            ((s_max.max(conv_info.multiplier_sum / conv_info.multiplier_count as f64)) / s_max).min(s_d_max)
-        } else { 1.0 }
-    };
+    let s_d_now = compute_s_d_scaling(conv_info.multiplier_sum, conv_info.multiplier_count);
     let compl_tol_scaled = options.tol * s_d_now;
     if !(compl_inf_now > compl_tol_scaled
         && conv_info.primal_inf <= 100.0 * options.tol
@@ -5672,15 +5666,7 @@ fn track_consecutive_acceptable(
 ) -> f64 {
     let n = state.n;
     let m = state.m;
-    let s_d_for_acc = {
-        let s_max: f64 = 100.0;
-        let s_d_max: f64 = 1e4;
-        if (m + 2 * n) > 0 {
-            ((s_max.max(multiplier_sum / (m + 2 * n) as f64)) / s_max).min(s_d_max)
-        } else {
-            1.0
-        }
-    };
+    let s_d_for_acc = compute_s_d_scaling(multiplier_sum, m + 2 * n);
     let meets_acc_scaled = primal_inf <= 1e-6
         && dual_inf <= 1e-6 * s_d_for_acc
         && compl_inf <= 1e-6 * s_d_for_acc;
@@ -6287,13 +6273,10 @@ fn check_restored_point_near_tolerance(
     let rest_co = convergence::complementarity_error(
         &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
     );
-    let s_max = 100.0_f64;
     let mult_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
         + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
         + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
-    let s_d = if (m + 2 * n) > 0 {
-        (s_max.max(mult_sum / (m + 2 * n) as f64) / s_max).min(1e4)
-    } else { 1.0 };
+    let s_d = compute_s_d_scaling(mult_sum, m + 2 * n);
     let near_tol = 100.0 * options.tol;
     let du_tol = (near_tol * s_d).max(1e-2);
     let co_tol = (near_tol * s_d).max(1e-2);
@@ -7696,12 +7679,7 @@ fn print_max_iter_diagnostics(
     let mult_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
         + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
         + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
-    let s_max: f64 = 100.0;
-    let s_d = if (m + 2 * n) > 0 {
-        ((s_max.max(mult_sum / (m + 2 * n) as f64)) / s_max).min(1e4)
-    } else {
-        1.0
-    };
+    let s_d = compute_s_d_scaling(mult_sum, m + 2 * n);
     rip_log!(
         "ripopt: MaxIter diag: pr={:.2e} du={:.2e}(t={:.2e}) du_u={:.2e}(t={:.0e}) co={:.2e}(t={:.2e}) mu={:.2e} sd={:.1} ac={}",
         final_primal_inf,
@@ -8807,6 +8785,22 @@ fn fix_inequality_mult_signs(y_ls: &mut [f64], g_l: &[f64], g_u: &[f64], m: usiz
     }
 }
 
+/// Dual scaling factor s_d used by the unscaled-tolerance gates and
+/// reported diagnostics. Mirrors Ipopt's IpIpoptCalculatedQuantities
+/// trial_dual_inf_scaling formula:
+///   s_d = max(s_max, mean|multipliers|) / s_max,  capped at s_d_max
+/// where s_max = 100, s_d_max = 1e4. When `multiplier_count == 0`
+/// (no constraints, no bounds), returns 1.0.
+fn compute_s_d_scaling(multiplier_sum: f64, multiplier_count: usize) -> f64 {
+    let s_max: f64 = 100.0;
+    let s_d_max: f64 = 1e4;
+    if multiplier_count > 0 {
+        ((s_max.max(multiplier_sum / multiplier_count as f64)) / s_max).min(s_d_max)
+    } else {
+        1.0
+    }
+}
+
 fn compute_avg_complementarity(state: &SolverState) -> f64 {
     let mut sum_compl = 0.0;
     let mut count = 0;
@@ -9259,17 +9253,10 @@ fn make_result(state: &SolverState, status: SolveStatus) -> SolveResult {
 
     // Compute dual scaling factor s_d (same formula as check_convergence)
     {
-        let s_max: f64 = 100.0;
-        let s_d_max: f64 = 1e4;
         let mult_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
             + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
             + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
-        let mult_count = m + 2 * n;
-        diag.final_s_d = if mult_count > 0 {
-            ((s_max.max(mult_sum / mult_count as f64)) / s_max).min(s_d_max)
-        } else {
-            1.0
-        };
+        diag.final_s_d = compute_s_d_scaling(mult_sum, m + 2 * n);
     }
 
     // Use iterative z for reported bound multipliers (Ipopt semantics).
