@@ -2821,7 +2821,7 @@ fn build_mcc_corrected_direction(
     if dx_norm_orig > 1e-30 {
         let dx_c_norm: f64 = l2_norm(&dx_c);
         if dx_c_norm > 1e-30 {
-            let dot: f64 = state.dx.iter().zip(dx_c.iter()).map(|(a, b)| a * b).sum::<f64>();
+            let dot = dot_product(&state.dx, &dx_c);
             let cos_angle = dot / (dx_norm_orig * dx_c_norm);
             if cos_angle < 0.7 {
                 let alpha_damp = 0.3;
@@ -3278,7 +3278,7 @@ fn maybe_revert_mehrotra_deflection(
     if norm_orig <= 1e-30 || norm_pc <= 1e-30 {
         return;
     }
-    let dot: f64 = dx_orig.iter().zip(dx_dir.iter()).map(|(a, b)| a * b).sum::<f64>();
+    let dot = dot_product(&dx_orig, dx_dir);
     let cos_angle = dot / (norm_orig * norm_pc);
     if cos_angle >= 0.7 {
         return;
@@ -8892,6 +8892,18 @@ fn slice_min(v: &[f64]) -> f64 {
 /// in the IpoptApprox stop-criterion check.
 fn l1_norm(v: &[f64]) -> f64 {
     v.iter().map(|x| x.abs()).sum::<f64>()
+}
+
+/// Dot product of two equal-length slices. Centralises the two
+/// sites that spell out
+/// `a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f64>()`
+/// inline — the Gondzio dampening cosine numerator (state.dx · dx_c)
+/// and the Mehrotra deflection cosine numerator
+/// (dx_orig · dx_dir) in maybe_revert_mehrotra_deflection. Panics
+/// on length mismatch only via the iterator zip; callers guard with
+/// equal-length invariants.
+fn dot_product(a: &[f64], b: &[f64]) -> f64 {
+    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f64>()
 }
 
 /// `kkt::compute_sigma` at the current iterate's
