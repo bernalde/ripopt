@@ -7371,6 +7371,53 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
 ///      stalls where the counter reset).
 ///   5. Relaxed Acceptable at final iterate (Ipopt default thresholds).
 ///   6. Fallback: `MaxIterations`.
+/// At MaxIterations exit, before falling through to MaxIterations,
+/// check whether the iterate is stuck at a stationary infeasible point
+/// (||J^T·violation||_∞ < 1e-4·max(theta, 1)) or at a persistently
+/// large theta (> 1% of historical minimum, theta > 1e4). Returns
+/// LocalInfeasibility / Infeasible when applicable, None otherwise.
+/// Caller must only invoke when `!ever_feasible` and `theta > tol`.
+fn try_classify_max_iter_infeasibility(
+    state: &SolverState,
+    n: usize,
+    m: usize,
+    final_theta: f64,
+    theta_history: &[f64],
+    theta_history_len: usize,
+) -> Option<SolveResult> {
+    let mut violation = vec![0.0; m];
+    for i in 0..m {
+        let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
+            && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
+        if is_eq {
+            violation[i] = state.g[i] - state.g_l[i];
+        } else if state.g_l[i].is_finite() && state.g[i] < state.g_l[i] {
+            violation[i] = state.g[i] - state.g_l[i];
+        } else if state.g_u[i].is_finite() && state.g[i] > state.g_u[i] {
+            violation[i] = state.g[i] - state.g_u[i];
+        }
+    }
+    let mut grad_theta = vec![0.0; n];
+    for (idx, (&row, &col)) in
+        state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
+    {
+        grad_theta[col] += state.jac_vals[idx] * violation[row];
+    }
+    let grad_theta_norm = grad_theta.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
+    let stationarity_tol = 1e-4 * final_theta.max(1.0);
+    if grad_theta_norm < stationarity_tol {
+        return Some(make_result(state, SolveStatus::LocalInfeasibility));
+    }
+
+    if final_theta > 1e4 && theta_history.len() >= theta_history_len {
+        let min_theta = theta_history.iter().cloned().fold(f64::INFINITY, f64::min);
+        if final_theta > 0.01 * min_theta {
+            return Some(make_result(state, SolveStatus::Infeasible));
+        }
+    }
+    None
+}
+
 fn finalize_after_max_iter(
     state: &SolverState,
     options: &SolverOptions,
@@ -7417,35 +7464,10 @@ fn finalize_after_max_iter(
     // Infeasibility detection (only when never feasible).
     let final_theta = state.constraint_violation();
     if !ever_feasible && final_theta > options.constr_viol_tol {
-        let mut violation = vec![0.0; m];
-        for i in 0..m {
-            let is_eq = state.g_l[i].is_finite() && state.g_u[i].is_finite()
-                && (state.g_l[i] - state.g_u[i]).abs() < 1e-15;
-            if is_eq {
-                violation[i] = state.g[i] - state.g_l[i];
-            } else if state.g_l[i].is_finite() && state.g[i] < state.g_l[i] {
-                violation[i] = state.g[i] - state.g_l[i];
-            } else if state.g_u[i].is_finite() && state.g[i] > state.g_u[i] {
-                violation[i] = state.g[i] - state.g_u[i];
-            }
-        }
-        let mut grad_theta = vec![0.0; n];
-        for (idx, (&row, &col)) in
-            state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate()
-        {
-            grad_theta[col] += state.jac_vals[idx] * violation[row];
-        }
-        let grad_theta_norm = grad_theta.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
-        let stationarity_tol = 1e-4 * final_theta.max(1.0);
-        if grad_theta_norm < stationarity_tol {
-            return make_result(state, SolveStatus::LocalInfeasibility);
-        }
-
-        if final_theta > 1e4 && theta_history.len() >= theta_history_len {
-            let min_theta = theta_history.iter().cloned().fold(f64::INFINITY, f64::min);
-            if final_theta > 0.01 * min_theta {
-                return make_result(state, SolveStatus::Infeasible);
-            }
+        if let Some(result) = try_classify_max_iter_infeasibility(
+            state, n, m, final_theta, theta_history, theta_history_len,
+        ) {
+            return result;
         }
     }
 
