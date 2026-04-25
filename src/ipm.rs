@@ -9145,6 +9145,29 @@ fn build_reduced_kkt_dense(
     (kkt, rhs)
 }
 
+/// Recover bound multipliers `z_L`, `z_U` from primal stationarity at
+/// a candidate iterate where `(x, y)` have already been set. Computes
+/// `g = ∇f + J^T·y`; for each variable `i`, when its lower bound is
+/// finite and `g[i] > 0` set `z_L[i] = g[i]`; when its upper bound is
+/// finite and `g[i] < 0` set `z_U[i] = -g[i]`; both `z` components
+/// are zero otherwise. Used by the active-set promotion path where
+/// `z` is not produced by the reduced KKT solve.
+fn recover_z_from_stationarity(state: &mut SolverState, n: usize) {
+    let mut grad_jty = state.grad_f.clone();
+    for (idx, (&row, &col)) in state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate() {
+        grad_jty[col] += state.jac_vals[idx] * state.y[row];
+    }
+    for i in 0..n {
+        state.z_l[i] = 0.0;
+        state.z_u[i] = 0.0;
+        if state.x_l[i].is_finite() && grad_jty[i] > 0.0 {
+            state.z_l[i] = grad_jty[i];
+        } else if state.x_u[i].is_finite() && grad_jty[i] < 0.0 {
+            state.z_u[i] = -grad_jty[i];
+        }
+    }
+}
+
 fn try_active_set_solve<P: NlpProblem>(
     state: &mut SolverState,
     problem: &P,
@@ -9207,20 +9230,7 @@ fn try_active_set_solve<P: NlpProblem>(
     // Re-evaluate at the new point
     let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
 
-    // Recover z from stationarity: ∇f + J^T y = z_l - z_u
-    let mut grad_jty = state.grad_f.clone();
-    for (idx, (&row, &col)) in state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate() {
-        grad_jty[col] += state.jac_vals[idx] * state.y[row];
-    }
-    for i in 0..n {
-        state.z_l[i] = 0.0;
-        state.z_u[i] = 0.0;
-        if state.x_l[i].is_finite() && grad_jty[i] > 0.0 {
-            state.z_l[i] = grad_jty[i];
-        } else if state.x_u[i].is_finite() && grad_jty[i] < 0.0 {
-            state.z_u[i] = -grad_jty[i];
-        }
-    }
+    recover_z_from_stationarity(state, n);
 
     // Check strict convergence (use max-norm for primal infeasibility,
     // mu=0 at the solution).
