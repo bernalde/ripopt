@@ -6436,20 +6436,15 @@ fn emit_trace_row_if_enabled(
 ///
 /// Extracted from `solve_ipm` as part of the v0.8 main-loop decomposition
 /// (pre-work step 2).
-fn populate_snapshot_and_invoke_callback(
-    state: &SolverState,
-    iteration: usize,
-    primal_inf: f64,
-    dual_inf: f64,
-    prev_ic_delta_w: f64,
-    ls_steps: usize,
-    options: &SolverOptions,
-) -> Option<SolveResult> {
+/// Build the per-iteration `IterateSnapshot` exposed via
+/// `GetCurrentIterate`/`GetCurrentViolations`. Computes per-bound
+/// violations, complementarity products, and the Lagrangian gradient
+/// `grad_f + J^T y - z_L + z_U`. Pure function of `state`.
+fn build_iterate_snapshot(state: &SolverState) -> crate::intermediate::IterateSnapshot {
     use crate::intermediate::IterateSnapshot;
     let n = state.n;
     let m = state.m;
 
-    // Populate iterate snapshot for GetCurrentIterate/Violations access
     let mut x_l_viol = vec![0.0; n];
     let mut x_u_viol = vec![0.0; n];
     let mut compl_xl = vec![0.0; n];
@@ -6491,7 +6486,7 @@ fn populate_snapshot_and_invoke_callback(
             compl_g_vec[i] = state.y[i] * (state.g_u[i] - state.g[i]);
         }
     }
-    crate::intermediate::set_current_iterate(Some(IterateSnapshot {
+    IterateSnapshot {
         x: state.x.clone(),
         z_l: state.z_l.clone(),
         z_u: state.z_u.clone(),
@@ -6504,7 +6499,19 @@ fn populate_snapshot_and_invoke_callback(
         grad_lag_x: grad_lag,
         constraint_violation: constr_viol,
         compl_g: compl_g_vec,
-    }));
+    }
+}
+
+fn populate_snapshot_and_invoke_callback(
+    state: &SolverState,
+    iteration: usize,
+    primal_inf: f64,
+    dual_inf: f64,
+    prev_ic_delta_w: f64,
+    ls_steps: usize,
+    options: &SolverOptions,
+) -> Option<SolveResult> {
+    crate::intermediate::set_current_iterate(Some(build_iterate_snapshot(state)));
 
     // Invoke intermediate callback (if registered)
     let d_norm = state.dx.iter().map(|v| v.abs()).fold(0.0f64, f64::max);
