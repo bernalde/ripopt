@@ -7563,35 +7563,17 @@ fn attempt_soc_sparse_condensed<P: NlpProblem>(
     None
 }
 
-/// Apply post-restoration success handling: update state, reset multipliers, filter, and mu.
-fn apply_restoration_success<P: NlpProblem>(
-    state: &mut SolverState,
-    filter: &mut Filter,
-    mu_state: &mut MuState,
-    options: &SolverOptions,
-    n: usize,
-    m: usize,
-    problem: &P,
-    x_new: &[f64],
-    linear_constraints: Option<&[bool]>,
-    lbfgs_mode: bool,
-    lbfgs_state: &mut Option<LbfgsIpmState>,
-) {
-    state.x.copy_from_slice(x_new);
-    state.alpha_primal = 0.0;
-
-    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-    update_lbfgs_hessian(lbfgs_state, state);
-
-    // Reset bound multipliers after restoration, matching Ipopt
-    // IpRestoMinC_1Nrm.cpp:374-419:
-    //   1. Tentatively set z = mu/slack per bound (no element-wise clamp).
-    //   2. If max(|z|) exceeds bound_mult_reset_threshold (default 1e3),
-    //      *nuclear reset*: set ALL z_L, z_U (and v_L, v_U below) to 1.0.
-    //   3. Otherwise keep z = mu/slack as-is.
-    // An element-wise clamp at 1e3 (which we had before) leaves inf_du
-    // stuck at ~mu/slack - 1000 when slack is tight — the least-squares y
-    // computed after can't absorb that.
+/// Reset bound multipliers after restoration, matching Ipopt
+/// IpRestoMinC_1Nrm.cpp:374-419:
+///   1. Tentatively set z = mu/slack per bound (no element-wise clamp).
+///   2. If max(|z|) exceeds bound_mult_reset_threshold (1e3),
+///      *nuclear reset*: set ALL z_L, z_U to 1.0.
+///   3. Otherwise keep z = mu/slack as-is.
+/// An element-wise clamp at 1e3 leaves inf_du stuck at ~mu/slack - 1000
+/// when slack is tight — the least-squares y computed after can't absorb
+/// that. Returns whether the nuclear reset was triggered (for downstream
+/// v_L/v_U handling).
+fn reset_bound_multipliers_after_restoration(state: &mut SolverState, n: usize) -> bool {
     let bound_mult_reset_threshold = 1000.0;
     let mu_for_reset = state.mu;
     let mut z_max: f64 = 0.0;
@@ -7618,6 +7600,30 @@ fn apply_restoration_success<P: NlpProblem>(
             state.z_u[i] = if state.x_u[i].is_finite() { 1.0 } else { 0.0 };
         }
     }
+    nuclear_reset
+}
+
+/// Apply post-restoration success handling: update state, reset multipliers, filter, and mu.
+fn apply_restoration_success<P: NlpProblem>(
+    state: &mut SolverState,
+    filter: &mut Filter,
+    mu_state: &mut MuState,
+    options: &SolverOptions,
+    n: usize,
+    m: usize,
+    problem: &P,
+    x_new: &[f64],
+    linear_constraints: Option<&[bool]>,
+    lbfgs_mode: bool,
+    lbfgs_state: &mut Option<LbfgsIpmState>,
+) {
+    state.x.copy_from_slice(x_new);
+    state.alpha_primal = 0.0;
+
+    let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+    update_lbfgs_hessian(lbfgs_state, state);
+
+    let nuclear_reset = reset_bound_multipliers_after_restoration(state, n);
     // Compute least-squares multiplier estimate at the restored point,
     // INCLUDING the reset z_L/z_U contribution. Otherwise any deviation
     // between z_true = mu/slack (huge at tight slack) and the reset value
