@@ -4175,6 +4175,89 @@ enum FactorDecision {
 ///
 /// Extracted from `solve_ipm` as part of the v0.8 main-loop
 /// decomposition.
+/// Early-iteration degenerate-starting-point recovery: if KKT factorization
+/// failed in the first 5 iterations, perturb x at increasing scales and try
+/// to refactor a freshly assembled KKT. Returns true if a perturbation
+/// recovered a successful factorization (in which case the caller should
+/// `continue` the IPM loop with the perturbed point).
+fn try_early_perturbation_recovery<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    iteration: usize,
+    n: usize,
+    m: usize,
+    use_sparse: bool,
+    lin_solver: &mut dyn LinearSolver,
+    inertia_params: &mut InertiaCorrectionParams,
+    lbfgs_state: &mut Option<LbfgsIpmState>,
+    filter: &mut Filter,
+    linear_constraints: Option<&[bool]>,
+    lbfgs_mode: bool,
+) -> bool {
+    if iteration >= 5 {
+        return false;
+    }
+    for &perturb_scale in &[1e-4, 1e-3, 1e-2, 5e-2, 1e-1] {
+        let x_saved = state.x.clone();
+        for i in 0..n {
+            let mag = state.x[i].abs().max(1.0);
+            let sign = if (i * 7 + iteration * 13 + (perturb_scale * 1e4) as usize * 3) % 3 == 0 {
+                -1.0
+            } else {
+                1.0
+            };
+            state.x[i] += sign * perturb_scale * mag;
+            if state.x_l[i].is_finite() {
+                state.x[i] = state.x[i].max(state.x_l[i] + 1e-14);
+            }
+            if state.x_u[i].is_finite() {
+                state.x[i] = state.x[i].min(state.x_u[i] - 1e-14);
+            }
+        }
+        for i in 0..n {
+            if state.x_l[i].is_finite() {
+                let slack = (state.x[i] - state.x_l[i]).max(1e-20);
+                state.z_l[i] = state.mu / slack;
+            }
+            if state.x_u[i].is_finite() {
+                let slack = (state.x_u[i] - state.x[i]).max(1e-20);
+                state.z_u[i] = state.mu / slack;
+            }
+        }
+        let pert_eval_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
+        update_lbfgs_hessian(lbfgs_state, state);
+        if pert_eval_ok && !state.obj.is_nan() && !state.obj.is_infinite()
+            && !state.grad_f.iter().any(|v| v.is_nan() || v.is_infinite())
+        {
+            let sigma_p = kkt::compute_sigma(
+                &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u,
+            );
+            let mut kkt_p = kkt::assemble_kkt(
+                n, m, &state.hess_rows, &state.hess_cols, &state.hess_vals,
+                &state.jac_rows, &state.jac_cols, &state.jac_vals, &sigma_p,
+                &state.grad_f, &state.g, &state.g_l, &state.g_u,
+                &state.y, &state.z_l, &state.z_u,
+                &state.x, &state.x_l, &state.x_u, state.mu,
+                use_sparse, &state.v_l, &state.v_u,
+            );
+            if kkt::factor_with_inertia_correction(
+                &mut kkt_p, lin_solver, inertia_params,
+            ).is_ok() {
+                log::debug!(
+                    "Early perturbation (scale={:.0e}) recovered factorization at iter {}",
+                    perturb_scale, iteration
+                );
+                filter.reset();
+                let theta_p = state.constraint_violation();
+                filter.set_theta_min_from_initial(theta_p);
+                return true;
+            }
+        }
+        state.x.copy_from_slice(&x_saved);
+    }
+    false
+}
+
 fn factor_kkt_with_recovery<P: NlpProblem>(
     state: &mut SolverState,
     problem: &P,
@@ -4247,70 +4330,12 @@ fn factor_kkt_with_recovery<P: NlpProblem>(
     log::warn!("KKT factorization failed: {}", e);
 
     // Early-iteration perturbation: degenerate starting point recovery.
-    if iteration < 5 {
-        let mut early_recovered = false;
-        for &perturb_scale in &[1e-4, 1e-3, 1e-2, 5e-2, 1e-1] {
-            let x_saved = state.x.clone();
-            for i in 0..n {
-                let mag = state.x[i].abs().max(1.0);
-                let sign = if (i * 7 + iteration * 13 + (perturb_scale * 1e4) as usize * 3) % 3 == 0 {
-                    -1.0
-                } else {
-                    1.0
-                };
-                state.x[i] += sign * perturb_scale * mag;
-                if state.x_l[i].is_finite() {
-                    state.x[i] = state.x[i].max(state.x_l[i] + 1e-14);
-                }
-                if state.x_u[i].is_finite() {
-                    state.x[i] = state.x[i].min(state.x_u[i] - 1e-14);
-                }
-            }
-            for i in 0..n {
-                if state.x_l[i].is_finite() {
-                    let slack = (state.x[i] - state.x_l[i]).max(1e-20);
-                    state.z_l[i] = state.mu / slack;
-                }
-                if state.x_u[i].is_finite() {
-                    let slack = (state.x_u[i] - state.x[i]).max(1e-20);
-                    state.z_u[i] = state.mu / slack;
-                }
-            }
-            let pert_eval_ok = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-            update_lbfgs_hessian(lbfgs_state, state);
-            if pert_eval_ok && !state.obj.is_nan() && !state.obj.is_infinite()
-                && !state.grad_f.iter().any(|v| v.is_nan() || v.is_infinite())
-            {
-                let sigma_p = kkt::compute_sigma(
-                    &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u,
-                );
-                let mut kkt_p = kkt::assemble_kkt(
-                    n, m, &state.hess_rows, &state.hess_cols, &state.hess_vals,
-                    &state.jac_rows, &state.jac_cols, &state.jac_vals, &sigma_p,
-                    &state.grad_f, &state.g, &state.g_l, &state.g_u,
-                    &state.y, &state.z_l, &state.z_u,
-                    &state.x, &state.x_l, &state.x_u, state.mu,
-                    use_sparse, &state.v_l, &state.v_u,
-                );
-                if kkt::factor_with_inertia_correction(
-                    &mut kkt_p, lin_solver, inertia_params,
-                ).is_ok() {
-                    log::debug!(
-                        "Early perturbation (scale={:.0e}) recovered factorization at iter {}",
-                        perturb_scale, iteration
-                    );
-                    filter.reset();
-                    let theta_p = state.constraint_violation();
-                    filter.set_theta_min_from_initial(theta_p);
-                    early_recovered = true;
-                    break;
-                }
-            }
-            state.x.copy_from_slice(&x_saved);
-        }
-        if early_recovered {
-            return FactorDecision::Continue;
-        }
+    if try_early_perturbation_recovery(
+        state, problem, iteration, n, m, use_sparse,
+        lin_solver, inertia_params, lbfgs_state, filter,
+        linear_constraints, lbfgs_mode,
+    ) {
+        return FactorDecision::Continue;
     }
 
     // Gradient descent fallback with Armijo backtracking.
