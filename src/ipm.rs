@@ -2527,7 +2527,7 @@ fn evaluate_trial_point<P: NlpProblem>(
         return None;
     }
 
-    let theta_trial = convergence::primal_infeasibility(&g_trial, &state.g_l, &state.g_u);
+    let theta_trial = theta_for_g(state, &g_trial);
     Some((x_trial, obj_trial, g_trial, theta_trial))
 }
 
@@ -4479,7 +4479,7 @@ fn attempt_soft_restoration<P: NlpProblem>(
     if !problem.constraints(&x_soft, false, &mut g_soft) {
         return false;
     }
-    let theta_soft = convergence::primal_infeasibility(&g_soft, &state.g_l, &state.g_u);
+    let theta_soft = theta_for_g(state, &g_soft);
     if theta_soft < (1.0 - 1e-4) * theta_current
         && filter.is_acceptable(theta_soft, obj_soft)
     {
@@ -7813,7 +7813,7 @@ fn evaluate_soc_trial_and_check<P: NlpProblem>(
         return SocTrialOutcome::Abort;
     }
 
-    let theta_soc = convergence::primal_infeasibility(&g_soc, &state.g_l, &state.g_u);
+    let theta_soc = theta_for_g(state, &g_soc);
     if theta_soc >= kappa_soc * *theta_prev_soc {
         return SocTrialOutcome::Abort;
     }
@@ -8281,7 +8281,7 @@ fn attempt_nlp_restoration<P: NlpProblem>(
     {
         return (x_nlp, RestorationOutcome::Failed);
     }
-    let theta_new = convergence::primal_infeasibility(&g_new, &state.g_l, &state.g_u);
+    let theta_new = theta_for_g(state, &g_new);
 
     // Evaluate original objective at the restored point
     let mut phi_new = f64::INFINITY;
@@ -8768,6 +8768,16 @@ fn compute_s_d_scaling(multiplier_sum: f64, multiplier_count: usize) -> f64 {
 /// passing through the full (multiplier_sum, multiplier_count) pair.
 fn compute_s_d_at_state(state: &SolverState) -> f64 {
     compute_s_d_scaling(compute_multiplier_sum(state), state.m + 2 * state.n)
+}
+
+/// Constraint violation theta evaluated at an arbitrary `g` against
+/// the current state's `g_l`/`g_u` bounds. Centralises the four
+/// trial-point theta sites (regular line search, soft restoration,
+/// second-order correction, and the IIE search-direction probe) that
+/// otherwise each repeat `convergence::primal_infeasibility(g,
+/// &state.g_l, &state.g_u)`.
+fn theta_for_g(state: &SolverState, g: &[f64]) -> f64 {
+    convergence::primal_infeasibility(g, &state.g_l, &state.g_u)
 }
 
 /// L-infinity norm of `J^T * c_violation`, where `c_violation` is the
