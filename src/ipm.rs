@@ -9623,6 +9623,46 @@ fn recover_z_from_stationarity(state: &mut SolverState, n: usize) {
     }
 }
 
+/// Snap variables flagged active to their bound: `state.x[i] = x_l[i]`
+/// when `active_lower[i]`, `state.x[i] = x_u[i]` when `active_upper[i]`.
+/// Used by the active-set promotion path after `identify_active_bounds`
+/// has classified each variable.
+fn snap_active_variables_to_bounds(
+    state: &mut SolverState,
+    active_lower: &[bool],
+    active_upper: &[bool],
+    n: usize,
+) {
+    for i in 0..n {
+        if active_lower[i] {
+            state.x[i] = state.x_l[i];
+        } else if active_upper[i] {
+            state.x[i] = state.x_u[i];
+        }
+    }
+}
+
+/// Apply the full Newton step from the reduced active-set KKT solve
+/// to the free variables, clamping each result back to its finite
+/// bounds. Mutates `state.x[free_idx[k]]` in place.
+fn apply_active_set_step_with_clamping(
+    state: &mut SolverState,
+    free_idx: &[usize],
+    sol: &[f64],
+    n_free: usize,
+) {
+    for k in 0..n_free {
+        let i = free_idx[k];
+        state.x[i] += sol[k];
+        if state.x_l[i].is_finite() {
+            state.x[i] = state.x[i].max(state.x_l[i]);
+        }
+        if state.x_u[i].is_finite() {
+            state.x[i] = state.x[i].min(state.x_u[i]);
+        }
+    }
+}
+
 fn try_active_set_solve<P: NlpProblem>(
     state: &mut SolverState,
     problem: &P,
@@ -9641,13 +9681,7 @@ fn try_active_set_solve<P: NlpProblem>(
 
     // Fix active variables at their bounds (save full state for restoration)
     let saved = SavedIterate::snapshot(state);
-    for i in 0..n {
-        if active_lower[i] {
-            state.x[i] = state.x_l[i];
-        } else if active_upper[i] {
-            state.x[i] = state.x_u[i];
-        }
-    }
+    snap_active_variables_to_bounds(state, &active_lower, &active_upper, n);
 
     // Re-evaluate at the snapped point
     let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
@@ -9663,19 +9697,7 @@ fn try_active_set_solve<P: NlpProblem>(
     }
     let sol = solution.unwrap();
 
-    // Apply the step for free variables (with damping for safety)
-    let alpha = 1.0; // full Newton step
-    for k in 0..n_free {
-        let i = free_idx[k];
-        state.x[i] += alpha * sol[k];
-        // Clamp to bounds
-        if state.x_l[i].is_finite() {
-            state.x[i] = state.x[i].max(state.x_l[i]);
-        }
-        if state.x_u[i].is_finite() {
-            state.x[i] = state.x[i].min(state.x_u[i]);
-        }
-    }
+    apply_active_set_step_with_clamping(state, &free_idx, &sol, n_free);
 
     // Update y from the solve
     state.y.copy_from_slice(&sol[n_free..n_free + m]);
