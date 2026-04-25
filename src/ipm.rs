@@ -6116,6 +6116,26 @@ fn restore_best_du_iterate<P: NlpProblem>(
     let _ = evaluate_and_refresh_lbfgs(state, problem, lbfgs_state, linear_constraints, lbfgs_mode);
 }
 
+/// Tracks dual-infeasibility halving progress so the dual-stagnation
+/// detector can recognize a 500-iteration plateau and revert to the
+/// best-du iterate for a fresh restart. `triggered` latches once per
+/// solve to prevent repeated reverts.
+struct DualStallTracker {
+    last_good_du: f64,
+    last_good_iter: usize,
+    triggered: bool,
+}
+
+impl DualStallTracker {
+    fn new() -> Self {
+        Self {
+            last_good_du: f64::INFINITY,
+            last_good_iter: 0,
+            triggered: false,
+        }
+    }
+}
+
 fn handle_dual_stagnation<P: NlpProblem>(
     state: &mut SolverState,
     problem: &P,
@@ -6125,9 +6145,7 @@ fn handle_dual_stagnation<P: NlpProblem>(
     mu_state: &mut MuState,
     inertia_params: &mut InertiaCorrectionParams,
     lbfgs_state: &mut Option<LbfgsIpmState>,
-    last_good_du: &mut f64,
-    last_good_iter: &mut usize,
-    triggered: &mut bool,
+    dual_stall: &mut DualStallTracker,
     best_x: &Option<Vec<f64>>,
     best_du: &BestDuIterate,
     linear_constraints: Option<&[bool]>,
@@ -6138,14 +6156,14 @@ fn handle_dual_stagnation<P: NlpProblem>(
     }
 
     let current_du = compute_dual_inf_at_state(state);
-    if current_du < 0.5 * *last_good_du {
-        *last_good_du = current_du;
-        *last_good_iter = iteration;
+    if current_du < 0.5 * dual_stall.last_good_du {
+        dual_stall.last_good_du = current_du;
+        dual_stall.last_good_iter = iteration;
     }
 
-    let stall_iters = iteration.saturating_sub(*last_good_iter);
+    let stall_iters = iteration.saturating_sub(dual_stall.last_good_iter);
     if stall_iters < 500
-        || *triggered
+        || dual_stall.triggered
         || current_du <= 100.0 * options.tol
         || best_x.is_none()
     {
@@ -6157,7 +6175,7 @@ fn handle_dual_stagnation<P: NlpProblem>(
     }
     log::debug!(
         "Dual stagnation at iter {}: du={:.2e}, restoring best-du point (du={:.2e} at iter {})",
-        iteration, current_du, *last_good_du, *last_good_iter
+        iteration, current_du, dual_stall.last_good_du, dual_stall.last_good_iter
     );
     restore_best_du_iterate(
         state, problem, lbfgs_state, best_du,
@@ -6178,7 +6196,7 @@ fn handle_dual_stagnation<P: NlpProblem>(
         return Some(result);
     }
 
-    *triggered = true;
+    dual_stall.triggered = true;
     None
 }
 
@@ -6833,9 +6851,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     // Dual stagnation detection: track best du improvement.
     // If du hasn't improved significantly over many iterations and we have a
     // best feasible point, restore it and restart with fresh parameters.
-    let mut dual_stall_last_good_du: f64 = f64::INFINITY;
-    let mut dual_stall_last_good_iter: usize = 0;
-    let mut dual_stall_triggered: bool = false;
+    let mut dual_stall = DualStallTracker::new();
 
     // Strategy 1: Iterate averaging for oscillation recovery
     const AVG_WINDOW: usize = 6;
@@ -6902,9 +6918,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             &mut mu_state,
             &mut inertia_params,
             &mut lbfgs_state,
-            &mut dual_stall_last_good_du,
-            &mut dual_stall_last_good_iter,
-            &mut dual_stall_triggered,
+            &mut dual_stall,
             &best_x,
             &best_du,
             linear_constraints.as_deref(),
