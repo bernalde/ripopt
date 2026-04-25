@@ -500,8 +500,8 @@ impl LbfgsIpmState {
                 }
             }
 
-            let sbs: f64 = s.iter().zip(bs.iter()).map(|(si, bsi)| si * bsi).sum();
-            let sy: f64 = s.iter().zip(y.iter()).map(|(si, yi)| si * yi).sum();
+            let sbs: f64 = dot_product(s, &bs);
+            let sy: f64 = dot_product(s, y);
 
             if sbs.abs() < 1e-30 || sy.abs() < 1e-30 {
                 continue;
