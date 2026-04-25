@@ -4700,29 +4700,49 @@ fn update_barrier_parameter(
             }
         }
         MuMode::Fixed => {
-            if options.mu_strategy_adaptive && sufficient && !mu_state.tiny_step && !mu_state.first_iter_in_mode {
-                // Switch back to free mode (only in adaptive strategy)
-                log::debug!("Switching back to free mu mode (sufficient progress)");
-                state.diagnostics.mu_mode_switches += 1;
-                mu_state.mode = MuMode::Free;
-                mu_state.remember_accepted(kkt_error);
-                mu_state.first_iter_in_mode = true;
-            } else {
-                mu_state.first_iter_in_mode = false;
-                // Check if subproblem is solved (barrier error small enough)
-                let barrier_err = compute_barrier_error(state);
-                if barrier_err <= options.barrier_tol_factor * state.mu || mu_state.tiny_step {
-                    let new_mu = (options.mu_linear_decrease_factor * state.mu)
-                        .min(state.mu.powf(options.mu_superlinear_decrease_power))
-                        .max(options.mu_min);
-                    if !(mu_state.tiny_step && (new_mu - state.mu).abs() < 1e-20) {
-                        state.mu = new_mu;
-                        filter.reset();
-                        let theta_new = state.constraint_violation();
-                        filter.set_theta_min_from_initial(theta_new);
-                        log::debug!("Fixed mode: mu decreased to {:.2e}", state.mu);
-                    }
-                }
+            update_barrier_parameter_fixed_mode(
+                state, mu_state, filter, options, sufficient, kkt_error,
+            );
+        }
+    }
+}
+
+/// Fixed-mode (monotone) barrier-parameter update. Either switches back to
+/// Free mode when adaptive strategy + sufficient progress is detected
+/// (skipping the first iteration in Fixed mode), or — when the barrier
+/// subproblem is approximately solved (barrier_err <= kappa_eps*mu) or a
+/// tiny step was taken — decreases mu by the min of linear and superlinear
+/// rates. Filter and theta_min are reset on every accepted decrease.
+/// Mirrors Ipopt's IpMonotoneMuUpdate.cpp.
+fn update_barrier_parameter_fixed_mode(
+    state: &mut SolverState,
+    mu_state: &mut MuState,
+    filter: &mut Filter,
+    options: &SolverOptions,
+    sufficient: bool,
+    kkt_error: f64,
+) {
+    if options.mu_strategy_adaptive && sufficient && !mu_state.tiny_step && !mu_state.first_iter_in_mode {
+        // Switch back to free mode (only in adaptive strategy)
+        log::debug!("Switching back to free mu mode (sufficient progress)");
+        state.diagnostics.mu_mode_switches += 1;
+        mu_state.mode = MuMode::Free;
+        mu_state.remember_accepted(kkt_error);
+        mu_state.first_iter_in_mode = true;
+    } else {
+        mu_state.first_iter_in_mode = false;
+        // Check if subproblem is solved (barrier error small enough)
+        let barrier_err = compute_barrier_error(state);
+        if barrier_err <= options.barrier_tol_factor * state.mu || mu_state.tiny_step {
+            let new_mu = (options.mu_linear_decrease_factor * state.mu)
+                .min(state.mu.powf(options.mu_superlinear_decrease_power))
+                .max(options.mu_min);
+            if !(mu_state.tiny_step && (new_mu - state.mu).abs() < 1e-20) {
+                state.mu = new_mu;
+                filter.reset();
+                let theta_new = state.constraint_violation();
+                filter.set_theta_min_from_initial(theta_new);
+                log::debug!("Fixed mode: mu decreased to {:.2e}", state.mu);
             }
         }
     }
