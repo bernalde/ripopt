@@ -2720,38 +2720,18 @@ fn assemble_kkt_systems(
 /// Writes `state.alpha_dual = alpha_d`. Returns `mu_ks`, which the
 /// caller reuses when resetting slack-constraint multipliers `v_l`,
 /// `v_u` after the post-step re-evaluation.
-fn update_dual_variables(
+/// Apply the κ_σ=1e10 bound-multiplier reset (Wächter & Biegler 2006,
+/// eq. (16)). Each `z_L[i]` and `z_U[i]` is taken `α_d` along the
+/// Newton step, then clamped to `[μ_KS/(κ_σ·s), κ_σ·μ_KS/s]`. In Free
+/// mu mode, μ_KS uses `max(avg_compl, μ)` (capped at 1e3) so the
+/// clamp tracks actual centrality rather than the lagging μ. Returns
+/// the μ_KS used (printed in the diagnostics row).
+fn apply_kappa_sigma_bound_multiplier_reset(
     state: &mut SolverState,
     mu_state: &MuState,
-    alpha_dual_max: f64,
-    prev_dy: &mut Option<Vec<f64>>,
-    dy_sign_change_count: &mut [u8],
+    alpha_d: f64,
 ) -> f64 {
     let n = state.n;
-    let m = state.m;
-    let alpha_y = state.alpha_primal;
-    let alpha_d = alpha_dual_max;
-    let near_convergence = state.consecutive_acceptable >= 1;
-    for i in 0..m {
-        let sign_change = if let Some(ref pdy) = prev_dy {
-            pdy[i] * state.dy[i] < 0.0
-        } else {
-            false
-        };
-        if near_convergence && sign_change {
-            dy_sign_change_count[i] = dy_sign_change_count[i].saturating_add(1);
-        } else if !sign_change {
-            dy_sign_change_count[i] = 0;
-        }
-        let dy_i = if near_convergence && dy_sign_change_count[i] >= 3 {
-            0.5 * state.dy[i]
-        } else {
-            state.dy[i]
-        };
-        state.y[i] += alpha_y * dy_i;
-    }
-    *prev_dy = Some(state.dy.clone());
-
     let kappa_sigma = 1e10;
     let mu_ks = if mu_state.mode == MuMode::Free {
         compute_avg_complementarity(state)
@@ -2776,6 +2756,41 @@ fn update_dual_variables(
             state.z_u[i] = z_new.clamp(z_lo, z_hi);
         }
     }
+    mu_ks
+}
+
+fn update_dual_variables(
+    state: &mut SolverState,
+    mu_state: &MuState,
+    alpha_dual_max: f64,
+    prev_dy: &mut Option<Vec<f64>>,
+    dy_sign_change_count: &mut [u8],
+) -> f64 {
+    let m = state.m;
+    let alpha_y = state.alpha_primal;
+    let alpha_d = alpha_dual_max;
+    let near_convergence = state.consecutive_acceptable >= 1;
+    for i in 0..m {
+        let sign_change = if let Some(ref pdy) = prev_dy {
+            pdy[i] * state.dy[i] < 0.0
+        } else {
+            false
+        };
+        if near_convergence && sign_change {
+            dy_sign_change_count[i] = dy_sign_change_count[i].saturating_add(1);
+        } else if !sign_change {
+            dy_sign_change_count[i] = 0;
+        }
+        let dy_i = if near_convergence && dy_sign_change_count[i] >= 3 {
+            0.5 * state.dy[i]
+        } else {
+            state.dy[i]
+        };
+        state.y[i] += alpha_y * dy_i;
+    }
+    *prev_dy = Some(state.dy.clone());
+
+    let mu_ks = apply_kappa_sigma_bound_multiplier_reset(state, mu_state, alpha_d);
 
     state.alpha_dual = alpha_d;
     mu_ks
