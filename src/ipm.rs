@@ -2440,6 +2440,31 @@ fn evaluate_trial_point<P: NlpProblem>(
     Some((x_trial, obj_trial, g_trial, theta_trial))
 }
 
+/// Print a diagnostic breakdown of why a line-search trial was
+/// rejected: which of the four filter sub-tests (switching condition,
+/// Armijo, sufficient θ-reduction, filter acceptability) passed and
+/// which failed. Gated by `print_level >= 7` and the first 5 LS
+/// rejections per iteration; isolates the verbose tracing from the
+/// hot loop in `run_line_search_loop`.
+fn log_line_search_rejection(
+    filter: &Filter,
+    theta_current: f64,
+    phi_current: f64,
+    theta_trial: f64,
+    phi_trial: f64,
+    grad_phi_step: f64,
+    alpha: f64,
+) {
+    let sw = filter.switching_condition(theta_current, grad_phi_step, alpha);
+    let ar = filter.armijo_condition(phi_current, phi_trial, grad_phi_step, alpha);
+    let sr = filter.sufficient_infeasibility_reduction(theta_current, theta_trial);
+    let fa = filter.is_acceptable(theta_trial, phi_trial);
+    rip_log!(
+        "  LS reject: alpha={:.2e} theta_t={:.2e} phi_t={:.2e} switch={} armijo={} suff_red={} filter_ok={}",
+        alpha, theta_trial, phi_trial, sw, ar, sr, fa
+    );
+}
+
 fn run_line_search_loop<P: NlpProblem>(
     state: &mut SolverState,
     problem: &P,
@@ -2515,12 +2540,10 @@ fn run_line_search_loop<P: NlpProblem>(
         );
 
         if !acceptable && options.print_level >= 7 && *ls_steps < 5 {
-            let sw = filter.switching_condition(theta_current, grad_phi_step, alpha);
-            let ar = filter.armijo_condition(phi_current, phi_trial, grad_phi_step, alpha);
-            let sr = filter.sufficient_infeasibility_reduction(theta_current, theta_trial);
-            let fa = filter.is_acceptable(theta_trial, phi_trial);
-            rip_log!("  LS reject: alpha={:.2e} theta_t={:.2e} phi_t={:.2e} switch={} armijo={} suff_red={} filter_ok={}",
-                alpha, theta_trial, phi_trial, sw, ar, sr, fa);
+            log_line_search_rejection(
+                filter, theta_current, phi_current, theta_trial, phi_trial,
+                grad_phi_step, alpha,
+            );
         }
 
         if acceptable {
