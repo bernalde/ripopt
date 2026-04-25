@@ -4688,16 +4688,7 @@ fn try_early_perturbation_recovery<P: NlpProblem>(
             state.x[i] += sign * perturb_scale * mag;
             clamp_to_open_bounds(&mut state.x, &state.x_l, &state.x_u, i);
         }
-        for i in 0..n {
-            if state.x_l[i].is_finite() {
-                let slack = (state.x[i] - state.x_l[i]).max(1e-20);
-                state.z_l[i] = state.mu / slack;
-            }
-            if state.x_u[i].is_finite() {
-                let slack = (state.x_u[i] - state.x[i]).max(1e-20);
-                state.z_u[i] = state.mu / slack;
-            }
-        }
+        reseed_bound_multipliers_from_mu(state, state.mu);
         let pert_eval_ok = evaluate_and_refresh_lbfgs(state, problem, lbfgs_state, linear_constraints, lbfgs_mode);
         if pert_eval_ok && obj_and_grad_finite(state) {
             let sigma_p = kkt::compute_sigma(
@@ -6874,16 +6865,7 @@ fn initial_evaluate_with_recovery<P: NlpProblem>(
                 state.x[i] = state.x[i].min(state.x_u[i] - push);
             }
         }
-        for i in 0..n {
-            if state.x_l[i].is_finite() {
-                let slack = (state.x[i] - state.x_l[i]).max(1e-20);
-                state.z_l[i] = options.mu_init / slack;
-            }
-            if state.x_u[i].is_finite() {
-                let slack = (state.x_u[i] - state.x[i]).max(1e-20);
-                state.z_u[i] = options.mu_init / slack;
-            }
-        }
+        reseed_bound_multipliers_from_mu(state, options.mu_init);
         let perturb_ok = evaluate_and_refresh_lbfgs(state, problem, lbfgs_state, linear_constraints, lbfgs_mode);
         if perturb_ok && obj_and_grad_finite(state) {
             return Ok(());
@@ -8890,6 +8872,28 @@ fn compute_compl_err_at_state(state: &SolverState) -> f64 {
 /// on the objective + gradient pair (`IpIpoptCalculatedQuantities`).
 fn obj_and_grad_finite(state: &SolverState) -> bool {
     state.obj.is_finite() && state.grad_f.iter().all(|v| v.is_finite())
+}
+
+/// Re-seed the bound multipliers `z_l`, `z_u` from the current
+/// slacks so that the perturbed iterate satisfies the
+/// complementarity condition `z * s = mu` (with a 1e-20 slack
+/// floor for safety). Used by the two perturbation paths that
+/// reset x and need a consistent set of bound multipliers before
+/// re-evaluation: `try_early_perturbation_recovery` (uses
+/// `state.mu`) and `initial_evaluate_with_recovery` (uses
+/// `options.mu_init`).
+fn reseed_bound_multipliers_from_mu(state: &mut SolverState, mu: f64) {
+    let n = state.n;
+    for i in 0..n {
+        if state.x_l[i].is_finite() {
+            let slack = (state.x[i] - state.x_l[i]).max(1e-20);
+            state.z_l[i] = mu / slack;
+        }
+        if state.x_u[i].is_finite() {
+            let slack = (state.x_u[i] - state.x[i]).max(1e-20);
+            state.z_u[i] = mu / slack;
+        }
+    }
 }
 
 /// Boost μ to `new_mu`, reset the filter and overall-progress stall
