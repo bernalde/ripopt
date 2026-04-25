@@ -5601,7 +5601,7 @@ struct OptimalityMeasures {
 /// decomposition. Pure function of `state`.
 fn compute_optimality_measures(state: &SolverState) -> OptimalityMeasures {
     let primal_inf = state.constraint_violation();
-    let primal_inf_max = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
+    let primal_inf_max = compute_primal_inf_max_at_state(state);
 
     // Iterative-z dual infeasibility (matches Ipopt's curr_dual_infeasibility):
     // honest KKT residual. If iterative z is inconsistent with ∇f + J^T y the
@@ -7545,7 +7545,7 @@ fn print_max_iter_diagnostics(
     if options.print_level < 5 {
         return;
     }
-    let final_primal_inf = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
+    let final_primal_inf = compute_primal_inf_max_at_state(state);
     let final_dual_inf = compute_dual_inf_at_state(state);
     let final_dual_inf_unscaled = compute_dual_inf_unscaled_at_state(state);
     let final_compl = compute_compl_err_at_state(state);
@@ -8135,7 +8135,7 @@ fn attempt_nlp_restoration<P: NlpProblem>(
     // Using a mu_init consistent with the current infeasibility makes the
     // closed-form (p,n) init well-conditioned: when theta ≫ mu, the slacks
     // would otherwise be pinned near 0 with enormous bound multipliers.
-    let c_inf = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
+    let c_inf = compute_primal_inf_max_at_state(state);
     let resto_mu = state.mu.max(c_inf);
 
     // Build restoration NLP using the same resto_mu for p/n quadratic init.
@@ -8805,6 +8805,13 @@ fn dual_inf_with_z(state: &SolverState, z_l: &[f64], z_u: &[f64]) -> f64 {
     )
 }
 
+/// L-infinity primal infeasibility at the current iterate against
+/// the current state's `g_l`/`g_u` bounds. Centralises the five
+/// state-arg call sites of `convergence::primal_infeasibility_max`.
+fn compute_primal_inf_max_at_state(state: &SolverState) -> f64 {
+    convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u)
+}
+
 /// `convergence::dual_infeasibility_scaled` at the current iterate
 /// using `state.{grad_f, jac_*, y, z_l, z_u}`. The unscaled (s_d=1)
 /// dual residual is what the optimality measures, the post-step
@@ -8990,7 +8997,7 @@ fn compute_convergence_info_from_state(
     n: usize,
     m: usize,
 ) -> ConvergenceInfo {
-    let primal_inf = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
+    let primal_inf = compute_primal_inf_max_at_state(state);
     let dual_inf = compute_dual_inf_at_state(state);
     let compl_inf = compute_compl_err_at_state(state);
     ConvergenceInfo {
@@ -9425,7 +9432,7 @@ fn gradient_descent_fallback(state: &SolverState) -> Option<(Vec<f64>, Vec<f64>)
 fn populate_final_diagnostics(state: &SolverState) -> SolverDiagnostics {
     let mut diag = state.diagnostics.clone();
     diag.final_mu = state.mu;
-    diag.final_primal_inf = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
+    diag.final_primal_inf = compute_primal_inf_max_at_state(state);
     diag.final_dual_inf = compute_dual_inf_at_state(state);
     diag.final_compl = compute_compl_err_at_state(state);
     diag.final_s_d = compute_s_d_at_state(state);
