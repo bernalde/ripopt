@@ -5318,25 +5318,10 @@ fn try_iterate_averaging_promotion<P: NlpProblem>(
     state.z_l.copy_from_slice(&avg_zl);
     state.z_u.copy_from_slice(&avg_zu);
     let _ = state.evaluate_with_linear(problem, 1.0, linear_constraints, lbfgs_mode);
-    let avg_pr = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
-    let avg_du = convergence::dual_infeasibility(
-        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-        &state.y, &state.z_l, &state.z_u, n,
-    );
-    let avg_compl = convergence::complementarity_error(
-        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
-    );
-    let avg_conv = ConvergenceInfo {
-        primal_inf: avg_pr, dual_inf: avg_du,
-        dual_inf_unscaled: avg_du,
-        compl_inf: avg_compl,
-        mu: state.mu, objective: state.obj,
-        multiplier_sum: compute_multiplier_sum(state),
-        multiplier_count: m + 2 * n,
-    };
+    let avg_conv = compute_convergence_info_from_state(state, state.mu, n, m);
     if let ConvergenceStatus::Converged = check_convergence(&avg_conv, options, 0) {
         if options.print_level >= 3 {
-            rip_log!("ripopt: Iterate averaging promoted near-tolerance -> Optimal (du={:.2e})", avg_du);
+            rip_log!("ripopt: Iterate averaging promoted near-tolerance -> Optimal (du={:.2e})", avg_conv.dual_inf);
         }
         return Some(make_result(state, SolveStatus::Optimal));
     }
@@ -8820,6 +8805,38 @@ fn compute_multiplier_sum(state: &SolverState) -> f64 {
         + state.z_u.iter().map(|v| v.abs()).sum::<f64>()
 }
 
+/// Build a `ConvergenceInfo` from the current iterate by computing the
+/// max-norm primal infeasibility, dual infeasibility, complementarity
+/// error (at mu_target=0), and total multiplier sum from `state`. The
+/// caller supplies `mu` because some promotion paths (e.g. active-set)
+/// want to check convergence with mu=0 even though `state.mu` is
+/// nonzero.
+fn compute_convergence_info_from_state(
+    state: &SolverState,
+    mu: f64,
+    n: usize,
+    m: usize,
+) -> ConvergenceInfo {
+    let primal_inf = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
+    let dual_inf = convergence::dual_infeasibility(
+        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+        &state.y, &state.z_l, &state.z_u, n,
+    );
+    let compl_inf = convergence::complementarity_error(
+        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
+    );
+    ConvergenceInfo {
+        primal_inf,
+        dual_inf,
+        dual_inf_unscaled: dual_inf,
+        compl_inf,
+        mu,
+        objective: state.obj,
+        multiplier_sum: compute_multiplier_sum(state),
+        multiplier_count: m + 2 * n,
+    }
+}
+
 fn compute_avg_complementarity(state: &SolverState) -> f64 {
     let mut sum_compl = 0.0;
     let mut count = 0;
@@ -9128,28 +9145,9 @@ fn try_active_set_solve<P: NlpProblem>(
         }
     }
 
-    // Check strict convergence (use max-norm for primal infeasibility)
-    let primal_inf = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
-    let dual_inf = convergence::dual_infeasibility(
-        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-        &state.y, &state.z_l, &state.z_u, n,
-    );
-    let compl_inf = convergence::complementarity_error(
-        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
-    );
-    let multiplier_sum = compute_multiplier_sum(state);
-    let multiplier_count = m + 2 * n;
-
-    let conv_info = ConvergenceInfo {
-        primal_inf,
-        dual_inf,
-        dual_inf_unscaled: dual_inf, // same z used for both
-        compl_inf,
-        mu: 0.0, // at the solution, mu should be zero
-        objective: state.obj,
-        multiplier_sum,
-        multiplier_count,
-    };
+    // Check strict convergence (use max-norm for primal infeasibility,
+    // mu=0 at the solution).
+    let conv_info = compute_convergence_info_from_state(state, 0.0, n, m);
 
     if let ConvergenceStatus::Converged = check_convergence(&conv_info, options, 0) {
         return Some(make_result(state, SolveStatus::Optimal));
