@@ -4184,9 +4184,7 @@ fn apply_restoration_recovery_strategy<P: NlpProblem>(
     match fail_count {
         1 => {
             if mu_state.mode == MuMode::Free {
-                state.diagnostics.mu_mode_switches += 1;
-                mu_state.mode = MuMode::Fixed;
-                mu_state.first_iter_in_mode = true;
+                switch_mu_mode(state, mu_state, MuMode::Fixed);
                 let avg_compl = compute_avg_complementarity(state);
                 if avg_compl > 0.0 {
                     state.mu = (options.adaptive_mu_monotone_init_factor * avg_compl)
@@ -5144,6 +5142,18 @@ fn compute_du_stagnant_in_free_mode(mu_state: &MuState, options: &SolverOptions)
     recent >= 0.9 * oldest && recent > options.tol * 100.0
 }
 
+/// Record a mu-strategy mode change: bump the diagnostics counter,
+/// flip `mu_state.mode`, and re-seed `first_iter_in_mode = true` so
+/// the next iteration re-initialises the new mode's tracking state.
+/// Used by every Free↔Fixed transition (insufficient-progress switch,
+/// promotion-back-to-Free in `update_barrier_parameter_fixed_mode`,
+/// and the post-restoration retry in `apply_restoration_recovery_strategy`).
+fn switch_mu_mode(state: &mut SolverState, mu_state: &mut MuState, new_mode: MuMode) {
+    state.diagnostics.mu_mode_switches += 1;
+    mu_state.mode = new_mode;
+    mu_state.first_iter_in_mode = true;
+}
+
 /// Switch the mu strategy from Free to Fixed and seed the new mu.
 /// Triggered when Free mode shows insufficient progress for ≥2
 /// iterations or dual-infeasibility stagnation. Resets
@@ -5161,9 +5171,7 @@ fn switch_to_fixed_mode_with_adaptive_init(
 ) {
     mu_state.consecutive_insufficient = 0;
     log::debug!("Switching to fixed mu mode (insufficient progress or tiny step)");
-    state.diagnostics.mu_mode_switches += 1;
-    mu_state.mode = MuMode::Fixed;
-    mu_state.first_iter_in_mode = true;
+    switch_mu_mode(state, mu_state, MuMode::Fixed);
     let avg_compl = compute_avg_complementarity(state);
     if avg_compl > 0.0 {
         state.mu = (options.adaptive_mu_monotone_init_factor * avg_compl)
@@ -5269,10 +5277,8 @@ fn update_barrier_parameter_fixed_mode(
     if options.mu_strategy_adaptive && sufficient && !mu_state.tiny_step && !mu_state.first_iter_in_mode {
         // Switch back to free mode (only in adaptive strategy)
         log::debug!("Switching back to free mu mode (sufficient progress)");
-        state.diagnostics.mu_mode_switches += 1;
-        mu_state.mode = MuMode::Free;
+        switch_mu_mode(state, mu_state, MuMode::Free);
         mu_state.remember_accepted(kkt_error);
-        mu_state.first_iter_in_mode = true;
     } else {
         mu_state.first_iter_in_mode = false;
         // Check if subproblem is solved (barrier error small enough)
