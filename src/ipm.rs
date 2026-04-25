@@ -5101,6 +5101,37 @@ fn update_barrier_parameter(
     }
 }
 
+/// Switch the mu strategy from Free to Fixed and seed the new mu.
+/// Triggered when Free mode shows insufficient progress for ≥2
+/// iterations or dual-infeasibility stagnation. Resets
+/// `consecutive_insufficient`, increments the diagnostics counter,
+/// flips the mode and `first_iter_in_mode`, then sets
+/// `μ = adaptive_mu_monotone_init·avg_compl` (clamped to
+/// `[μ_min, 1e5]`) — falling back to a linear μ-decrease when no
+/// active complementarity products exist. Finally resets the filter
+/// at the new (μ, θ).
+fn switch_to_fixed_mode_with_adaptive_init(
+    state: &mut SolverState,
+    mu_state: &mut MuState,
+    filter: &mut Filter,
+    options: &SolverOptions,
+) {
+    mu_state.consecutive_insufficient = 0;
+    log::debug!("Switching to fixed mu mode (insufficient progress or tiny step)");
+    state.diagnostics.mu_mode_switches += 1;
+    mu_state.mode = MuMode::Fixed;
+    mu_state.first_iter_in_mode = true;
+    let avg_compl = compute_avg_complementarity(state);
+    if avg_compl > 0.0 {
+        state.mu = (options.adaptive_mu_monotone_init_factor * avg_compl)
+            .clamp(options.mu_min, 1e5);
+    } else {
+        state.mu = (options.mu_linear_decrease_factor * state.mu)
+            .max(options.mu_min);
+    }
+    reset_filter_with_current_theta(state, filter);
+}
+
 /// Free-mode (adaptive) barrier-parameter update. Three branches:
 /// 1) Sufficient progress + barrier subproblem solved: pick a new mu via
 ///    the Loqo oracle (when quality_function is on) or rate-limited Loqo
@@ -5166,22 +5197,7 @@ fn update_barrier_parameter_free_mode(
         };
         mu_state.consecutive_insufficient += 1;
         if mu_state.consecutive_insufficient >= 2 || du_stagnant {
-            // Switch to fixed mode after 2 consecutive insufficient iterations
-            // or when dual infeasibility is stagnant
-            mu_state.consecutive_insufficient = 0;
-            log::debug!("Switching to fixed mu mode (insufficient progress or tiny step)");
-            state.diagnostics.mu_mode_switches += 1;
-            mu_state.mode = MuMode::Fixed;
-            mu_state.first_iter_in_mode = true;
-            let avg_compl = compute_avg_complementarity(state);
-            if avg_compl > 0.0 {
-                state.mu = (options.adaptive_mu_monotone_init_factor * avg_compl)
-                    .clamp(options.mu_min, 1e5);
-            } else {
-                state.mu = (options.mu_linear_decrease_factor * state.mu)
-                    .max(options.mu_min);
-            }
-            reset_filter_with_current_theta(state, filter);
+            switch_to_fixed_mode_with_adaptive_init(state, mu_state, filter, options);
         } else if barrier_subproblem_solved {
             // Stay in Free mode with conservative mu decrease —
             // only when the barrier subproblem is approximately
