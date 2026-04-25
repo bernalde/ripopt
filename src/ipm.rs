@@ -3503,7 +3503,7 @@ fn solve_sparse_condensed_direction(
     let mut kkt = assemble_kkt_from_state(state, n, m, sigma, use_sparse);
     let mut fallback_solver = new_fallback_solver(use_sparse);
     if let Ok((fb_dw, fb_dc)) = kkt::factor_with_inertia_correction(
-        &mut kkt, fallback_solver.as_mut(), inertia_params,
+        &mut kkt, fallback_solver.as_mut(), inertia_params, state.mu,
     ) {
         kkt::solve_for_direction(&kkt, fallback_solver.as_mut(), fb_dw, fb_dc)
             .unwrap_or_else(|_| gradient_descent_fallback(state)
@@ -3620,7 +3620,7 @@ fn fall_back_to_full_kkt_after_condensed_failure<P: NlpProblem>(
 ) -> CondensedDirectionOutcome {
     let mut kkt = assemble_kkt_from_state(state, n, m, sigma, use_sparse);
     let fb_ic = kkt::factor_with_inertia_correction(
-        &mut kkt, lin_solver, inertia_params,
+        &mut kkt, lin_solver, inertia_params, state.mu,
     );
     if fb_ic.is_err() {
         return apply_solve_failure_restoration(
@@ -4600,7 +4600,7 @@ fn try_early_perturbation_recovery<P: NlpProblem>(
             let sigma_p = compute_sigma_from_state(state);
             let mut kkt_p = assemble_kkt_from_state(state, n, m, &sigma_p, use_sparse);
             if kkt::factor_with_inertia_correction(
-                &mut kkt_p, lin_solver, inertia_params,
+                &mut kkt_p, lin_solver, inertia_params, state.mu,
             ).is_ok() {
                 log::debug!(
                     "Early perturbation (scale={:.0e}) recovered factorization at iter {}",
@@ -4762,7 +4762,7 @@ fn factor_kkt_with_recovery<P: NlpProblem>(
         rip_log!("ripopt: Factoring KKT dim={} nnz={}...", dim, nnz);
     }
     let inertia_result =
-        kkt::factor_with_inertia_correction(kkt_system, lin_solver, inertia_params);
+        kkt::factor_with_inertia_correction(kkt_system, lin_solver, inertia_params, state.mu);
     if options.print_level >= 5 {
         rip_log!("ripopt: KKT factorization took {:.3}s (ok={})",
             t_fact.elapsed().as_secs_f64(), inertia_result.is_ok());

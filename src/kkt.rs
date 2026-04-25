@@ -225,7 +225,14 @@ pub fn assemble_kkt(
     // Jacobian entries at the current iterate, producing zero (2,2) diagonal entries.
     // Without regularization, the factorization produces zero pivots that the IC loop
     // cannot fix (adding delta_w to the (1,1) block doesn't help zero constraint pivots).
-    let delta_c_base = 1e-8;
+    //
+    // mu-dependent scaling matches Ipopt's PDPerturbationHandler::delta_cd
+    // (IpPDPerturbationHandler.cpp:465-468): delta_c = bar_delta_c * mu^kappa_c
+    // with bar_delta_c = jacobian_regularization_value (default 1e-8) and
+    // kappa_c = jacobian_regularization_exponent (default 0.25). Without this
+    // scaling, a fixed 1e-8 dominates the converged system at mu = 1e-10,
+    // biasing final multipliers by O(delta_c / ||J||).
+    let delta_c_base = 1e-8 * mu.max(0.0).powf(0.25);
     let mut delta_c_diag = vec![0.0; m];
     for i in 0..m {
         if !has_sigma_s[i] {
@@ -354,7 +361,10 @@ impl Default for InertiaCorrectionParams {
     fn default() -> Self {
         Self {
             delta_w_init: 1e-4,
-            delta_c_base: 1e-4,
+            // Matches Ipopt's jacobian_regularization_value default (1e-8);
+            // the actual delta_c applied is this base scaled by mu^0.25 inside
+            // factor_with_inertia_correction.
+            delta_c_base: 1e-8,
             delta_w_growth: 4.0,
             max_attempts: 15,
             delta_w_last: 0.0,
@@ -415,8 +425,12 @@ pub fn factor_with_inertia_correction(
     kkt: &mut KktSystem,
     solver: &mut dyn LinearSolver,
     params: &mut InertiaCorrectionParams,
+    mu: f64,
 ) -> Result<(f64, f64), crate::linear_solver::SolverError> {
     let n = kkt.n;
+    // Mu-scaled constraint regularization base (Ipopt's
+    // PDPerturbationHandler::delta_cd, IpPDPerturbationHandler.cpp:465-468).
+    let delta_c_active = params.delta_c_base * mu.max(0.0).powf(0.25);
     let m = kkt.m;
 
     // Apply Ruiz equilibration when scaling is active (activated on demand).
@@ -521,7 +535,7 @@ pub fn factor_with_inertia_correction(
                 && inertia.zero == 0
                 && (total as isize - (n + m) as isize).unsigned_abs() <= 2
             {
-                let mut delta_c = params.delta_c_base;
+                let mut delta_c = delta_c_active;
                 for _ in 0..4 {
                     let mut perturbed = kkt.matrix.clone();
                     perturbed.add_diagonal_range(n, n + m, -delta_c);
@@ -557,7 +571,7 @@ pub fn factor_with_inertia_correction(
     let mut best_delta_w = delta_w;
 
     for attempt in 0..params.max_attempts {
-        let delta_c = params.delta_c_base;
+        let delta_c = delta_c_active;
 
         // Create perturbed matrix
         let mut perturbed = kkt.matrix.clone();
@@ -603,7 +617,7 @@ pub fn factor_with_inertia_correction(
 
     // Inertia correction failed — use last perturbed matrix and proceed.
     // The line search will reject bad steps, and restoration can recover.
-    let delta_c = params.delta_c_base;
+    let delta_c = delta_c_active;
 
     log::warn!(
         "Inertia correction failed after {} attempts (delta_w={:.2e}, delta_c={:.2e}), proceeding with approximate factorization",
@@ -1799,10 +1813,12 @@ mod tests {
         // Verify J block: matrix[2,0] and matrix[2,1] should be 1.0
         assert!((kkt.matrix.get(2, 0) - 1.0).abs() < 1e-12);
         assert!((kkt.matrix.get(2, 1) - 1.0).abs() < 1e-12);
-        // Equality constraint: (2,2) block should have small quasidefinite regularization
-        // (-1e-8) to prevent zero pivots in the factorization.
-        assert!((kkt.matrix.get(2, 2) - (-1e-8)).abs() < 1e-12);
-        assert!((kkt.delta_c_diag[0] - 1e-8).abs() < 1e-12);
+        // Equality constraint: (2,2) block has Ipopt-style quasidefinite
+        // regularization delta_c = 1e-8 * mu^0.25. At mu = 0.1 this is
+        // 1e-8 * 0.1^0.25 ≈ 5.6234e-9.
+        let expected_dc = 1e-8 * 0.1f64.powf(0.25);
+        assert!((kkt.matrix.get(2, 2) - (-expected_dc)).abs() < 1e-15);
+        assert!((kkt.delta_c_diag[0] - expected_dc).abs() < 1e-15);
         // Primal residual: -(g - g_l) = -(0.7 - 1.0) = 0.3
         assert!((kkt.rhs[2] - 0.3).abs() < 1e-12);
     }
@@ -1904,7 +1920,7 @@ mod tests {
         let mut solver = DenseLdl::new();
         let mut params = InertiaCorrectionParams::default();
 
-        let (delta_w, delta_c) = factor_with_inertia_correction(&mut kkt, &mut solver, &mut params).unwrap();
+        let (delta_w, delta_c) = factor_with_inertia_correction(&mut kkt, &mut solver, &mut params, 1e-4).unwrap();
         assert!((delta_w).abs() < 1e-15, "Good inertia should need no delta_w");
         assert!((delta_c).abs() < 1e-15, "Good inertia should need no delta_c");
     }
@@ -1931,7 +1947,7 @@ mod tests {
         let mut solver = DenseLdl::new();
         let mut params = InertiaCorrectionParams::default();
 
-        let (delta_w, _delta_c) = factor_with_inertia_correction(&mut kkt, &mut solver, &mut params).unwrap();
+        let (delta_w, _delta_c) = factor_with_inertia_correction(&mut kkt, &mut solver, &mut params, 1e-4).unwrap();
         assert!(delta_w > 0.0, "Wrong inertia should require delta_w > 0");
     }
 
@@ -1958,7 +1974,7 @@ mod tests {
         let mut params = InertiaCorrectionParams::default();
         params.delta_w_last = 1.0; // Warm-start from previous
 
-        let (delta_w, _) = factor_with_inertia_correction(&mut kkt, &mut solver, &mut params).unwrap();
+        let (delta_w, _) = factor_with_inertia_correction(&mut kkt, &mut solver, &mut params, 1e-4).unwrap();
         // Should start from delta_w_last / growth = 1.0 / 8.0 = 0.125
         assert!(delta_w >= 0.125 - 1e-10, "Warm-start should begin from delta_w_last/growth");
     }
@@ -1985,7 +2001,7 @@ mod tests {
         };
         let mut solver = DenseLdl::new();
         let mut params = InertiaCorrectionParams::default();
-        let (delta_w, _dc) = factor_with_inertia_correction(&mut kkt, &mut solver, &mut params).unwrap();
+        let (delta_w, _dc) = factor_with_inertia_correction(&mut kkt, &mut solver, &mut params, 1e-4).unwrap();
         // Expect delta_w >= delta_w_init * growth (at least one escalation beyond initial attempt)
         assert!(delta_w >= params.delta_w_init,
             "delta_w should be at least delta_w_init, got {}", delta_w);
@@ -2022,7 +2038,7 @@ mod tests {
             ..Default::default()
         };
         // Must return Ok (fallthrough path proceeds with best perturbation, doesn't panic)
-        let result = factor_with_inertia_correction(&mut kkt, &mut solver, &mut params);
+        let result = factor_with_inertia_correction(&mut kkt, &mut solver, &mut params, 1e-4);
         assert!(result.is_ok(), "max-attempts path must return Ok, not error: {:?}", result.err());
         // A delta_c > 0 eventually flips one of the diagonals negative for the (2,2) block,
         // so the attempts cap may succeed before exhaustion. Either way, the function must
@@ -2054,7 +2070,7 @@ mod tests {
                 scale_factors: None,
             };
             let mut solver = DenseLdl::new();
-            factor_with_inertia_correction(&mut kkt, &mut solver, &mut params).unwrap();
+            factor_with_inertia_correction(&mut kkt, &mut solver, &mut params, 1e-4).unwrap();
         }
         assert!(params.structurally_degenerate,
             "after 3 perturbations, structurally_degenerate must latch on");
@@ -2079,7 +2095,7 @@ mod tests {
         };
         let mut solver = DenseLdl::new();
         let mut params = InertiaCorrectionParams::default();
-        let (delta_w, delta_c) = factor_with_inertia_correction(&mut kkt, &mut solver, &mut params).unwrap();
+        let (delta_w, delta_c) = factor_with_inertia_correction(&mut kkt, &mut solver, &mut params, 1e-4).unwrap();
         assert!(delta_w > 0.0, "indefinite unconstrained needs delta_w > 0, got {}", delta_w);
         assert_eq!(delta_c, 0.0, "unconstrained (m=0) must have delta_c = 0");
     }
@@ -2193,7 +2209,7 @@ mod tests {
         );
         let mut full_solver = DenseLdl::new();
         let mut params = InertiaCorrectionParams::default();
-        let (dw, dc) = factor_with_inertia_correction(&mut full_kkt, &mut full_solver, &mut params).unwrap();
+        let (dw, dc) = factor_with_inertia_correction(&mut full_kkt, &mut full_solver, &mut params, 1e-4).unwrap();
         let (dx_full, dy_full) = solve_for_direction(&full_kkt, &mut full_solver, dw, dc).unwrap();
 
         // Solve with condensed KKT
