@@ -5697,9 +5697,7 @@ fn check_stall_near_tolerance_via_optimal_duals(
     let opt_du = dual_inf_with_z(state, &opt_zl, &opt_zu);
     let opt_co = compl_err_with_z(state, &opt_zl, &opt_zu);
     let opt_co_best = compl_inf.min(opt_co);
-    let fmult: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
-        + opt_zl.iter().map(|v| v.abs()).sum::<f64>()
-        + opt_zu.iter().map(|v| v.abs()).sum::<f64>();
+    let fmult: f64 = l1_norm(&state.y) + l1_norm(&opt_zl) + l1_norm(&opt_zu);
     let fsd = compute_s_d_scaling(fmult, m + 2 * n);
     let stall_fdu_tol = (stall_near_tol * fsd).max(1e-2);
     let stall_fco_tol = (stall_near_tol * fsd).max(1e-2);
@@ -8886,6 +8884,16 @@ fn slice_min(v: &[f64]) -> f64 {
     v.iter().cloned().fold(f64::INFINITY, f64::min)
 }
 
+/// L1 (sum-of-absolute-values) norm of a slice. Centralises the
+/// seven sites that spell out
+/// `v.iter().map(|x| x.abs()).sum::<f64>()` inline — the three
+/// terms of compute_multiplier_sum and its near-feasibility cousin
+/// at line 5700–5702, and the dual-error sum-of-absolute-values
+/// in the IpoptApprox stop-criterion check.
+fn l1_norm(v: &[f64]) -> f64 {
+    v.iter().map(|x| x.abs()).sum::<f64>()
+}
+
 /// `kkt::compute_sigma` at the current iterate's
 /// `state.{x, x_l, x_u, z_l, z_u}`. Centralises the two callers —
 /// assemble_kkt_systems (main solve) and the perturbation recovery
@@ -8952,9 +8960,7 @@ fn commit_trial_point(
 /// Used together with `multiplier_count = m + 2*n` to compute the dual
 /// scaling factor `s_d` via `compute_s_d_scaling`.
 fn compute_multiplier_sum(state: &SolverState) -> f64 {
-    state.y.iter().map(|v| v.abs()).sum::<f64>()
-        + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
-        + state.z_u.iter().map(|v| v.abs()).sum::<f64>()
+    l1_norm(&state.y) + l1_norm(&state.z_l) + l1_norm(&state.z_u)
 }
 
 /// Build a `ConvergenceInfo` from the current iterate by computing the
@@ -9045,7 +9051,7 @@ fn compute_barrier_error(state: &SolverState) -> f64 {
     }
 
     let sd = n.max(1) as f64;
-    let dual_err = grad_lag.iter().map(|v| v.abs()).sum::<f64>() / sd;
+    let dual_err = l1_norm(&grad_lag) / sd;
 
     // Complementarity error (relative to mu)
     let mut compl_err = 0.0;
