@@ -389,11 +389,11 @@ impl LbfgsIpmState {
             return;
         }
 
-        let sy: f64 = s_k.iter().zip(y_k.iter()).map(|(s, y)| s * y).sum();
+        let sy: f64 = dot_product(&s_k, &y_k);
 
         // Compute B_k * s_k for Powell damping
         let bs = self.multiply_bk(&s_k);
-        let sbs: f64 = s_k.iter().zip(bs.iter()).map(|(s, b)| s * b).sum();
+        let sbs: f64 = dot_product(&s_k, &bs);
 
         // Powell damping: ensure s^T y >= 0.2 * s^T B s
         if sy >= 0.2 * sbs {
@@ -410,7 +410,7 @@ impl LbfgsIpmState {
         }
 
         // Verify positive curvature after damping
-        let sy_damped: f64 = s_k.iter().zip(y_k.iter()).map(|(s, y)| s * y).sum();
+        let sy_damped: f64 = dot_product(&s_k, &y_k);
         if sy_damped <= 1e-20 {
             self.prev_x.copy_from_slice(new_x);
             self.prev_lag_grad.copy_from_slice(new_lag_grad);
