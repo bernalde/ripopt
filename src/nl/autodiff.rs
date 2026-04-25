@@ -1,4 +1,37 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use super::expr::{BinaryOp, ExprNode, NaryOp, UnaryOp};
+use super::external::{ExternalArg, ExternalLibrary};
+
+/// One argument to an AMPL external (imported) function call on the tape.
+///
+/// The AMPL `arglist` ABI preserves the positional order of arguments while
+/// routing reals through `ra[]` and strings through `sa[]`. We mirror that:
+/// real args are represented as tape indices so their values are fetched
+/// from the running `vals[]`, while string args are owned literals.
+#[derive(Debug, Clone)]
+pub enum FuncallArg {
+    /// Index into the tape — real-valued child result.
+    Tape(usize),
+    /// String literal passed verbatim to the external library.
+    Str(String),
+}
+
+/// Resolution of NL-declared `ImportedFunc` ids to a live shared library
+/// plus the name the library registered under. Produced once in
+/// `NlProblem::from_nl_data` and consumed by tape builders.
+#[derive(Default, Clone)]
+pub struct ExternalResolver {
+    /// `Funcall { id }` -> (library, registered function name).
+    pub funcs_by_id: HashMap<usize, (Arc<ExternalLibrary>, String)>,
+}
+
+impl ExternalResolver {
+    pub fn is_empty(&self) -> bool {
+        self.funcs_by_id.is_empty()
+    }
+}
 
 /// A single operation in the flattened tape.
 #[derive(Debug, Clone)]
@@ -34,6 +67,13 @@ pub enum TapeOp {
     Asinh(usize),
     Acosh(usize),
     Atanh(usize),
+    /// AMPL imported (external) function call. The library is kept alive
+    /// by the Arc; `name` is used to dispatch to the registered `rfunc`.
+    Funcall {
+        lib: Arc<ExternalLibrary>,
+        name: String,
+        args: Vec<FuncallArg>,
+    },
 }
 
 /// Flattened expression tape for efficient forward evaluation and reverse-mode AD.
@@ -51,13 +91,29 @@ pub struct CommonExprCache {
 }
 
 impl CommonExprCache {
-    /// Build a cache of all common expression tapes.
+    /// Build a cache of all common expression tapes (no external functions).
     pub fn build(common_exprs: &[ExprNode], n_vars: usize) -> Self {
+        Self::build_with_externals(common_exprs, n_vars, &ExternalResolver::default())
+    }
+
+    /// Build a cache of all common expression tapes, resolving AMPL external
+    /// function calls via `resolver`.
+    pub fn build_with_externals(
+        common_exprs: &[ExprNode],
+        n_vars: usize,
+        resolver: &ExternalResolver,
+    ) -> Self {
         let mut entries: Vec<Option<(Vec<TapeOp>, usize)>> = Vec::with_capacity(common_exprs.len());
-        // Build each common expression tape, allowing it to reference earlier ones
         for i in 0..common_exprs.len() {
             let mut ops = Vec::new();
-            let result_idx = build_recursive_cached(&common_exprs[i], common_exprs, n_vars, &mut ops, &entries);
+            let result_idx = build_recursive_cached(
+                &common_exprs[i],
+                common_exprs,
+                n_vars,
+                &mut ops,
+                &entries,
+                resolver,
+            );
             entries.push(Some((ops, result_idx)));
         }
         CommonExprCache { entries }
@@ -65,18 +121,58 @@ impl CommonExprCache {
 }
 
 impl Tape {
-    /// Build a tape from an expression tree.
-    /// Common expressions are inlined (substituted) when encountered.
+    /// Build a tape from an expression tree (no external functions).
     pub fn build(expr: &ExprNode, common_exprs: &[ExprNode], n_vars: usize) -> Self {
+        Self::build_with_externals(expr, common_exprs, n_vars, &ExternalResolver::default())
+    }
+
+    /// Build a tape from an expression tree, resolving any AMPL external
+    /// function calls via `resolver`.
+    pub fn build_with_externals(
+        expr: &ExprNode,
+        common_exprs: &[ExprNode],
+        n_vars: usize,
+        resolver: &ExternalResolver,
+    ) -> Self {
         let mut ops = Vec::new();
-        build_recursive(expr, common_exprs, n_vars, &mut ops);
+        build_recursive(expr, common_exprs, n_vars, &mut ops, resolver);
         Tape { ops, n_vars }
     }
 
-    /// Build a tape using pre-cached common expressions (avoids exponential blowup).
-    pub fn build_cached(expr: &ExprNode, common_exprs: &[ExprNode], n_vars: usize, cache: &CommonExprCache) -> Self {
+    /// Build a tape using pre-cached common expressions (no externals).
+    pub fn build_cached(
+        expr: &ExprNode,
+        common_exprs: &[ExprNode],
+        n_vars: usize,
+        cache: &CommonExprCache,
+    ) -> Self {
+        Self::build_cached_with_externals(
+            expr,
+            common_exprs,
+            n_vars,
+            cache,
+            &ExternalResolver::default(),
+        )
+    }
+
+    /// Build a tape using pre-cached common expressions, resolving AMPL
+    /// external function calls via `resolver`.
+    pub fn build_cached_with_externals(
+        expr: &ExprNode,
+        common_exprs: &[ExprNode],
+        n_vars: usize,
+        cache: &CommonExprCache,
+        resolver: &ExternalResolver,
+    ) -> Self {
         let mut ops = Vec::new();
-        build_recursive_cached(expr, common_exprs, n_vars, &mut ops, &cache.entries);
+        build_recursive_cached(
+            expr,
+            common_exprs,
+            n_vars,
+            &mut ops,
+            &cache.entries,
+            resolver,
+        );
         Tape { ops, n_vars }
     }
 
@@ -123,6 +219,15 @@ impl Tape {
                 TapeOp::Asinh(a) => vals[*a].asinh(),
                 TapeOp::Acosh(a) => vals[*a].acosh(),
                 TapeOp::Atanh(a) => vals[*a].atanh(),
+                TapeOp::Funcall { lib, name, args } => {
+                    let call_args = funcall_ext_args(args, &vals);
+                    let res = lib
+                        .eval(name, &call_args, false, false)
+                        .unwrap_or_else(|e| {
+                            panic!("external function '{name}' forward eval failed: {e}")
+                        });
+                    res.value
+                }
             };
             vals.push(v);
         }
@@ -295,6 +400,25 @@ impl Tape {
                 TapeOp::Atanh(j) => {
                     adj[*j] += a / (1.0 - vals[*j] * vals[*j]);
                 }
+                TapeOp::Funcall { lib, name, args } => {
+                    // Re-enter the library with want_derivs=true to get df/dx_k
+                    // for each real arg k (in `ra[]` order, which matches the
+                    // order of FuncallArg::Tape entries).
+                    let call_args = funcall_ext_args(args, vals);
+                    let res = lib
+                        .eval(name, &call_args, true, false)
+                        .unwrap_or_else(|e| {
+                            panic!("external function '{name}' reverse eval failed: {e}")
+                        });
+                    let derivs = res.derivs.expect("want_derivs=true returns derivs");
+                    let mut k = 0usize;
+                    for arg in args {
+                        if let FuncallArg::Tape(idx) = arg {
+                            adj[*idx] += a * derivs[k];
+                            k += 1;
+                        }
+                    }
+                }
             }
         }
     }
@@ -358,6 +482,25 @@ impl Tape {
                 TapeOp::Asinh(a) => dot[*a] / (vals[*a] * vals[*a] + 1.0).sqrt(),
                 TapeOp::Acosh(a) => dot[*a] / (vals[*a] * vals[*a] - 1.0).sqrt(),
                 TapeOp::Atanh(a) => dot[*a] / (1.0 - vals[*a] * vals[*a]),
+                TapeOp::Funcall { lib, name, args } => {
+                    // dot[i] = sum_k (df/dx_k) * dot[arg_k_tape_idx]
+                    let call_args = funcall_ext_args(args, vals);
+                    let res = lib
+                        .eval(name, &call_args, true, false)
+                        .unwrap_or_else(|e| {
+                            panic!("external function '{name}' tangent eval failed: {e}")
+                        });
+                    let derivs = res.derivs.expect("want_derivs=true returns derivs");
+                    let mut acc = 0.0;
+                    let mut k = 0usize;
+                    for arg in args {
+                        if let FuncallArg::Tape(idx) = arg {
+                            acc += derivs[k] * dot[*idx];
+                            k += 1;
+                        }
+                    }
+                    acc
+                }
             };
         }
         dot
@@ -619,6 +762,46 @@ impl Tape {
                         adj[*a] += w / d;
                         adj_dot[*a] += wd / d + w * (2.0 * u / (d * d)) * dot[*a];
                     }
+                    TapeOp::Funcall { lib, name, args } => {
+                        // Full second-order propagation through an external
+                        // function. Treat F: R^nr -> R; let p_k = dF/dra[k]
+                        // and H_kl = d^2F/dra[k]/dra[l] (packed upper-tri).
+                        //
+                        //   adj[ti[k]]     += w * p_k
+                        //   adj_dot[ti[k]] += wd * p_k
+                        //                    + w * sum_l ( H_kl * dot[ti[l]] )
+                        let call_args = funcall_ext_args(args, &v);
+                        let res = lib
+                            .eval(name, &call_args, true, true)
+                            .unwrap_or_else(|e| {
+                                panic!(
+                                    "external function '{name}' 2nd-order eval failed: {e}"
+                                )
+                            });
+                        let derivs =
+                            res.derivs.expect("want_derivs=true returns derivs");
+                        let hes = res.hessian.expect("want_hes=true returns hessian");
+
+                        // Collect the tape indices of real args (in ra[] order).
+                        let real_tape: Vec<usize> = args
+                            .iter()
+                            .filter_map(|a| match a {
+                                FuncallArg::Tape(t) => Some(*t),
+                                FuncallArg::Str(_) => None,
+                            })
+                            .collect();
+
+                        for (k, &tk) in real_tape.iter().enumerate() {
+                            adj[tk] += w * derivs[k];
+                            let mut second_term = 0.0;
+                            for (l, &tl) in real_tape.iter().enumerate() {
+                                let (lo, hi) = if k <= l { (k, l) } else { (l, k) };
+                                let h_kl = hes[lo + hi * (hi + 1) / 2];
+                                second_term += h_kl * dot[tl];
+                            }
+                            adj_dot[tk] += wd * derivs[k] + w * second_term;
+                        }
+                    }
                 }
             }
         }
@@ -708,12 +891,39 @@ impl Tape {
                     emit_self(&var_sets[*a], &mut hess_pairs);
                     var_sets[*a].clone()
                 }
+                // External function: treat as a dense block over the union
+                // of variables influencing any real-valued argument. String
+                // args contribute nothing to sparsity.
+                TapeOp::Funcall { args, .. } => {
+                    let mut combined: BTreeSet<usize> = BTreeSet::new();
+                    for arg in args {
+                        if let FuncallArg::Tape(t) = arg {
+                            for &v in &var_sets[*t] {
+                                combined.insert(v);
+                            }
+                        }
+                    }
+                    emit_self(&combined, &mut hess_pairs);
+                    combined
+                }
             };
             var_sets.push(vset);
         }
 
         hess_pairs
     }
+}
+
+/// Build the `ExternalArg` slice passed to `ExternalLibrary::eval`, reading
+/// current real-arg values from the running tape `vals[]`. The positional
+/// ordering (mixed real/string) is preserved exactly.
+fn funcall_ext_args<'a>(args: &'a [FuncallArg], vals: &[f64]) -> Vec<ExternalArg<'a>> {
+    args.iter()
+        .map(|a| match a {
+            FuncallArg::Tape(t) => ExternalArg::Real(vals[*t]),
+            FuncallArg::Str(s) => ExternalArg::Str(s.as_str()),
+        })
+        .collect()
 }
 
 /// Recursively flatten an expression tree into tape operations.
@@ -723,6 +933,7 @@ fn build_recursive(
     common_exprs: &[ExprNode],
     n_vars: usize,
     ops: &mut Vec<TapeOp>,
+    resolver: &ExternalResolver,
 ) -> usize {
     match expr {
         ExprNode::Const(c) => {
@@ -739,7 +950,7 @@ fn build_recursive(
                 // Common sub-expression: inline it
                 let ce_idx = *i - n_vars;
                 if ce_idx < common_exprs.len() {
-                    build_recursive(&common_exprs[ce_idx], common_exprs, n_vars, ops)
+                    build_recursive(&common_exprs[ce_idx], common_exprs, n_vars, ops, resolver)
                 } else {
                     // Missing common expr, treat as 0
                     let idx = ops.len();
@@ -749,8 +960,8 @@ fn build_recursive(
             }
         }
         ExprNode::Binary(op, left, right) => {
-            let l = build_recursive(left, common_exprs, n_vars, ops);
-            let r = build_recursive(right, common_exprs, n_vars, ops);
+            let l = build_recursive(left, common_exprs, n_vars, ops, resolver);
+            let r = build_recursive(right, common_exprs, n_vars, ops, resolver);
             let idx = ops.len();
             ops.push(match op {
                 BinaryOp::Add => TapeOp::Add(l, r),
@@ -766,7 +977,7 @@ fn build_recursive(
             idx
         }
         ExprNode::Unary(op, arg) => {
-            let a = build_recursive(arg, common_exprs, n_vars, ops);
+            let a = build_recursive(arg, common_exprs, n_vars, ops, resolver);
             let idx = ops.len();
             ops.push(match op {
                 UnaryOp::Abs => TapeOp::Abs(a),
@@ -803,9 +1014,9 @@ fn build_recursive(
                 return idx;
             }
             // For Sum, chain binary adds. For Min/Max, use Less or binary comparisons.
-            let mut acc = build_recursive(&args[0], common_exprs, n_vars, ops);
+            let mut acc = build_recursive(&args[0], common_exprs, n_vars, ops, resolver);
             for arg in &args[1..] {
-                let next = build_recursive(arg, common_exprs, n_vars, ops);
+                let next = build_recursive(arg, common_exprs, n_vars, ops, resolver);
                 match op {
                     NaryOp::Sum => {
                         let idx = ops.len();
@@ -834,30 +1045,47 @@ fn build_recursive(
             acc
         }
         ExprNode::If(cond, then_expr, else_expr) => {
-            // Evaluate condition, then choose branch.
-            // For AD: treat as piecewise smooth, differentiate through the active branch.
-            // We evaluate the condition using forward eval, but in the tape we need to
-            // include both branches. For simplicity, we'll use a runtime branch:
-            // just evaluate both and select. This is wasteful but correct for AD.
-            // Actually, for the tape approach, we need a conditional op.
-            // Simpler: don't tape if-then-else; fall back to tree evaluation.
-            // For now, inline both branches and use: cond > 0 ? then : else
-            // approximated as: then * step(cond) + else * (1 - step(cond))
-            // But this has zero gradient through step.
-            //
-            // Pragmatic: just build both branches into tape and add a Select op.
-            // For AD, differentiate through the active branch only.
-            // If-then-else: evaluate all branches, approximate as "then" branch
-            // for AD. Most NLP problems don't use if-then-else.
-            let _c = build_recursive(cond, common_exprs, n_vars, ops);
-            let t = build_recursive(then_expr, common_exprs, n_vars, ops);
-            let _e = build_recursive(else_expr, common_exprs, n_vars, ops);
+            // If-then-else: approximate as "then" branch for AD; most NLP
+            // problems don't use it meaningfully.
+            let _c = build_recursive(cond, common_exprs, n_vars, ops, resolver);
+            let t = build_recursive(then_expr, common_exprs, n_vars, ops, resolver);
+            let _e = build_recursive(else_expr, common_exprs, n_vars, ops, resolver);
             t
         }
         ExprNode::StringLiteral(_) => {
             let _idx = ops.len();
             ops.push(TapeOp::Const(0.0));
             _idx
+        }
+        ExprNode::Funcall { id, args } => {
+            let (lib, name) = resolver.funcs_by_id.get(id).cloned().unwrap_or_else(|| {
+                panic!(
+                    "build_recursive: no ExternalResolver entry for Funcall id={id}; \
+                     NlProblem::from_nl_data should have loaded this library"
+                )
+            });
+            // Positional args: strings go through verbatim; every other
+            // ExprNode is built recursively and stored as a tape index.
+            let built_args: Vec<FuncallArg> = args
+                .iter()
+                .map(|a| match a {
+                    ExprNode::StringLiteral(s) => FuncallArg::Str(s.clone()),
+                    other => FuncallArg::Tape(build_recursive(
+                        other,
+                        common_exprs,
+                        n_vars,
+                        ops,
+                        resolver,
+                    )),
+                })
+                .collect();
+            let idx = ops.len();
+            ops.push(TapeOp::Funcall {
+                lib,
+                name,
+                args: built_args,
+            });
+            idx
         }
     }
 }
@@ -896,6 +1124,17 @@ fn remap_op(op: &TapeOp, offset: usize) -> TapeOp {
         TapeOp::Asinh(a) => TapeOp::Asinh(a + offset),
         TapeOp::Acosh(a) => TapeOp::Acosh(a + offset),
         TapeOp::Atanh(a) => TapeOp::Atanh(a + offset),
+        TapeOp::Funcall { lib, name, args } => TapeOp::Funcall {
+            lib: lib.clone(),
+            name: name.clone(),
+            args: args
+                .iter()
+                .map(|a| match a {
+                    FuncallArg::Tape(t) => FuncallArg::Tape(t + offset),
+                    FuncallArg::Str(s) => FuncallArg::Str(s.clone()),
+                })
+                .collect(),
+        },
     }
 }
 
@@ -907,6 +1146,7 @@ fn build_recursive_cached(
     n_vars: usize,
     ops: &mut Vec<TapeOp>,
     cache: &[Option<(Vec<TapeOp>, usize)>],
+    resolver: &ExternalResolver,
 ) -> usize {
     match expr {
         ExprNode::Const(c) => {
@@ -942,8 +1182,8 @@ fn build_recursive_cached(
             }
         }
         ExprNode::Binary(op, left, right) => {
-            let l = build_recursive_cached(left, common_exprs, n_vars, ops, cache);
-            let r = build_recursive_cached(right, common_exprs, n_vars, ops, cache);
+            let l = build_recursive_cached(left, common_exprs, n_vars, ops, cache, resolver);
+            let r = build_recursive_cached(right, common_exprs, n_vars, ops, cache, resolver);
             let idx = ops.len();
             ops.push(match op {
                 BinaryOp::Add => TapeOp::Add(l, r),
@@ -959,7 +1199,7 @@ fn build_recursive_cached(
             idx
         }
         ExprNode::Unary(op, arg) => {
-            let a = build_recursive_cached(arg, common_exprs, n_vars, ops, cache);
+            let a = build_recursive_cached(arg, common_exprs, n_vars, ops, cache, resolver);
             let idx = ops.len();
             ops.push(match op {
                 UnaryOp::Abs => TapeOp::Abs(a),
@@ -995,9 +1235,9 @@ fn build_recursive_cached(
                 }));
                 return idx;
             }
-            let mut acc = build_recursive_cached(&args[0], common_exprs, n_vars, ops, cache);
+            let mut acc = build_recursive_cached(&args[0], common_exprs, n_vars, ops, cache, resolver);
             for arg in &args[1..] {
-                let next = build_recursive_cached(arg, common_exprs, n_vars, ops, cache);
+                let next = build_recursive_cached(arg, common_exprs, n_vars, ops, cache, resolver);
                 match op {
                     NaryOp::Sum => {
                         let idx = ops.len();
@@ -1025,14 +1265,43 @@ fn build_recursive_cached(
             acc
         }
         ExprNode::If(cond, then_expr, else_expr) => {
-            let _c = build_recursive_cached(cond, common_exprs, n_vars, ops, cache);
-            let t = build_recursive_cached(then_expr, common_exprs, n_vars, ops, cache);
-            let _e = build_recursive_cached(else_expr, common_exprs, n_vars, ops, cache);
+            let _c = build_recursive_cached(cond, common_exprs, n_vars, ops, cache, resolver);
+            let t = build_recursive_cached(then_expr, common_exprs, n_vars, ops, cache, resolver);
+            let _e = build_recursive_cached(else_expr, common_exprs, n_vars, ops, cache, resolver);
             t
         }
         ExprNode::StringLiteral(_) => {
             let idx = ops.len();
             ops.push(TapeOp::Const(0.0));
+            idx
+        }
+        ExprNode::Funcall { id, args } => {
+            let (lib, name) = resolver.funcs_by_id.get(id).cloned().unwrap_or_else(|| {
+                panic!(
+                    "build_recursive_cached: no ExternalResolver entry for Funcall \
+                     id={id}; NlProblem::from_nl_data should have loaded this library"
+                )
+            });
+            let built_args: Vec<FuncallArg> = args
+                .iter()
+                .map(|a| match a {
+                    ExprNode::StringLiteral(s) => FuncallArg::Str(s.clone()),
+                    other => FuncallArg::Tape(build_recursive_cached(
+                        other,
+                        common_exprs,
+                        n_vars,
+                        ops,
+                        cache,
+                        resolver,
+                    )),
+                })
+                .collect();
+            let idx = ops.len();
+            ops.push(TapeOp::Funcall {
+                lib,
+                name,
+                args: built_args,
+            });
             idx
         }
     }

@@ -58,6 +58,9 @@ pub enum ExprNode {
     If(Box<ExprNode>, Box<ExprNode>, Box<ExprNode>),
     /// String literal (ignored in evaluation).
     StringLiteral(String),
+    /// AMPL imported (external) function call. Cannot be evaluated natively —
+    /// callers must surface an error before any evaluation occurs.
+    Funcall { id: usize, args: Vec<ExprNode> },
 }
 
 /// Parse a prefix-notation expression tree from NL file lines.
@@ -95,6 +98,21 @@ pub fn parse_expr<'a>(lines: &mut impl Iterator<Item = &'a str>) -> Result<ExprN
             .parse()
             .map_err(|e| format!("Bad opcode '{}': {}", &token[1..], e))?;
         parse_op(opcode, lines)
+    } else if token.starts_with('f') {
+        // AMPL imported (external) function call: `f<id> <nargs>` on one line,
+        // followed by nargs child expressions (each possibly multi-line).
+        let rest = &token[1..];
+        let mut parts = rest.split_whitespace();
+        let id_str = parts.next().ok_or_else(|| format!("Missing function id in '{}'", token))?;
+        let nargs_str = parts.next().ok_or_else(|| format!("Missing nargs in '{}'", token))?;
+        let id: usize = id_str
+            .parse()
+            .map_err(|e| format!("Bad function id '{}': {}", id_str, e))?;
+        let nargs: usize = nargs_str
+            .parse()
+            .map_err(|e| format!("Bad funcall nargs '{}': {}", nargs_str, e))?;
+        let args: Result<Vec<_>, _> = (0..nargs).map(|_| parse_expr(lines)).collect();
+        Ok(ExprNode::Funcall { id, args: args? })
     } else {
         Err(format!("Unknown expression token: '{}'", token))
     }
@@ -265,5 +283,8 @@ pub fn eval_expr(node: &ExprNode, vals: &[f64]) -> f64 {
             }
         }
         ExprNode::StringLiteral(_) => 0.0,
+        ExprNode::Funcall { .. } => unreachable!(
+            "ExprNode::Funcall should have been rejected by NlProblem::from_nl_data"
+        ),
     }
 }

@@ -1,6 +1,18 @@
 use super::expr::{self, ExprNode};
 use super::header::{self, NlHeader};
 
+/// AMPL imported (external) function declaration from an `F` segment.
+#[derive(Debug, Clone)]
+pub struct ImportedFunc {
+    pub id: usize,
+    /// 0 = real-valued, 1 = string-valued (per AMPL's funcadd ABI).
+    pub kind: usize,
+    /// Declared number of arguments (may be -1 for variable-arity in the spec;
+    /// we store the raw decoded value as read).
+    pub nargs: i64,
+    pub name: String,
+}
+
 /// Raw parsed data from an NL file.
 #[derive(Debug)]
 pub struct NlFileData {
@@ -28,6 +40,8 @@ pub struct NlFileData {
     pub y0: Vec<f64>,
     /// Jacobian column pointers (cumulative), from k segment.
     pub jac_col_ptrs: Vec<usize>,
+    /// AMPL imported functions declared via `F` segments.
+    pub imported_funcs: Vec<ImportedFunc>,
 }
 
 /// Parse an NL file from its text content.
@@ -52,6 +66,7 @@ pub fn parse_nl_file(content: &str) -> Result<NlFileData, String> {
         x0: vec![0.0; n],
         y0: vec![0.0; m],
         jac_col_ptrs: Vec::new(),
+        imported_funcs: Vec::new(),
         header,
     };
 
@@ -343,6 +358,28 @@ pub fn parse_nl_file(content: &str) -> Result<NlFileData, String> {
                 let count = parse_segment_count_after_space(line)?;
                 pos += 1 + count;
             }
+            b'F' => {
+                // AMPL imported (external) function declaration:
+                // `F<k> <type> <nargs> <name>` — all on one line.
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                let id = parse_segment_index(parts[0], 'F')?;
+                let kind: usize = parts
+                    .get(1)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                let nargs: i64 = parts
+                    .get(2)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                let name = parts.get(3).copied().unwrap_or("").to_string();
+                data.imported_funcs.push(ImportedFunc {
+                    id,
+                    kind,
+                    nargs,
+                    name,
+                });
+                pos += 1;
+            }
             _ => {
                 pos += 1;
             }
@@ -426,6 +463,15 @@ fn count_expr_lines_recursive(lines: &[&str], pos: &mut usize) {
 
     if token.starts_with('n') || token.starts_with('v') || token.starts_with('h') {
         // Leaf node: 1 line
+    } else if token.starts_with('f') {
+        // Funcall: `f<id> <nargs>` on the current line, then nargs sub-expressions.
+        let rest = &token[1..];
+        let mut parts = rest.split_whitespace();
+        let _id = parts.next().unwrap_or("0");
+        let nargs: usize = parts.next().unwrap_or("0").parse().unwrap_or(0);
+        for _ in 0..nargs {
+            count_expr_lines_recursive(lines, pos);
+        }
     } else if token.starts_with('o') {
         let opcode: usize = token[1..].parse().unwrap_or(0);
         match opcode {

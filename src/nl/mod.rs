@@ -1,5 +1,6 @@
 pub mod autodiff;
 pub mod expr;
+pub mod external;
 pub mod header;
 pub mod parser;
 pub mod problem_impl;

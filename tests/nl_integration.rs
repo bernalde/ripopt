@@ -1,6 +1,13 @@
 use ripopt::nl::{parse_nl_file, NlProblem, write_sol};
 use ripopt::{NlpProblem, SolveResult, SolveStatus, SolverOptions};
 
+/// Shared lock for tests that mutate process-global env vars (AMPLFUNC).
+/// Tests that would otherwise race for that state take this lock first.
+fn env_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
 /// Helper: solve an NlProblem with default options (quiet).
 fn solve_nl(problem: &NlProblem) -> SolveResult {
     let mut opts = SolverOptions::default();
@@ -268,7 +275,7 @@ x2
 1 2
 ";
     let data = parse_nl_file(nl).expect("parse failed");
-    let problem = NlProblem::from_nl_data(data);
+    let problem = NlProblem::from_nl_data(data).expect("build failed");
 
     // Evaluate objective at initial point x=(1,2)
     let x = vec![1.0, 2.0];
@@ -318,7 +325,7 @@ x3
 2 3
 ";
     let data = parse_nl_file(nl).expect("parse failed");
-    let problem = NlProblem::from_nl_data(data);
+    let problem = NlProblem::from_nl_data(data).expect("build failed");
 
     let x = vec![1.0, 2.0, 3.0];
     let mut f = 0.0; problem.objective(&x, true, &mut f);
@@ -373,7 +380,7 @@ x2
 1 1
 ";
     let data = parse_nl_file(nl).expect("parse failed");
-    let problem = NlProblem::from_nl_data(data);
+    let problem = NlProblem::from_nl_data(data).expect("build failed");
     let result = solve_nl(&problem);
 
     assert_eq!(
@@ -440,5 +447,185 @@ fn nl_sol_writer() {
     assert!(
         output.contains("\n1\n"),
         "SOL should contain constraint count"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// External (AMPL imported) functions (issue #15)
+// ---------------------------------------------------------------------------
+
+/// Parser must accept NL files with F segments and `f<id> <nargs>` expressions
+/// without raising "Unknown expression token". Solve-time construction must
+/// reject the problem with a clear, named error referring to the function.
+#[test]
+fn nl_parse_external_function_reports_clean_error() {
+    // Problem:
+    //   minimize myfunc(x0)
+    //   s.t.     x0 >= 0
+    // Header carries nfunc=1 on dim line 4 (field 1). The F0 segment declares
+    // `myfunc` as a real-valued (type 0) one-argument function. The objective
+    // uses the `f0 1` call with a single argument v0.
+    let nl = "\
+g3 1 1 0
+ 1 0 1 0 0
+ 0 1
+ 0 0
+ 1 0 1
+ 0 1 0 0
+ 0 0 0 0 0
+ 0 1
+ 0 0
+ 0 0 0 0 0
+F0 0 1 myfunc
+O0 0
+f0 1
+v0
+b
+2 0.0
+k0
+G0 1
+0 0
+x1
+0 1
+";
+    let data = parse_nl_file(nl).expect("parse should succeed with f/F tokens");
+    assert_eq!(data.imported_funcs.len(), 1);
+    assert_eq!(data.imported_funcs[0].id, 0);
+    assert_eq!(data.imported_funcs[0].name, "myfunc");
+    assert_eq!(data.header.n_funcs, 1);
+
+    let err = NlProblem::from_nl_data(data)
+        .err()
+        .expect("from_nl_data should reject external functions");
+    assert!(
+        err.contains("myfunc") && err.contains("external function"),
+        "error should name the function and mention external functions, got: {err}"
+    );
+}
+
+/// Regression fixture: the real `.nl` file produced by the IDAES Helmholtz
+/// example in issue #15 (CMarcher). Before this patch the parser failed with
+/// `Unknown expression token: 'f0 4'`; now the parser must accept all three
+/// `F`-segment declarations and the `f<id> <nargs>` calls, and construction
+/// must reject the problem with a clear, named error.
+#[test]
+fn nl_parse_idaes_helmholtz_fixture() {
+    let nl = include_str!("fixtures/issue_15/idaes_helmholtz.nl");
+    let data = parse_nl_file(nl).expect("IDAES fixture should parse without Unknown token error");
+
+    // Header carries three imported functions (see dim line 4 of the fixture).
+    assert_eq!(data.header.n_funcs, 3, "expected nfunc=3");
+    assert_eq!(data.imported_funcs.len(), 3);
+    let names: Vec<String> = data
+        .imported_funcs
+        .iter()
+        .map(|f| f.name.clone())
+        .collect();
+    assert!(names.iter().any(|n| n == "vf_hp"), "expected vf_hp in {names:?}");
+    assert!(names.iter().any(|n| n == "h_liq_hp"), "expected h_liq_hp in {names:?}");
+    assert!(names.iter().any(|n| n == "h_vap_hp"), "expected h_vap_hp in {names:?}");
+
+    // Exercise the "no AMPLFUNC" path. Take the env lock so this doesn't
+    // race with nl_build_idaes_helmholtz_with_amplfunc, and clear AMPLFUNC
+    // for the duration of the call.
+    let _g = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let prev = std::env::var_os("AMPLFUNC");
+    std::env::remove_var("AMPLFUNC");
+    let err_result = NlProblem::from_nl_data(data);
+    if let Some(v) = prev {
+        std::env::set_var("AMPLFUNC", v);
+    }
+
+    let err = err_result
+        .err()
+        .expect("IDAES Helmholtz problem must be rejected when AMPLFUNC is unset");
+    assert!(
+        err.contains("external function"),
+        "error should mention external functions, got: {err}"
+    );
+    assert!(
+        names.iter().any(|n| err.contains(n)),
+        "error should name one of the imported functions, got: {err}"
+    );
+}
+
+/// With `AMPLFUNC` pointing at the IDAES Helmholtz dylib, the IDAES fixture
+/// should actually build into an `NlProblem` — that means tape-level
+/// `Funcall` nodes were resolved against the loaded library. Skip when the
+/// dylib isn't installed locally; this isn't a ripopt bug.
+#[test]
+fn nl_build_idaes_helmholtz_with_amplfunc() {
+    let home = match std::env::var_os("HOME") {
+        Some(h) => std::path::PathBuf::from(h),
+        None => return,
+    };
+    let dylib = home.join(".idaes/bin/general_helmholtz_external.dylib");
+    if !dylib.exists() {
+        eprintln!("skipping: {} not installed", dylib.display());
+        return;
+    }
+
+    let nl = include_str!("fixtures/issue_15/idaes_helmholtz.nl");
+    let data = parse_nl_file(nl).expect("parse");
+
+    // Safety: env is process-global. This test stomps AMPLFUNC for its run;
+    // we restore it at the end so neighbouring tests aren't affected. Take the
+    // env lock so this doesn't race with nl_parse_idaes_helmholtz_fixture.
+    let _g = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let prev = std::env::var_os("AMPLFUNC");
+    // SAFETY: `std::env::set_var` is only unsafe in the edition-2024 sense;
+    // in this crate's 2021 edition it's a stable safe function.
+    std::env::set_var("AMPLFUNC", dylib.as_os_str());
+    let result = NlProblem::from_nl_data(data);
+    match prev {
+        Some(v) => std::env::set_var("AMPLFUNC", v),
+        None => std::env::remove_var("AMPLFUNC"),
+    }
+
+    let _problem = result.expect("from_nl_data should succeed with AMPLFUNC set");
+}
+
+/// When the same `f<id>` token appears in a constraint, the error should
+/// still surface — not a parse failure on the token.
+#[test]
+fn nl_parse_external_function_in_constraint() {
+    // Problem:
+    //   minimize x0
+    //   s.t.     g(x0) == 0   with g(.) = myfunc(.)
+    let nl = "\
+g3 1 1 0
+ 1 1 1 0 1
+ 1 1
+ 0 0
+ 1 1 1
+ 0 1 0 0
+ 0 0 0 0 0
+ 1 1
+ 0 0
+ 0 0 0 0 0
+F0 0 1 myfunc
+C0
+f0 1
+v0
+O0 0
+n0
+r
+4 0
+b
+3
+k0
+0
+J0 1
+0 1
+G0 1
+0 1
+x1
+0 1
+";
+    let data = parse_nl_file(nl).expect("parse should succeed");
+    let err = NlProblem::from_nl_data(data).err().expect("should reject");
+    assert!(
+        err.contains("myfunc"),
+        "error should name the function, got: {err}"
     );
 }
