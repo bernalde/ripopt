@@ -3351,6 +3351,45 @@ fn solve_with_quality_escalation(
 /// the affine direction (dx_aff, dz_l_aff, dz_u_aff) and μ_pc.
 /// Returns None when the affine solve fails or no bound
 /// constraints contributed to μ_aff.
+/// Compute the affine complementarity μ_aff = (1/N) Σ s⁺(α) · z⁺(α)
+/// over active bounds, where s⁺ and z⁺ are the affine-step trial
+/// slacks and bound multipliers. Each slack/multiplier is floored at
+/// 1e-20 to keep the product bounded against trial points that touch
+/// a bound. Returns `None` when no bounds are active (so σ_Mehrotra
+/// is undefined and the caller should skip the corrector).
+fn compute_affine_complementarity(
+    state: &SolverState,
+    dx_aff: &[f64],
+    dz_l_aff: &[f64],
+    dz_u_aff: &[f64],
+    alpha_aff: f64,
+    n: usize,
+) -> Option<f64> {
+    let mut mu_aff_sum = 0.0_f64;
+    let mut nb: usize = 0;
+    for i in 0..n {
+        if state.x_l[i].is_finite() {
+            let s = (state.x[i] + alpha_aff * dx_aff[i]
+                - state.x_l[i]).max(1e-20);
+            let z = (state.z_l[i] + alpha_aff * dz_l_aff[i]).max(1e-20);
+            mu_aff_sum += s * z;
+            nb += 1;
+        }
+        if state.x_u[i].is_finite() {
+            let s = (state.x_u[i] - state.x[i]
+                - alpha_aff * dx_aff[i]).max(1e-20);
+            let z = (state.z_u[i] + alpha_aff * dz_u_aff[i]).max(1e-20);
+            mu_aff_sum += s * z;
+            nb += 1;
+        }
+    }
+    if nb == 0 {
+        None
+    } else {
+        Some(mu_aff_sum / nb as f64)
+    }
+}
+
 fn try_mehrotra_predictor(
     state: &SolverState,
     options: &SolverOptions,
@@ -3379,28 +3418,9 @@ fn try_mehrotra_predictor(
         }
     }
     alpha_aff = alpha_aff.clamp(0.0, 1.0);
-    let mut mu_aff_sum = 0.0_f64;
-    let mut nb: usize = 0;
-    for i in 0..n {
-        if state.x_l[i].is_finite() {
-            let s = (state.x[i] + alpha_aff * dx_aff[i]
-                - state.x_l[i]).max(1e-20);
-            let z = (state.z_l[i] + alpha_aff * dz_l_aff[i]).max(1e-20);
-            mu_aff_sum += s * z;
-            nb += 1;
-        }
-        if state.x_u[i].is_finite() {
-            let s = (state.x_u[i] - state.x[i]
-                - alpha_aff * dx_aff[i]).max(1e-20);
-            let z = (state.z_u[i] + alpha_aff * dz_u_aff[i]).max(1e-20);
-            mu_aff_sum += s * z;
-            nb += 1;
-        }
-    }
-    if nb == 0 {
-        return None;
-    }
-    let mu_aff = mu_aff_sum / nb as f64;
+    let mu_aff = compute_affine_complementarity(
+        state, &dx_aff, &dz_l_aff, &dz_u_aff, alpha_aff, n,
+    )?;
     let sigma_mehr = (mu_aff / state.mu).powi(3).clamp(0.0, 1.0);
     *last_mehrotra_sigma = Some(sigma_mehr);
     let mu_pc = (sigma_mehr * state.mu).max(options.mu_min);
