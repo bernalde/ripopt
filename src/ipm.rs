@@ -2589,10 +2589,7 @@ fn run_line_search_loop<P: NlpProblem>(
 
         // Watchdog: accept full step unconditionally (bypass filter)
         if watchdog_active && alpha == alpha_primal_max {
-            state.x = x_trial;
-            state.obj = obj_trial;
-            state.g = g_trial;
-            state.alpha_primal = alpha;
+            commit_trial_point(state, x_trial, obj_trial, g_trial, alpha);
             step_accepted = true;
             break;
         }
@@ -2621,10 +2618,7 @@ fn run_line_search_loop<P: NlpProblem>(
         }
 
         if acceptable {
-            state.x = x_trial;
-            state.obj = obj_trial;
-            state.g = g_trial;
-            state.alpha_primal = alpha;
+            commit_trial_point(state, x_trial, obj_trial, g_trial, alpha);
             step_accepted = true;
             if !used_switching {
                 filter.add(theta_current, phi_current);
@@ -2643,10 +2637,7 @@ fn run_line_search_loop<P: NlpProblem>(
             if let Some((x_soc, obj_soc, g_soc, alpha_soc)) = soc_accepted {
                 state.diagnostics.soc_corrections += 1;
                 *last_soc_accepted = true;
-                state.x = x_soc;
-                state.obj = obj_soc;
-                state.g = g_soc;
-                state.alpha_primal = alpha_soc;
+                commit_trial_point(state, x_soc, obj_soc, g_soc, alpha_soc);
                 step_accepted = true;
                 filter.add(theta_current, phi_current);
                 break;
@@ -8909,6 +8900,23 @@ fn compute_compl_err_at_state(state: &SolverState) -> f64 {
     convergence::complementarity_error(
         &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
     )
+}
+
+/// Commit a trial point as the new iterate: writes `x`, `obj`, `g`,
+/// and the primal step length. Multipliers and the barrier objective
+/// are unaffected — the caller updates those separately when needed
+/// (in particular, `phi` is recomputed before the next line search).
+fn commit_trial_point(
+    state: &mut SolverState,
+    x_trial: Vec<f64>,
+    obj_trial: f64,
+    g_trial: Vec<f64>,
+    alpha: f64,
+) {
+    state.x = x_trial;
+    state.obj = obj_trial;
+    state.g = g_trial;
+    state.alpha_primal = alpha;
 }
 
 /// Sum of absolute values of all Lagrange multipliers in the iterate:
