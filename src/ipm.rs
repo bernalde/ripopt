@@ -2054,18 +2054,7 @@ fn try_conservative_ipm_retry<P: NlpProblem>(
         rip_log!("ripopt: Trying conservative IPM retry (no Gondzio/Mehrotra, no stall detection)");
     }
     let candidate = solve_ipm(problem, &opts);
-    if is_strictly_better(result, &candidate) {
-        if options.print_level >= 5 {
-            rip_log!(
-                "ripopt: Conservative retry succeeded ({:?}, obj={:.6e})",
-                candidate.status, candidate.objective
-            );
-        }
-        *result = candidate;
-        result.diagnostics.fallback_used = Some("conservative_ipm".into());
-    } else if options.print_level >= 5 {
-        rip_log!("ripopt: Conservative retry did not improve ({:?})", candidate.status);
-    }
+    adopt_candidate_if_better(result, candidate, options, "Conservative retry", "conservative_ipm");
 }
 
 /// Promote a stalled result (NumericalError/MaxIterations/Acceptable) to
