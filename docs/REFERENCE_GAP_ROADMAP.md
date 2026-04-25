@@ -53,10 +53,15 @@ where a reader short on time should start.
 7. **rmumps: track tiny/static pivots and growth factor.** Without an
    `NBTINYW`/`RINFOG` equivalent, the IPM cannot tell a clean
    factorization from one that papered over 40 tiny pivots.
-8. **ripopt: preprocessing redundancy detection false-positive.**
-   `src/preprocessing.rs:216-334` uses a two-point probe; can drop a
-   genuinely-independent constraint when the two points happen to
-   coincide.
+8. ~~**ripopt: preprocessing redundancy detection false-positive.**~~
+   **DONE.** `src/preprocessing.rs` redundancy phase now aborts when
+   the second probe point fails to displace any non-fixed variable
+   past `1e-4` relative (e.g. variables wedged between very tight
+   finite bounds). Without that guard, the heuristic degenerated into
+   a one-point Jacobian-equality test that dropped genuinely-independent
+   nonlinear constraints whose Jacobians happened to match at `x0`.
+   Regression covered by
+   `test_redundancy_guard_bound_wedged_variable`.
 9. **ripopt: `user_x_scaling` option is declared but not applied**
    (`src/options.rs:188` vs `src/ipm.rs:2094-2170`). Silent no-op.
 10. **rmumps: unify the two pivot-search paths.** The classic-BK code

@@ -236,8 +236,18 @@ impl<'a> PreprocessedProblem<'a> {
                 break 'redundancy;
             }
 
-            // Also evaluate at a perturbed point for verification
+            // Also evaluate at a perturbed point for verification.
+            // For each non-fixed variable, try forward perturbation (clamped
+            // to x_u), then negative perturbation (clamped to x_l) if forward
+            // collapsed. A variable boxed by bounds may end up unperturbable;
+            // we count actual displacement and abort the redundancy test if
+            // x1 coincides with x0 within a small tolerance — see the guard
+            // immediately after the loop. Without that guard, a degenerate
+            // probe reduces to a one-point Jacobian-equality test that drops
+            // genuinely-independent nonlinear constraints whose Jacobians
+            // happen to match at the initial point (roadmap item #8).
             let mut x1 = x0.clone();
+            let mut max_disp: f64 = 0.0;
             for i in 0..n {
                 if !is_fixed[i] {
                     let pert = 1.0 + 0.1 * x0[i].abs();
@@ -251,7 +261,20 @@ impl<'a> PreprocessedProblem<'a> {
                             x1[i] = x1[i].max(x_l[i]);
                         }
                     }
+                    let disp = (x1[i] - x0[i]).abs() / x0[i].abs().max(1.0);
+                    if disp > max_disp {
+                        max_disp = disp;
+                    }
                 }
+            }
+            // If the probe failed to displace any variable past 1e-4 (e.g. a
+            // problem where every variable is wedged between tight finite
+            // bounds), the two-point probe degenerates and would mark
+            // independent constraints as redundant. Skip the heuristic and
+            // let the inertia-correction path handle any actual
+            // dependence at run time.
+            if max_disp < 1e-4 {
+                break 'redundancy;
             }
             let mut jac_vals1 = vec![0.0; jac_nnz];
             if !inner.jacobian_values(&x1, true, &mut jac_vals1) {
@@ -799,6 +822,76 @@ mod tests {
         assert_eq!(prep.num_redundant(), 1);
         assert_eq!(prep.num_constraints(), 2); // 3 - 1 duplicate
         assert_eq!(prep.constr_map, vec![0, 1]); // constraint 2 removed
+    }
+
+    /// Regression for roadmap item #8: when bounds are tight enough that
+    /// the second probe `x1` cannot escape `x0` after clamping, the
+    /// two-point redundancy heuristic degenerates into a one-point
+    /// Jacobian-equality test and would mark genuinely-independent
+    /// nonlinear constraints as redundant. The guard at
+    /// `max_disp < 1e-4` aborts the heuristic and keeps both
+    /// constraints.
+    #[test]
+    fn test_redundancy_guard_bound_wedged_variable() {
+        struct WedgedNonlinearTwins;
+        impl NlpProblem for WedgedNonlinearTwins {
+            fn num_variables(&self) -> usize { 1 }
+            fn num_constraints(&self) -> usize { 2 }
+            fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+                // Wide enough to NOT trigger is_fixed (which uses 1e-10
+                // FIXED_TOL), narrow enough that any positive
+                // perturbation gets clamped right back to x0.
+                x_l[0] = 1.0;
+                x_u[0] = 1.0 + 1e-9;
+            }
+            fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+                // Same bounds on both constraints — necessary for the
+                // redundancy heuristic to consider them at all.
+                g_l[0] = 0.0;
+                g_u[0] = 10.0;
+                g_l[1] = 0.0;
+                g_u[1] = 10.0;
+            }
+            fn initial_point(&self, x0: &mut [f64]) {
+                x0[0] = 1.0;
+            }
+            fn objective(&self, _x: &[f64], _new_x: bool, obj: &mut f64) -> bool {
+                *obj = 0.0;
+                true
+            }
+            fn gradient(&self, _x: &[f64], _new_x: bool, g: &mut [f64]) -> bool {
+                g[0] = 0.0;
+                true
+            }
+            fn constraints(&self, x: &[f64], _new_x: bool, g: &mut [f64]) -> bool {
+                // g0 quadratic, g1 linear — independent, but g0(1)=1=g1(1)
+                // and dg0/dx(1) = 2 = dg1/dx(1). At any other x, jac differs.
+                g[0] = x[0] * x[0];
+                g[1] = 2.0 * x[0] - 1.0;
+                true
+            }
+            fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+                (vec![0, 1], vec![0, 0])
+            }
+            fn jacobian_values(&self, x: &[f64], _new_x: bool, vals: &mut [f64]) -> bool {
+                vals[0] = 2.0 * x[0];
+                vals[1] = 2.0;
+                true
+            }
+            fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+                (vec![0], vec![0])
+            }
+            fn hessian_values(&self, _x: &[f64], _new_x: bool, _obj_factor: f64, lambda: &[f64], vals: &mut [f64]) -> bool {
+                vals[0] = 2.0 * lambda[0];
+                true
+            }
+        }
+        let prob = WedgedNonlinearTwins;
+        let prep = PreprocessedProblem::new(&prob as &dyn NlpProblem, 1e-2);
+        // Both constraints must survive: the heuristic must abort
+        // when probing cannot displace x past 1e-4.
+        assert_eq!(prep.num_constraints(), 2);
+        assert_eq!(prep.num_redundant(), 0);
     }
 
     #[test]
