@@ -2271,6 +2271,50 @@ enum LineSearchOutcome {
 /// trips, `StepAccepted` on any accepted trial / SOC / watchdog full
 /// step, `Rejected` if α falls below `min_alpha` / loop budget exhausts.
 #[allow(clippy::too_many_arguments)]
+/// Dispatch a Second-Order Correction attempt to the appropriate solver
+/// path: dense condensed (cond_solver_for_soc + condensed_system), sparse
+/// condensed, or full augmented KKT. Returns the SOC trial tuple
+/// `(x, obj, g, alpha)` on acceptance, `None` otherwise. Caller checks
+/// `theta_trial > theta_current` and `*ls_steps == 0` before calling.
+#[allow(clippy::too_many_arguments)]
+fn dispatch_soc_attempt<P: NlpProblem>(
+    state: &SolverState,
+    problem: &P,
+    x_trial: &[f64],
+    g_trial: &[f64],
+    condensed_system: &Option<kkt::CondensedKktSystem>,
+    cond_solver_for_soc: &mut Option<DenseLdl>,
+    sparse_condensed_system: &Option<kkt::SparseCondensedKktSystem>,
+    kkt_system_opt: &Option<kkt::KktSystem>,
+    lin_solver: &mut dyn LinearSolver,
+    filter: &Filter,
+    theta_current: f64,
+    phi_current: f64,
+    grad_phi_step: f64,
+    alpha: f64,
+    options: &SolverOptions,
+) -> Option<(Vec<f64>, f64, Vec<f64>, f64)> {
+    if let (Some(cond), Some(cs)) = (condensed_system.as_ref(), cond_solver_for_soc.as_mut()) {
+        attempt_soc_condensed(
+            state, problem, g_trial, cs, cond, filter,
+            theta_current, phi_current, grad_phi_step, alpha, options,
+        )
+    } else if let Some(sc) = sparse_condensed_system.as_ref() {
+        attempt_soc_sparse_condensed(
+            state, problem, g_trial, lin_solver, sc, filter,
+            theta_current, phi_current, grad_phi_step, alpha, options,
+        )
+    } else if let Some(kkt) = kkt_system_opt.as_ref() {
+        attempt_soc(
+            state, problem, x_trial, g_trial,
+            lin_solver, kkt, filter,
+            theta_current, phi_current, grad_phi_step, alpha, options,
+        )
+    } else {
+        None
+    }
+}
+
 fn run_line_search_loop<P: NlpProblem>(
     state: &mut SolverState,
     problem: &P,
@@ -2425,26 +2469,12 @@ fn run_line_search_loop<P: NlpProblem>(
 
         // SOC on the first trial only, if full step increased theta
         if theta_trial > theta_current && options.max_soc > 0 && *ls_steps == 0 {
-            let soc_accepted = if let (Some(cond), Some(cs)) = (condensed_system.as_ref(), cond_solver_for_soc.as_mut()) {
-                attempt_soc_condensed(
-                    state, problem, &g_trial, cs, cond, filter,
-                    theta_current, phi_current, grad_phi_step, alpha, options,
-                )
-            } else if let Some(sc) = sparse_condensed_system.as_ref() {
-                attempt_soc_sparse_condensed(
-                    state, problem, &g_trial, lin_solver, sc, filter,
-                    theta_current, phi_current, grad_phi_step, alpha, options,
-                )
-            } else if let Some(kkt) = kkt_system_opt.as_ref() {
-                attempt_soc(
-                    state, problem, &x_trial, &g_trial,
-                    lin_solver, kkt, filter,
-                    theta_current, phi_current, grad_phi_step, alpha, options,
-                )
-            } else {
-                None
-            };
-
+            let soc_accepted = dispatch_soc_attempt(
+                state, problem, &x_trial, &g_trial, condensed_system,
+                cond_solver_for_soc, sparse_condensed_system, kkt_system_opt,
+                lin_solver, filter, theta_current, phi_current, grad_phi_step,
+                alpha, options,
+            );
             if let Some((x_soc, obj_soc, g_soc, alpha_soc)) = soc_accepted {
                 state.diagnostics.soc_corrections += 1;
                 *last_soc_accepted = true;
