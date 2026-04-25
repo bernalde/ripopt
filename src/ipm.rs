@@ -4531,10 +4531,7 @@ fn attempt_soft_restoration<P: NlpProblem>(
             theta_current,
             theta_soft
         );
-        state.x = x_soft;
-        state.obj = obj_soft;
-        state.g = g_soft;
-        state.alpha_primal = soft_alpha;
+        commit_trial_point(state, x_soft, obj_soft, g_soft, soft_alpha);
         filter.add(theta_current, phi_current);
         true
     } else {
