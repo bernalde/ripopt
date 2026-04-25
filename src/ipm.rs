@@ -3703,6 +3703,55 @@ enum RestorationCascadeDecision {
     Return(SolveResult),
 }
 
+/// Run the fast Gauss–Newton restoration. Returns true if GN restoration
+/// succeeded and `apply_restoration_success` was invoked (caller should
+/// short-circuit the cascade with `Continue`); false otherwise (caller
+/// proceeds to the recovery / NLP-restoration fallbacks).
+#[allow(clippy::too_many_arguments)]
+fn try_gn_restoration<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    options: &SolverOptions,
+    filter: &mut Filter,
+    mu_state: &mut MuState,
+    lbfgs_state: &mut Option<LbfgsIpmState>,
+    lbfgs_mode: bool,
+    linear_constraints: Option<&[bool]>,
+    restoration: &mut RestorationPhase,
+    n: usize,
+    m: usize,
+    deadline: Option<Instant>,
+) -> bool {
+    let (x_rest, gn_success) = restoration.restore(
+        &state.x,
+        &state.x_l,
+        &state.x_u,
+        &state.g_l,
+        &state.g_u,
+        &state.jac_rows,
+        &state.jac_cols,
+        n,
+        m,
+        options,
+        &|theta, phi| filter.is_acceptable(theta, phi),
+        &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
+        &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
+        Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
+        deadline,
+    );
+
+    if gn_success {
+        state.diagnostics.restoration_count += 1;
+        apply_restoration_success(
+            state, filter, mu_state, options, n, m, problem, &x_rest,
+            linear_constraints, lbfgs_mode, lbfgs_state,
+        );
+        true
+    } else {
+        false
+    }
+}
+
 /// Adjust mu / mu-mode and (on attempt 3+) jitter x to escape the current
 /// basin after restoration failed but the cascade has not exhausted its
 /// retry budget. fail_count == 1 switches Free → Fixed mode (or applies
@@ -3888,30 +3937,10 @@ fn run_post_ls_restoration_cascade<P: NlpProblem>(
     // Phase 1: Fast GN restoration
     log::debug!("Line search failed at iteration {}, entering restoration", iteration);
 
-    let (x_rest, gn_success) = restoration.restore(
-        &state.x,
-        &state.x_l,
-        &state.x_u,
-        &state.g_l,
-        &state.g_u,
-        &state.jac_rows,
-        &state.jac_cols,
-        n,
-        m,
-        options,
-        &|theta, phi| filter.is_acceptable(theta, phi),
-        &|x_eval, g_out| problem.constraints(x_eval, true, g_out),
-        &|x_eval, jac_out| problem.jacobian_values(x_eval, true, jac_out),
-        Some(&|x_eval: &[f64], obj_out: &mut f64| problem.objective(x_eval, true, obj_out)),
-        deadline,
-    );
-
-    if gn_success {
-        state.diagnostics.restoration_count += 1;
-        apply_restoration_success(
-            state, filter, mu_state, options, n, m, problem, &x_rest,
-            linear_constraints, lbfgs_mode, lbfgs_state,
-        );
+    if try_gn_restoration(
+        state, problem, options, filter, mu_state, lbfgs_state, lbfgs_mode,
+        linear_constraints, restoration, n, m, deadline,
+    ) {
         return RestorationCascadeDecision::Continue;
     }
 
