@@ -560,22 +560,8 @@ impl SolverState {
         // in f64). Without this conversion, z_l ≈ mu/1e30 and slack ≈ 1e30, giving
         // slack * z_l ≈ mu ≠ 0 as a spurious complementarity contribution that blocks
         // convergence detection even when the NLP is solved.
-        for i in 0..n {
-            if x_l[i] <= options.nlp_lower_bound_inf {
-                x_l[i] = f64::NEG_INFINITY;
-            }
-            if x_u[i] >= options.nlp_upper_bound_inf {
-                x_u[i] = f64::INFINITY;
-            }
-        }
-        for i in 0..m {
-            if g_l[i] <= options.nlp_lower_bound_inf {
-                g_l[i] = f64::NEG_INFINITY;
-            }
-            if g_u[i] >= options.nlp_upper_bound_inf {
-                g_u[i] = f64::INFINITY;
-            }
-        }
+        sentinel_bounds_to_infinity(&mut x_l, &mut x_u, options);
+        sentinel_bounds_to_infinity(&mut g_l, &mut g_u, options);
 
         let mut x = vec![0.0; n];
         problem.initial_point(&mut x);
@@ -8904,6 +8890,27 @@ fn l1_norm(v: &[f64]) -> f64 {
 /// equal-length invariants.
 fn dot_product(a: &[f64], b: &[f64]) -> f64 {
     a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f64>()
+}
+
+/// Map sentinel "infinity" values (defaults ±1e19) to ±f64::INFINITY
+/// in matching lower/upper bound vectors. Centralises the two
+/// callers in SolverState::new (variable bounds x_l/x_u and
+/// constraint bounds g_l/g_u). Without this remapping, sentinel
+/// bounds participate in the slack and complementarity calculations
+/// as finite values and block convergence detection.
+fn sentinel_bounds_to_infinity(
+    lower: &mut [f64],
+    upper: &mut [f64],
+    options: &SolverOptions,
+) {
+    for i in 0..lower.len() {
+        if lower[i] <= options.nlp_lower_bound_inf {
+            lower[i] = f64::NEG_INFINITY;
+        }
+        if upper[i] >= options.nlp_upper_bound_inf {
+            upper[i] = f64::INFINITY;
+        }
+    }
 }
 
 /// `kkt::compute_sigma` at the current iterate's
