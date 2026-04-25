@@ -10,6 +10,21 @@ were drafted by specialist agents reading the actual source of both sides;
 the roadmap summary at the top is distilled from those sections and is
 where a reader short on time should start.
 
+> **Status banner (post-v0.8):** All ripopt-side recommendations from
+> v0.8 have landed. The remaining items in the cross-cutting summary
+> tagged `rmumps:` (#3, #4, #7, #10, #11, #15, #16, #17, #20) are
+> **moot — superseded by the feral linear-solver integration scheduled
+> for v0.9**. ripopt's `LinearSolver` trait already abstracts the
+> backend; `MultifrontalLdl` / `IterativeMinres` / `HybridSolver` are
+> all `#[cfg(feature = "rmumps")]`-gated and will be replaced by a
+> feral-backed implementation. Improvements to the rmumps internals
+> (CNTL(4) static-pivot threshold, ICNTL(24) null-pivot detection,
+> MC64, METIS, static 2×2 pivots, NBTINY/RINFOG telemetry, etc.) are
+> not being pursued because the entire backend is being swapped out.
+> The full rmumps-side recommendations section below is preserved for
+> historical reference but should be read as "what we would have
+> done if not for feral."
+
 ---
 
 ## Roadmap summary (ranked, cross-cutting)
@@ -29,17 +44,16 @@ where a reader short on time should start.
    called unconditionally from `update_dual_variables`. The convergence
    gate at `src/convergence.rs:73` reads a `z` that has already been
    clamped, matching Ipopt's gate.
-3. **rmumps: wire up CNTL(4)-equivalent static-pivot threshold.**
-   `frontal.rs:745` hardcodes `seuil = 0.0`, so the "must-eliminate"
-   branch at `frontal.rs:864-881` accepts a tiny pivot at its literal
-   value. A 1e-18 pivot produces a factorization whose inertia is noise;
-   the IPM then steps along a meaningless direction. Biggest
-   correctness risk for the entire pipeline.
-4. **rmumps: add ICNTL(24)-style null-pivot detection.** Zero columns
-   are currently accepted silently (`pivot.rs:217-219`,
-   `frontal.rs:772-773`). MUMPS fixes them to `±CNTL(5) * ||A||` and
-   reports the count via `INFOG(28)`. Without this, rank-deficient
-   iterates are invisible to the IPM.
+3. ~~**rmumps: wire up CNTL(4)-equivalent static-pivot threshold.**~~
+   **MOOT (superseded by feral, v0.9).** `frontal.rs:745` hardcodes
+   `seuil = 0.0`, so the "must-eliminate" branch at
+   `frontal.rs:864-881` accepts a tiny pivot at its literal value.
+   The entire rmumps backend is being replaced; feral provides its
+   own pivot-threshold mechanism.
+4. ~~**rmumps: add ICNTL(24)-style null-pivot detection.**~~
+   **MOOT (superseded by feral, v0.9).** Zero columns are currently
+   accepted silently (`pivot.rs:217-219`, `frontal.rs:772-773`). The
+   feral backend will provide its own null-pivot handling.
 5. ~~**ripopt: drop the `±1` inertia acceptance heuristic.**~~
    **DONE (commit 53f4275).** All `approx_ok` branches in
    `factor_with_inertia_correction` removed; only exact inertia is
@@ -49,9 +63,11 @@ where a reader short on time should start.
    `factor_with_inertia_correction` now scale `delta_c_base` by
    `mu^0.25` (matching `IpPDPerturbationHandler.cpp:82-94`).
    `InertiaCorrectionParams::default().delta_c_base` is now `1e-8`.
-7. **rmumps: track tiny/static pivots and growth factor.** Without an
-   `NBTINYW`/`RINFOG` equivalent, the IPM cannot tell a clean
-   factorization from one that papered over 40 tiny pivots.
+7. ~~**rmumps: track tiny/static pivots and growth factor.**~~
+   **MOOT (superseded by feral, v0.9).** Telemetry equivalent to
+   MUMPS `NBTINYW`/`RINFOG` (so the IPM can tell a clean
+   factorization from one that papered over 40 tiny pivots) will be
+   sourced from feral instead.
 8. ~~**ripopt: preprocessing redundancy detection false-positive.**~~
    **DONE.** `src/preprocessing.rs` redundancy phase now aborts when
    the second probe point fails to displace any non-fixed variable
@@ -81,17 +97,16 @@ where a reader short on time should start.
    `user_x_scaling_empty_is_passthrough`,
    `user_x_scaling_rejects_non_positive`,
    `user_x_scaling_rejects_wrong_length`.
-10. **rmumps: unify the two pivot-search paths.** The classic-BK code
-    path runs when `pivot_threshold = 0.0` and cannot emit delayed
-    pivots at all. Callers who disable thresholding think they are
-    getting a more aggressive BK factorization; they are silently
-    losing the entire delayed-pivot machinery.
+10. ~~**rmumps: unify the two pivot-search paths.**~~
+    **MOOT (superseded by feral, v0.9).** The classic-BK / delayed-
+    pivot split in rmumps will not exist in the feral backend.
 
 ### Convergence and robustness
 
-11. **rmumps: real MC64 scaling.** The current `compute_mc64_kkt_scaling`
-    is a bespoke heuristic; a true MC64 would let the pivot threshold
-    drop from 0.01 toward Ipopt's 1e-6 without losing stability.
+11. ~~**rmumps: real MC64 scaling.**~~
+    **MOOT (superseded by feral, v0.9).** The bespoke
+    `compute_mc64_kkt_scaling` heuristic in the rmumps backend is
+    being retired; feral handles its own scaling.
 12. ~~**ripopt: soft-restoration phase.**~~
     **DONE.** `attempt_soft_restoration` (`src/ipm.rs`) now mirrors
     Ipopt's `TrySoftRestoStep` (`IpBacktrackingLineSearch.cpp:1113-1217`):
@@ -120,20 +135,19 @@ where a reader short on time should start.
     `centrality=none`). Wiring it as a selectable production oracle
     is deferred — Loqo with embedded centrality already covers the
     documented "drops mu too aggressively off-center" failure mode.
-15. **rmumps: port analysis-time front sizing.** `expand_for_delayed`
-    (`frontal.rs:161-183`) reallocates and copies dense fronts at
-    runtime; MUMPS sizes fronts symbolically to include delayed slots.
-    Predictability at scale.
-16. **rmumps: backward-error-based refinement stop.** Current stop at
-    `solver.rs:218` is a geometric-decrease heuristic; MUMPS uses
-    Arioli–Demmel–Duff omega1+omega2. CONCON-style stalls probably
-    benefit.
+15. ~~**rmumps: port analysis-time front sizing.**~~
+    **MOOT (superseded by feral, v0.9).** rmumps's `expand_for_delayed`
+    runtime reallocation pattern is gone with the backend swap.
+16. ~~**rmumps: backward-error-based refinement stop.**~~
+    **MOOT (superseded by feral, v0.9).** Iterative-refinement stop
+    criterion (currently a geometric-decrease heuristic at
+    `solver.rs:218`) is feral's responsibility.
 
 ### Ecosystem / parity gaps
 
-17. **rmumps: METIS fallback via optional feature flag.** AMD on a 50k
-    KKT is measurably worse than METIS for both fill and flop count.
-    `ana_set_ordering.F` is the reference auto-fallback.
+17. ~~**rmumps: METIS fallback via optional feature flag.**~~
+    **MOOT (superseded by feral, v0.9).** Ordering selection is a
+    feral concern.
 18. **[DONE] ripopt: `warm_start_target_mu` (mu_init override on warm start).**
     Implemented in `src/options.rs` (field) and `src/ipm.rs:SolverState::new`
     (initial-mu override + bound multiplier init at chosen mu). Test:
@@ -151,12 +165,16 @@ where a reader short on time should start.
     (separate slack perturbation) is N/A for ripopt's slack-less
     formulation; `delta_d` is folded into `delta_c` per Ipopt's own
     convention (`IpPDPerturbationHandler.cpp:217`).
-20. **rmumps: static 2×2 pivots.** `frontal.rs:864-881` only does 1×1
-    static fallback; MUMPS keeps trying 2×2 under `STATICMODE`.
+20. ~~**rmumps: static 2×2 pivots.**~~
+    **MOOT (superseded by feral, v0.9).** Pivot-block strategy is a
+    feral concern.
 
-Items 1–10 are the correctness bar for a v1.0. Items 11–16 are the
-delta from "solves" to "solves competitively with Ipopt on large and
-degenerate problems." Items 17–20 are parity polish.
+After v0.8, every ripopt-side item in this summary is DONE; every
+remaining `rmumps:` item is moot pending the v0.9 feral integration.
+The cross-cutting roadmap is therefore effectively closed; "what's
+next" is the feral swap and a post-feral re-triage of the four
+known regressions (CRESC50, OET4, OET6, TFI1) plus grid
+`case30_ieee`.
 
 ---
 
@@ -612,7 +630,21 @@ accepts the first one as 1×1. MUMPS keeps trying the 2×2 under
 
 ### 4. Roadmap recommendations (rmumps-side)
 
+> **All rmumps-side recommendations are MOOT as of v0.9 planning.**
+> The rmumps backend is being replaced wholesale by the feral linear
+> solver. The recommendations below are preserved for historical
+> reference (and as a reading list for anyone curious about what
+> MUMPS does that rmumps doesn't), but none of them will be
+> implemented — addressing them in rmumps would be wasted effort
+> against code that is being removed. Feral inherits responsibility
+> for: pivot thresholding, null-pivot detection, tiny-pivot
+> telemetry, MC64 scaling, ordering (METIS), 2×2 static pivots,
+> analysis-time front sizing, and backward-error-based refinement
+> stops. The IPM driver consumes the linear solver only through the
+> `LinearSolver` trait, so the swap is mechanical on the ripopt side.
+
 Effort: S = <1 day, M = 1–3 days, L = 1–2 weeks.
+*(Effort tags retained for reference; not action items.)*
 
 1. **Wire up CNTL(4)-equivalent static-pivot threshold.** Replace
    `let seuil: f64 = 0.0` at `frontal.rs:745` with a parameter plumbed
