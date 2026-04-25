@@ -3035,32 +3035,57 @@ enum WatchdogDecision {
     Continue,
 }
 
+/// Watchdog (Chamberlain et al. 1982) state: shortened-step counter,
+/// activation flag, trial counter, and the snapshot of the iterate
+/// taken on activation. Threaded through try_activate_watchdog,
+/// process_watchdog_trial, and update_watchdog.
+struct Watchdog {
+    consecutive_shortened: usize,
+    active: bool,
+    trial_count: usize,
+    saved: Option<WatchdogSavedState>,
+}
+
+impl Watchdog {
+    fn new() -> Self {
+        Self {
+            consecutive_shortened: 0,
+            active: false,
+            trial_count: 0,
+            saved: None,
+        }
+    }
+
+    fn deactivate(&mut self) {
+        self.active = false;
+        self.trial_count = 0;
+        self.saved = None;
+    }
+}
+
 /// Activate the watchdog if `consecutive_shortened` has hit the trigger
 /// threshold. Snapshots the full iterate (x, multipliers, mu, obj, g,
-/// grad_f, filter entries, theta, phi) into `watchdog_saved` so the
-/// trial check can revert if no progress materializes.
+/// grad_f, filter entries, theta, phi) into `wd.saved` so the trial
+/// check can revert if no progress materializes.
 fn try_activate_watchdog(
     state: &mut SolverState,
     options: &SolverOptions,
     iteration: usize,
     filter: &Filter,
-    consecutive_shortened: &mut usize,
-    watchdog_active: &mut bool,
-    watchdog_trial_count: &mut usize,
-    watchdog_saved: &mut Option<WatchdogSavedState>,
+    wd: &mut Watchdog,
 ) {
-    if *watchdog_active
-        || *consecutive_shortened < options.watchdog_shortened_iter_trigger
+    if wd.active
+        || wd.consecutive_shortened < options.watchdog_shortened_iter_trigger
     {
         return;
     }
     state.diagnostics.watchdog_activations += 1;
-    *watchdog_active = true;
-    *watchdog_trial_count = 0;
+    wd.active = true;
+    wd.trial_count = 0;
     let wd_theta = state.constraint_violation();
     let wd_phi = state.barrier_objective(options);
-    *watchdog_saved = Some(WatchdogSavedState::snapshot(state, filter, wd_theta, wd_phi));
-    *consecutive_shortened = 0;
+    wd.saved = Some(WatchdogSavedState::snapshot(state, filter, wd_theta, wd_phi));
+    wd.consecutive_shortened = 0;
     log::debug!(
         "Watchdog activated at iteration {} (theta={:.2e}, phi={:.2e})",
         iteration, wd_theta, wd_phi
@@ -3074,24 +3099,21 @@ fn try_activate_watchdog(
 /// and filter, augment the filter with the current point, and signal
 /// `WatchdogDecision::Continue` so the main loop retries from the
 /// reverted state.
-#[allow(clippy::too_many_arguments)]
 fn process_watchdog_trial<P: NlpProblem>(
     state: &mut SolverState,
     problem: &P,
     options: &SolverOptions,
     filter: &mut Filter,
     lbfgs_state: &mut Option<LbfgsIpmState>,
-    watchdog_active: &mut bool,
-    watchdog_trial_count: &mut usize,
-    watchdog_saved: &mut Option<WatchdogSavedState>,
+    wd: &mut Watchdog,
     linear_constraints: Option<&[bool]>,
     lbfgs_mode: bool,
 ) -> Option<WatchdogDecision> {
-    if !*watchdog_active {
+    if !wd.active {
         return None;
     }
-    *watchdog_trial_count += 1;
-    let saved = watchdog_saved.as_ref()?;
+    wd.trial_count += 1;
+    let saved = wd.saved.as_ref()?;
     let theta_now = state.constraint_violation();
     let phi_now = state.barrier_objective(options);
     let made_progress = filter.is_acceptable(theta_now, phi_now)
@@ -3101,17 +3123,15 @@ fn process_watchdog_trial<P: NlpProblem>(
     if made_progress {
         log::debug!(
             "Watchdog succeeded at trial {} (theta: {:.2e} -> {:.2e})",
-            *watchdog_trial_count, saved.theta, theta_now
+            wd.trial_count, saved.theta, theta_now
         );
-        *watchdog_active = false;
-        *watchdog_trial_count = 0;
-        *watchdog_saved = None;
+        wd.deactivate();
         return None;
     }
-    if *watchdog_trial_count >= options.watchdog_trial_iter_max {
+    if wd.trial_count >= options.watchdog_trial_iter_max {
         log::debug!(
             "Watchdog reverting after {} trials",
-            *watchdog_trial_count
+            wd.trial_count
         );
         let theta_now = state.constraint_violation();
         let phi_now = state.barrier_objective(options);
@@ -3121,9 +3141,7 @@ fn process_watchdog_trial<P: NlpProblem>(
         saved.restore(state);
         let _ = evaluate_and_refresh_lbfgs(state, problem, lbfgs_state, linear_constraints, lbfgs_mode);
 
-        *watchdog_active = false;
-        *watchdog_trial_count = 0;
-        *watchdog_saved = None;
+        wd.deactivate();
         return Some(WatchdogDecision::Continue);
     }
     None
@@ -3150,27 +3168,20 @@ fn update_watchdog<P: NlpProblem>(
     alpha_primal_max: f64,
     filter: &mut Filter,
     lbfgs_state: &mut Option<LbfgsIpmState>,
-    consecutive_shortened: &mut usize,
-    watchdog_active: &mut bool,
-    watchdog_trial_count: &mut usize,
-    watchdog_saved: &mut Option<WatchdogSavedState>,
+    wd: &mut Watchdog,
     linear_constraints: Option<&[bool]>,
     lbfgs_mode: bool,
 ) -> WatchdogDecision {
     if state.alpha_primal < alpha_primal_max * 0.99 {
-        *consecutive_shortened += 1;
+        wd.consecutive_shortened += 1;
     } else {
-        *consecutive_shortened = 0;
+        wd.consecutive_shortened = 0;
     }
 
-    try_activate_watchdog(
-        state, options, iteration, filter, consecutive_shortened,
-        watchdog_active, watchdog_trial_count, watchdog_saved,
-    );
+    try_activate_watchdog(state, options, iteration, filter, wd);
 
     if let Some(decision) = process_watchdog_trial(
-        state, problem, options, filter, lbfgs_state,
-        watchdog_active, watchdog_trial_count, watchdog_saved,
+        state, problem, options, filter, lbfgs_state, wd,
         linear_constraints, lbfgs_mode,
     ) {
         return decision;
@@ -6820,10 +6831,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
     let ipm_start = Instant::now();
 
     // Watchdog mechanism state
-    let mut consecutive_shortened: usize = 0;
-    let mut watchdog_active: bool = false;
-    let mut watchdog_trial_count: usize = 0;
-    let mut watchdog_saved: Option<WatchdogSavedState> = None;
+    let mut watchdog = Watchdog::new();
 
     // Constraint violation history for infeasibility detection
     let theta_history_len: usize = 100;
@@ -7252,7 +7260,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             grad_phi_step,
             min_alpha,
             force_restoration,
-            watchdog_active,
+            watchdog.active,
             iteration,
             n,
             m,
@@ -7322,10 +7330,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             alpha_primal_max,
             &mut filter,
             &mut lbfgs_state,
-            &mut consecutive_shortened,
-            &mut watchdog_active,
-            &mut watchdog_trial_count,
-            &mut watchdog_saved,
+            &mut watchdog,
             linear_constraints.as_deref(),
             lbfgs_mode,
         ) {
