@@ -5376,8 +5376,10 @@ fn try_complementarity_polish_promotion(
         return None;
     }
     let compl_inf_now = conv_info.compl_inf;
-    let s_d_now = compute_s_d_scaling(conv_info.multiplier_sum, conv_info.multiplier_count);
-    let compl_tol_scaled = options.tol * s_d_now;
+    let s_d_now = compute_residual_scaling(conv_info.multiplier_sum, conv_info.multiplier_count);
+    let s_c_now =
+        compute_residual_scaling(conv_info.bound_multiplier_sum, conv_info.bound_multiplier_count);
+    let compl_tol_scaled = options.tol * s_c_now;
     if !(compl_inf_now > compl_tol_scaled
         && conv_info.primal_inf <= 100.0 * options.tol
         && conv_info.dual_inf <= 100.0 * options.tol * s_d_now)
@@ -5480,6 +5482,8 @@ fn check_convergence_and_handle_promotions<P: NlpProblem>(
     compl_inf: f64,
     multiplier_sum: f64,
     multiplier_count: usize,
+    bound_multiplier_sum: f64,
+    bound_multiplier_count: usize,
     ws: &mut ConvergenceWorkspace,
     timings: &PhaseTimings,
     iteration: usize,
@@ -5499,6 +5503,8 @@ fn check_convergence_and_handle_promotions<P: NlpProblem>(
         objective: state.obj,
         multiplier_sum,
         multiplier_count,
+        bound_multiplier_sum,
+        bound_multiplier_count,
     };
 
     // Track iterate history for oscillation detection (Strategy 1)
@@ -5686,13 +5692,15 @@ fn track_consecutive_acceptable(
     dual_inf_unscaled: f64,
     compl_inf: f64,
     multiplier_sum: f64,
+    bound_multiplier_sum: f64,
 ) -> f64 {
     let n = state.n;
     let m = state.m;
-    let s_d_for_acc = compute_s_d_scaling(multiplier_sum, m + 2 * n);
+    let s_d_for_acc = compute_residual_scaling(multiplier_sum, m + 2 * n);
+    let s_c_for_acc = compute_residual_scaling(bound_multiplier_sum, 2 * n);
     let meets_acc_scaled = primal_inf <= 1e-6
         && dual_inf <= 1e-6 * s_d_for_acc
-        && compl_inf <= 1e-6 * s_d_for_acc;
+        && compl_inf <= 1e-6 * s_c_for_acc;
     let meets_acc_unscaled = primal_inf <= 1e-2
         && dual_inf_unscaled <= 1e10
         && compl_inf <= 1e-2;
@@ -5926,9 +5934,11 @@ fn check_stall_near_tolerance_via_optimal_duals(
     let opt_co = compl_err_with_z(state, &opt_zl, &opt_zu);
     let opt_co_best = compl_inf.min(opt_co);
     let fmult: f64 = l1_norm(&state.y) + l1_norm(&opt_zl) + l1_norm(&opt_zu);
-    let fsd = compute_s_d_scaling(fmult, m + 2 * n);
+    let fmult_bnd: f64 = l1_norm(&opt_zl) + l1_norm(&opt_zu);
+    let fsd = compute_residual_scaling(fmult, m + 2 * n);
+    let fsc = compute_residual_scaling(fmult_bnd, 2 * n);
     let stall_fdu_tol = (stall_near_tol * fsd).max(1e-2);
-    let stall_fco_tol = (stall_near_tol * fsd).max(1e-2);
+    let stall_fco_tol = (stall_near_tol * fsc).max(1e-2);
     let stall_fpr_tol = stall_near_tol.max(10.0 * options.constr_viol_tol);
     let sc = primal_inf_max <= stall_fpr_tol
         && opt_du <= stall_fdu_tol
@@ -7233,6 +7243,8 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
         // tracker further below, so kept here rather than inside the helper).
         let multiplier_sum = compute_multiplier_sum(&state);
         let multiplier_count = m + 2 * n;
+        let bound_multiplier_sum = compute_bound_multiplier_sum(&state);
+        let bound_multiplier_count = 2 * n;
 
         let mut conv_ws = ConvergenceWorkspace {
             avg: &mut avg_state,
@@ -7249,6 +7261,8 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             compl_inf,
             multiplier_sum,
             multiplier_count,
+            bound_multiplier_sum,
+            bound_multiplier_count,
             &mut conv_ws,
             &timings,
             iteration,
@@ -7266,6 +7280,7 @@ fn solve_ipm<P: NlpProblem>(problem: &P, options: &SolverOptions) -> SolveResult
             dual_inf_unscaled,
             compl_inf,
             multiplier_sum,
+            bound_multiplier_sum,
         );
 
         update_best_du_iterate(&state, dual_inf, &mut best_du);
@@ -8881,29 +8896,27 @@ fn fix_inequality_mult_signs(y_ls: &mut [f64], g_l: &[f64], g_u: &[f64], m: usiz
     }
 }
 
-/// Dual scaling factor s_d used by the unscaled-tolerance gates and
-/// reported diagnostics. Mirrors Ipopt's IpIpoptCalculatedQuantities
-/// trial_dual_inf_scaling formula:
-///   s_d = max(s_max, mean|multipliers|) / s_max,  capped at s_d_max
-/// where s_max = 100, s_d_max = 1e4. When `multiplier_count == 0`
-/// (no constraints, no bounds), returns 1.0.
-fn compute_s_d_scaling(multiplier_sum: f64, multiplier_count: usize) -> f64 {
+/// Mirrors Ipopt's `ComputeOptimalityErrorScaling`
+/// (IpIpoptCalculatedQuantities.cpp:3663-3700):
+///   factor = max(s_max, sum / count) / s_max
+/// with s_max = 100. The factor is clamped from below to 1 (so scaling
+/// never *amplifies* a residual) but has no upper cap — large multiplier
+/// magnitudes are trusted to mean the problem genuinely has loose
+/// tolerances. Used for both s_d (with all multipliers / m+2n) and s_c
+/// (with only bound multipliers / 2n).
+fn compute_residual_scaling(sum: f64, count: usize) -> f64 {
     let s_max: f64 = 100.0;
-    let s_d_max: f64 = 1e4;
-    if multiplier_count > 0 {
-        ((s_max.max(multiplier_sum / multiplier_count as f64)) / s_max).min(s_d_max)
+    if count > 0 {
+        s_max.max(sum / count as f64) / s_max
     } else {
         1.0
     }
 }
 
-/// `compute_s_d_scaling` evaluated at the current iterate, with the
-/// multiplier sum drawn from `state` and the multiplier count fixed at
-/// `m + 2*n` (one λ per equality, two z per variable). Used everywhere
-/// ripopt needs the unscaled-tolerance dual scaling without manually
-/// passing through the full (multiplier_sum, multiplier_count) pair.
+/// Dual residual scaling s_d evaluated at the current iterate, using
+/// the full multiplier sum (y, z_l, z_u) and count m + 2n.
 fn compute_s_d_at_state(state: &SolverState) -> f64 {
-    compute_s_d_scaling(compute_multiplier_sum(state), state.m + 2 * state.n)
+    compute_residual_scaling(compute_multiplier_sum(state), state.m + 2 * state.n)
 }
 
 /// Constraint violation theta evaluated at an arbitrary `g` against
@@ -9368,9 +9381,16 @@ fn commit_trial_point(
 /// Sum of absolute values of all Lagrange multipliers in the iterate:
 /// equality multipliers `y` plus bound multipliers `z_l` and `z_u`.
 /// Used together with `multiplier_count = m + 2*n` to compute the dual
-/// scaling factor `s_d` via `compute_s_d_scaling`.
+/// scaling factor `s_d` via `compute_residual_scaling`.
 fn compute_multiplier_sum(state: &SolverState) -> f64 {
     l1_norm(&state.y) + l1_norm(&state.z_l) + l1_norm(&state.z_u)
+}
+
+/// Sum of absolute values of bound multipliers only (`z_l`, `z_u`).
+/// Used with `bound_multiplier_count = 2n` to compute the
+/// complementarity scaling factor `s_c` via `compute_residual_scaling`.
+fn compute_bound_multiplier_sum(state: &SolverState) -> f64 {
+    l1_norm(&state.z_l) + l1_norm(&state.z_u)
 }
 
 /// Build a `ConvergenceInfo` from the current iterate by computing the
@@ -9397,6 +9417,8 @@ fn compute_convergence_info_from_state(
         objective: state.obj,
         multiplier_sum: compute_multiplier_sum(state),
         multiplier_count: m + 2 * n,
+        bound_multiplier_sum: compute_bound_multiplier_sum(state),
+        bound_multiplier_count: 2 * n,
     }
 }
 

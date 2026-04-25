@@ -34,10 +34,18 @@ pub struct ConvergenceInfo {
     /// Current objective value.
     pub objective: f64,
     /// Sum of absolute values of all multipliers (y, z_l, z_u).
-    /// Used for Ipopt-style dual scaling.
+    /// Used for Ipopt-style dual residual scaling (s_d).
     pub multiplier_sum: f64,
-    /// Total number of multiplier components (n + m for scaling denominator).
+    /// Total number of multiplier components (m + 2n) — denominator for s_d.
     pub multiplier_count: usize,
+    /// Sum of absolute values of bound multipliers (z_l, z_u) only.
+    /// Used for Ipopt-style complementarity scaling (s_c). See
+    /// `IpIpoptCalculatedQuantities.cpp:3677-3687` — Ipopt scales the
+    /// complementarity error by the average bound-multiplier magnitude
+    /// only, not the average over y as well.
+    pub bound_multiplier_sum: f64,
+    /// Total number of bound-multiplier components (2n) — denominator for s_c.
+    pub bound_multiplier_count: usize,
 }
 
 /// Check convergence of the IPM algorithm.
@@ -48,20 +56,27 @@ pub fn check_convergence(
     options: &SolverOptions,
     consecutive_acceptable: usize,
 ) -> ConvergenceStatus {
-    // Ipopt-style dual scaling: s_d = max(s_max, sum|mults| / count) / s_max
-    // This scales the tolerance to account for large multiplier magnitudes.
-    // Cap s_d to prevent false convergence when multipliers explode.
+    // Ipopt-style scaling factors (IpIpoptCalculatedQuantities.cpp:3663-3700):
+    //   s_d = max(s_max, sum|y, z_l, z_u| / (m+2n)) / s_max  — for dual residual
+    //   s_c = max(s_max, sum|z_l, z_u|    / (2n))    / s_max  — for complementarity
+    // Both clamp from below to s_max (so scaling never amplifies residuals)
+    // but have no upper cap; trusting the multiplier magnitudes is
+    // intentional and matches Ipopt.
     let s_max: f64 = 100.0;
-    let s_d_max: f64 = 1e4; // Don't let tolerance scale more than 10000x
     let s_d = if info.multiplier_count > 0 {
-        ((s_max.max(info.multiplier_sum / info.multiplier_count as f64)) / s_max).min(s_d_max)
+        s_max.max(info.multiplier_sum / info.multiplier_count as f64) / s_max
+    } else {
+        1.0
+    };
+    let s_c = if info.bound_multiplier_count > 0 {
+        s_max.max(info.bound_multiplier_sum / info.bound_multiplier_count as f64) / s_max
     } else {
         1.0
     };
 
     let primal_tol = options.tol;
     let dual_tol = options.tol * s_d;
-    let compl_tol = options.tol * s_d;
+    let compl_tol = options.tol * s_c;
 
     // Strict convergence: BOTH scaled AND unscaled must pass.
     // All checks use iterative z (matches Ipopt's curr_dual_infeasibility).
@@ -91,7 +106,7 @@ pub fn check_convergence(
 
     let near_scaled_ok = info.primal_inf <= ACCEPTABLE_TOL
         && info.dual_inf <= ACCEPTABLE_TOL * s_d
-        && info.compl_inf <= ACCEPTABLE_TOL * s_d;
+        && info.compl_inf <= ACCEPTABLE_TOL * s_c;
     let near_unscaled_ok = info.primal_inf <= ACCEPTABLE_CONSTR_VIOL_TOL
         && info.dual_inf_unscaled <= ACCEPTABLE_DUAL_INF_TOL
         && info.compl_inf <= ACCEPTABLE_COMPL_INF_TOL;
@@ -330,6 +345,8 @@ mod tests {
             objective: 17.0,
             multiplier_sum: 0.0,
             multiplier_count: 0,
+            bound_multiplier_sum: 0.0,
+            bound_multiplier_count: 0,
         };
         let opts = SolverOptions::default();
         assert_eq!(
@@ -349,6 +366,8 @@ mod tests {
             objective: 17.0,
             multiplier_sum: 0.0,
             multiplier_count: 0,
+            bound_multiplier_sum: 0.0,
+            bound_multiplier_count: 0,
         };
         let opts = SolverOptions::default();
         assert_eq!(
@@ -368,6 +387,8 @@ mod tests {
             objective: 1e51,
             multiplier_sum: 0.0,
             multiplier_count: 0,
+            bound_multiplier_sum: 0.0,
+            bound_multiplier_count: 0,
         };
         let opts = SolverOptions::default();
         assert_eq!(
@@ -387,6 +408,8 @@ mod tests {
             objective: 5.0,
             multiplier_sum: 0.0,
             multiplier_count: 0,
+            bound_multiplier_sum: 0.0,
+            bound_multiplier_count: 0,
         };
         let opts = SolverOptions::default();
         // Need enough consecutive near-tolerance iterations (hardcoded NEAR_TOL_ITERS=15).
@@ -407,6 +430,8 @@ mod tests {
             objective: 5.0,
             multiplier_sum: 0.0,
             multiplier_count: 0,
+            bound_multiplier_sum: 0.0,
+            bound_multiplier_count: 0,
         };
         let opts = SolverOptions::default();
         // Not enough consecutive iterations (14 < 15)
@@ -428,6 +453,11 @@ mod tests {
             objective: 1.0,
             multiplier_sum: 1e6, // Large multipliers
             multiplier_count: 10,
+            // Pretend all 10 multipliers are bound multipliers for this test
+            // so s_d and s_c both equal 1000 — keeps the existing dual_inf
+            // arithmetic check below valid.
+            bound_multiplier_sum: 1e6,
+            bound_multiplier_count: 10,
         };
         let opts = SolverOptions::default();
         // s_d = max(100, 1e6/10)/100 = 1e5/100 = 1000
@@ -462,6 +492,8 @@ mod tests {
             objective: 1.0,
             multiplier_sum: 0.0,
             multiplier_count: 0,
+            bound_multiplier_sum: 0.0,
+            bound_multiplier_count: 0,
         };
         let opts = SolverOptions::default();
         assert_eq!(
