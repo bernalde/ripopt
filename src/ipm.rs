@@ -2364,6 +2364,51 @@ fn dispatch_soc_attempt<P: NlpProblem>(
     }
 }
 
+/// Project the candidate iterate `x + alpha*dx` onto the open variable
+/// box (1e-14 inset from finite x_l/x_u), then evaluate the objective
+/// and constraints at the projected point. Returns
+/// `Some((x_trial, obj_trial, g_trial, theta_trial))` when both
+/// evaluations succeed and produced finite values; `None` when the
+/// objective/constraints failed or returned NaN/Inf — caller halves
+/// alpha and retries.
+fn evaluate_trial_point<P: NlpProblem>(
+    state: &SolverState,
+    problem: &P,
+    alpha: f64,
+    n: usize,
+    m: usize,
+) -> Option<(Vec<f64>, f64, Vec<f64>, f64)> {
+    let mut x_trial = vec![0.0; n];
+    #[allow(clippy::needless_range_loop)]
+    for i in 0..n {
+        x_trial[i] = state.x[i] + alpha * state.dx[i];
+        if state.x_l[i].is_finite() {
+            x_trial[i] = x_trial[i].max(state.x_l[i] + 1e-14);
+        }
+        if state.x_u[i].is_finite() {
+            x_trial[i] = x_trial[i].min(state.x_u[i] - 1e-14);
+        }
+    }
+
+    let mut obj_trial = f64::INFINITY;
+    let obj_ok = problem.objective(&x_trial, true, &mut obj_trial);
+    let mut g_trial = vec![0.0; m];
+    let constr_ok = if m > 0 {
+        problem.constraints(&x_trial, true, &mut g_trial)
+    } else {
+        true
+    };
+
+    if !obj_ok || !constr_ok || obj_trial.is_nan() || obj_trial.is_infinite()
+        || g_trial.iter().any(|v| v.is_nan() || v.is_infinite())
+    {
+        return None;
+    }
+
+    let theta_trial = convergence::primal_infeasibility(&g_trial, &state.g_l, &state.g_u);
+    Some((x_trial, obj_trial, g_trial, theta_trial))
+}
+
 fn run_line_search_loop<P: NlpProblem>(
     state: &mut SolverState,
     problem: &P,
@@ -2407,39 +2452,15 @@ fn run_line_search_loop<P: NlpProblem>(
             break;
         }
 
-        // Compute trial point
-        let mut x_trial = vec![0.0; n];
-        #[allow(clippy::needless_range_loop)]
-        for i in 0..n {
-            x_trial[i] = state.x[i] + alpha * state.dx[i];
-            if state.x_l[i].is_finite() {
-                x_trial[i] = x_trial[i].max(state.x_l[i] + 1e-14);
-            }
-            if state.x_u[i].is_finite() {
-                x_trial[i] = x_trial[i].min(state.x_u[i] - 1e-14);
-            }
-        }
-
-        // Evaluate at trial point
-        let mut obj_trial = f64::INFINITY;
-        let obj_ok = problem.objective(&x_trial, true, &mut obj_trial);
-        let mut g_trial = vec![0.0; m];
-        let constr_ok = if m > 0 {
-            problem.constraints(&x_trial, true, &mut g_trial)
-        } else {
-            true
-        };
-
-        if !obj_ok || !constr_ok || obj_trial.is_nan() || obj_trial.is_infinite()
-            || g_trial.iter().any(|v| v.is_nan() || v.is_infinite())
-        {
-            alpha *= 0.5;
-            *ls_steps += 1;
-            continue;
-        }
-
-        let theta_trial =
-            convergence::primal_infeasibility(&g_trial, &state.g_l, &state.g_u);
+        let (x_trial, obj_trial, g_trial, theta_trial) =
+            match evaluate_trial_point(state, problem, alpha, n, m) {
+                Some(t) => t,
+                None => {
+                    alpha *= 0.5;
+                    *ls_steps += 1;
+                    continue;
+                }
+            };
 
         // Watchdog: accept full step unconditionally (bypass filter)
         if watchdog_active && alpha == alpha_primal_max {
