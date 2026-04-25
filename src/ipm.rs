@@ -4900,6 +4900,88 @@ fn try_iterate_averaging_promotion<P: NlpProblem>(
     None
 }
 
+/// Strategy 4 (Acceptable promotion): when complementarity is the
+/// bottleneck (primal_inf and dual_inf already within 100x tol but
+/// compl_inf > tol*s_d), snap bound multipliers to reduce
+/// complementarity. For each variable that is clearly interior to a
+/// bound (gap > 1e-6), zero out the corresponding z; keep z otherwise.
+/// Re-check convergence with the snapped multipliers; on success return
+/// Optimal, otherwise restore z and return None. One-shot via
+/// `ws.tried_compl_polish`.
+fn try_complementarity_polish_promotion(
+    state: &mut SolverState,
+    options: &SolverOptions,
+    conv_info: &ConvergenceInfo,
+    ws: &mut ConvergenceWorkspace,
+    n: usize,
+    m: usize,
+) -> Option<SolveResult> {
+    if *ws.tried_compl_polish {
+        return None;
+    }
+    let compl_inf_now = conv_info.compl_inf;
+    let s_d_now = {
+        let s_max: f64 = 100.0;
+        let s_d_max: f64 = 1e4;
+        if conv_info.multiplier_count > 0 {
+            ((s_max.max(conv_info.multiplier_sum / conv_info.multiplier_count as f64)) / s_max).min(s_d_max)
+        } else { 1.0 }
+    };
+    let compl_tol_scaled = options.tol * s_d_now;
+    if !(compl_inf_now > compl_tol_scaled
+        && conv_info.primal_inf <= 100.0 * options.tol
+        && conv_info.dual_inf <= 100.0 * options.tol * s_d_now)
+    {
+        return None;
+    }
+    *ws.tried_compl_polish = true;
+    let saved_zl = state.z_l.clone();
+    let saved_zu = state.z_u.clone();
+    let gap_tol = 1e-6;
+    for i in 0..n {
+        let gap_l = if state.x_l[i].is_finite() { state.x[i] - state.x_l[i] } else { f64::INFINITY };
+        let gap_u = if state.x_u[i].is_finite() { state.x_u[i] - state.x[i] } else { f64::INFINITY };
+        if gap_l > gap_tol {
+            state.z_l[i] = 0.0;
+        }
+        if gap_u > gap_tol {
+            state.z_u[i] = 0.0;
+        }
+    }
+    let snap_du = convergence::dual_infeasibility(
+        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+        &state.y, &state.z_l, &state.z_u, n,
+    );
+    let snap_compl = convergence::complementarity_error(
+        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
+    );
+    let snap_mult_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
+        + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
+        + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
+    let snap_conv = ConvergenceInfo {
+        primal_inf: conv_info.primal_inf,
+        dual_inf: snap_du,
+        dual_inf_unscaled: snap_du,
+        compl_inf: snap_compl,
+        mu: state.mu,
+        objective: state.obj,
+        multiplier_sum: snap_mult_sum,
+        multiplier_count: m + 2 * n,
+    };
+    if let ConvergenceStatus::Converged = check_convergence(&snap_conv, options, 0) {
+        if options.print_level >= 3 {
+            rip_log!(
+                "ripopt: Complementarity snap promoted near-tolerance -> Optimal (compl {:.2e} -> {:.2e}, du {:.2e})",
+                compl_inf_now, snap_compl, snap_du
+            );
+        }
+        return Some(make_result(state, SolveStatus::Optimal));
+    }
+    state.z_l.copy_from_slice(&saved_zl);
+    state.z_u.copy_from_slice(&saved_zu);
+    None
+}
+
 fn check_convergence_and_handle_promotions<P: NlpProblem>(
     state: &mut SolverState,
     problem: &P,
@@ -4970,75 +5052,10 @@ fn check_convergence_and_handle_promotions<P: NlpProblem>(
             }
 
             // Strategy 4: Complementarity polishing via multiplier snap
-            // When complementarity is the bottleneck (primal/dual already good enough),
-            // snap bound multipliers to reduce complementarity, then recheck convergence.
-            if !*ws.tried_compl_polish {
-                let compl_inf_now = conv_info.compl_inf;
-                let s_d_now = {
-                    let s_max: f64 = 100.0;
-                    let s_d_max: f64 = 1e4;
-                    if conv_info.multiplier_count > 0 {
-                        ((s_max.max(conv_info.multiplier_sum / conv_info.multiplier_count as f64)) / s_max).min(s_d_max)
-                    } else { 1.0 }
-                };
-                let compl_tol_scaled = options.tol * s_d_now;
-                if compl_inf_now > compl_tol_scaled
-                    && conv_info.primal_inf <= 100.0 * options.tol
-                    && conv_info.dual_inf <= 100.0 * options.tol * s_d_now
-                {
-                    *ws.tried_compl_polish = true;
-                    // For variables near bounds, snap multipliers to reduce complementarity:
-                    // If x_i ≈ x_l_i (gap < tol), keep z_l_i from stationarity (z_opt)
-                    // If x_i is interior (gap > tol), set z_l_i = 0
-                    let saved_zl = state.z_l.clone();
-                    let saved_zu = state.z_u.clone();
-                    let gap_tol = 1e-6;
-                    for i in 0..n {
-                        let gap_l = if state.x_l[i].is_finite() { state.x[i] - state.x_l[i] } else { f64::INFINITY };
-                        let gap_u = if state.x_u[i].is_finite() { state.x_u[i] - state.x[i] } else { f64::INFINITY };
-                        // If clearly interior to lower bound, zero out z_l
-                        if gap_l > gap_tol {
-                            state.z_l[i] = 0.0;
-                        }
-                        // If clearly interior to upper bound, zero out z_u
-                        if gap_u > gap_tol {
-                            state.z_u[i] = 0.0;
-                        }
-                    }
-                    // Recompute convergence with snapped multipliers
-                    let snap_du = convergence::dual_infeasibility(
-                        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-                        &state.y, &state.z_l, &state.z_u, n,
-                    );
-                    let snap_compl = convergence::complementarity_error(
-                        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
-                    );
-                    let snap_mult_sum: f64 = state.y.iter().map(|v| v.abs()).sum::<f64>()
-                        + state.z_l.iter().map(|v| v.abs()).sum::<f64>()
-                        + state.z_u.iter().map(|v| v.abs()).sum::<f64>();
-                    let snap_conv = ConvergenceInfo {
-                        primal_inf: conv_info.primal_inf,
-                        dual_inf: snap_du,
-                        dual_inf_unscaled: snap_du,
-                        compl_inf: snap_compl,
-                        mu: state.mu,
-                        objective: state.obj,
-                        multiplier_sum: snap_mult_sum,
-                        multiplier_count: m + 2 * n,
-                    };
-                    if let ConvergenceStatus::Converged = check_convergence(&snap_conv, options, 0) {
-                        if options.print_level >= 3 {
-                            rip_log!(
-                                "ripopt: Complementarity snap promoted near-tolerance -> Optimal (compl {:.2e} -> {:.2e}, du {:.2e})",
-                                compl_inf_now, snap_compl, snap_du
-                            );
-                        }
-                        return Some(make_result(state, SolveStatus::Optimal));
-                    }
-                    // Snap didn't work — restore multipliers
-                    state.z_l.copy_from_slice(&saved_zl);
-                    state.z_u.copy_from_slice(&saved_zu);
-                }
+            if let Some(result) = try_complementarity_polish_promotion(
+                state, options, &conv_info, ws, n, m,
+            ) {
+                return Some(result);
             }
 
             if options.print_level >= 5 {
