@@ -432,16 +432,11 @@ pub fn factor_with_inertia_correction(
     let inertia = solver.factor(&kkt.matrix)?;
 
     if let Some(inertia) = inertia {
-        // Accept inertia if counts match expected (n, m, 0). For large systems,
-        // allow ±1 tolerance: Bunch-Kaufman pivoting can misclassify near-zero
-        // eigenvalues at the positive/negative boundary, especially when n ≈ m.
+        // Accept only when inertia counts match expected (n, m, 0). Ipopt
+        // never accepts off-by-one inertia; a single eigenvalue flipped
+        // sign can turn a descent step into an ascent step.
         let inertia_ok = inertia.positive == n && inertia.negative == m && inertia.zero == 0;
-        let total = inertia.positive + inertia.negative + inertia.zero;
-        let approx_ok = !inertia_ok && (n + m) >= 100 && inertia.zero == 0
-            && (total as isize - (n + m) as isize).unsigned_abs() <= 2
-            && (inertia.positive as isize - n as isize).unsigned_abs() <= 1
-            && (inertia.negative as isize - m as isize).unsigned_abs() <= 1;
-        if inertia_ok || approx_ok {
+        if inertia_ok {
             // Always verify backward error. faer's sign-based inertia can pass
             // rank-deficient KKT matrices with zero perturbation (AC-OPF angle
             // gauge: J has a null direction, but all pivot signs match expected).
@@ -503,20 +498,9 @@ pub fn factor_with_inertia_correction(
         let inertia = solver.factor(&kkt.matrix)?;
         if let Some(inertia) = inertia {
             let inertia_ok = inertia.positive == n && inertia.negative == m && inertia.zero == 0;
-            let total = inertia.positive + inertia.negative + inertia.zero;
-            let approx_ok = !inertia_ok && (n + m) >= 100 && inertia.zero == 0
-                && (total as isize - (n + m) as isize).unsigned_abs() <= 2
-                && (inertia.positive as isize - n as isize).unsigned_abs() <= 1
-                && (inertia.negative as isize - m as isize).unsigned_abs() <= 1;
-            if inertia_ok || approx_ok {
-                if (n + m) >= 100 {
-                    params.delta_w_last = 0.0;
-                    return Ok((0.0, 0.0));
-                }
-                if check_factorization_backward_error(kkt, solver) {
-                    params.delta_w_last = 0.0;
-                    return Ok((0.0, 0.0));
-                }
+            if inertia_ok && check_factorization_backward_error(kkt, solver) {
+                params.delta_w_last = 0.0;
+                return Ok((0.0, 0.0));
             }
         }
     }
@@ -586,21 +570,8 @@ pub fn factor_with_inertia_correction(
 
         if let Some(inertia) = inertia {
             let exact_ok = inertia.positive == n && inertia.negative == m && inertia.zero == 0;
-            let total = inertia.positive + inertia.negative + inertia.zero;
-            let approx_ok = !exact_ok && (n + m) >= 100 && inertia.zero == 0
-                && (total as isize - (n + m) as isize).unsigned_abs() <= 2
-                && (inertia.positive as isize - n as isize).unsigned_abs() <= 1
-                && (inertia.negative as isize - m as isize).unsigned_abs() <= 1;
-            if exact_ok || approx_ok {
-                // For large systems, accept once inertia is correct.
-                if (n + m) >= 100 {
-                    kkt.matrix = perturbed;
-                    params.delta_w_last = delta_w;
-                    params.degeneracy_count += 1;
-                    if params.degeneracy_count >= 3 { params.structurally_degenerate = true; }
-                    return Ok((delta_w, delta_c));
-                }
-                // For small systems: verify backward error is acceptable
+            if exact_ok {
+                // Verify backward error is acceptable.
                 if check_factorization_backward_error_with_matrix(&perturbed, &kkt.rhs, solver) {
                     kkt.matrix = perturbed;
                     params.delta_w_last = delta_w;
