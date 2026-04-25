@@ -3969,23 +3969,7 @@ fn track_post_step_acceptable(state: &mut SolverState, options: &SolverOptions) 
     let (post_zl_opt, post_zu_opt) = {
         let mut gj = state.grad_f.clone();
         accumulate_jt_y(state, &mut gj);
-        let mut zl = vec![0.0; n];
-        let mut zu = vec![0.0; n];
-        let kc = 1e10;
-        for i in 0..n {
-            if gj[i] > 0.0 && state.x_l[i].is_finite() {
-                let sl = (state.x[i] - state.x_l[i]).max(1e-20);
-                if gj[i] * sl <= kc * state.mu.max(1e-20) {
-                    zl[i] = gj[i];
-                }
-            } else if gj[i] < 0.0 && state.x_u[i].is_finite() {
-                let su = (state.x_u[i] - state.x[i]).max(1e-20);
-                if (-gj[i]) * su <= kc * state.mu.max(1e-20) {
-                    zu[i] = -gj[i];
-                }
-            }
-        }
-        (zl, zu)
+        recover_active_set_z(state, &gj, n)
     };
     let post_du = convergence::dual_infeasibility(
         &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
@@ -5845,22 +5829,7 @@ fn check_stall_near_tolerance_via_optimal_duals(
 ) -> Option<StallDecision> {
     let mut gj = state.grad_f.clone();
     accumulate_jt_y(state, &mut gj);
-    let mut opt_zl = vec![0.0; n];
-    let mut opt_zu = vec![0.0; n];
-    let kc = 1e10;
-    for i in 0..n {
-        if gj[i] > 0.0 && state.x_l[i].is_finite() {
-            let sl = (state.x[i] - state.x_l[i]).max(1e-20);
-            if gj[i] * sl <= kc * state.mu.max(1e-20) {
-                opt_zl[i] = gj[i];
-            }
-        } else if gj[i] < 0.0 && state.x_u[i].is_finite() {
-            let su = (state.x_u[i] - state.x[i]).max(1e-20);
-            if (-gj[i]) * su <= kc * state.mu.max(1e-20) {
-                opt_zu[i] = -gj[i];
-            }
-        }
-    }
+    let (opt_zl, opt_zu) = recover_active_set_z(state, &gj, n);
     let opt_du = convergence::dual_infeasibility(
         &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
         &state.y, &opt_zl, &opt_zu, n,
@@ -8727,6 +8696,33 @@ fn accumulate_jt_y(state: &SolverState, target: &mut [f64]) {
     for (idx, (&row, &col)) in state.jac_rows.iter().zip(state.jac_cols.iter()).enumerate() {
         target[col] += state.jac_vals[idx] * state.y[row];
     }
+}
+
+/// Active-set z recovery from `gj = grad_f + J^T y`. Sets
+/// `z_l[i] = gj[i]` (or `z_u[i] = -gj[i]`) only when the
+/// corresponding bound is finite *and* the resulting product
+/// `z * slack` lies within Ipopt's `kappa_d * mu` complementarity
+/// envelope (κ_d = 1e10). Used by the post-step optimistic
+/// dual-infeasibility probe in track_post_step_acceptable and the
+/// stall-classification probe in detect_optimal_at_stall, both of
+/// which test "would these multipliers satisfy the KKT
+/// complementarity gate?".
+fn recover_active_set_z(state: &SolverState, gj: &[f64], n: usize) -> (Vec<f64>, Vec<f64>) {
+    let mut zl = vec![0.0; n];
+    let mut zu = vec![0.0; n];
+    let kc = 1e10;
+    for i in 0..n {
+        if gj[i] > 0.0 && state.x_l[i].is_finite() {
+            if gj[i] * slack_xl(state, i) <= kc * state.mu.max(1e-20) {
+                zl[i] = gj[i];
+            }
+        } else if gj[i] < 0.0 && state.x_u[i].is_finite() {
+            if (-gj[i]) * slack_xu(state, i) <= kc * state.mu.max(1e-20) {
+                zu[i] = -gj[i];
+            }
+        }
+    }
+    (zl, zu)
 }
 
 /// Fraction-to-boundary `tau` factor used by the main step and the
