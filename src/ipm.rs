@@ -5385,6 +5385,64 @@ fn try_complementarity_polish_promotion(
     None
 }
 
+/// Handle the `ConvergenceStatus::Acceptable` branch: try the three
+/// promotion strategies (iterate averaging, active set, complementarity
+/// polish) and, if none succeed, return `SolveStatus::Acceptable`.
+///
+/// Previously inlined in `check_convergence_and_handle_promotions`.
+#[allow(clippy::too_many_arguments)]
+fn handle_acceptable_status_with_promotions<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    options: &SolverOptions,
+    conv_info: &ConvergenceInfo,
+    ws: &mut ConvergenceWorkspace,
+    timings: &PhaseTimings,
+    iteration: usize,
+    ipm_start: Instant,
+    n: usize,
+    m: usize,
+    avg_window: usize,
+    linear_constraints: Option<&[bool]>,
+    lbfgs_mode: bool,
+) -> SolveResult {
+    // Strategy 1: Try iterate averaging before declaring Acceptable
+    if let Some(result) = try_iterate_averaging_promotion(
+        state, problem, options, ws, avg_window, n, m,
+        linear_constraints, lbfgs_mode,
+    ) {
+        return result;
+    }
+
+    // Strategy 3: Try active set identification + reduced solve
+    if !*ws.tried_active_set {
+        *ws.tried_active_set = true;
+        if let Some(result) = try_active_set_solve(state, problem, options, linear_constraints, lbfgs_mode) {
+            if options.print_level >= 3 {
+                rip_log!("ripopt: Active set solve promoted Acceptable -> Optimal");
+            }
+            return result;
+        }
+    }
+
+    // Strategy 4: Complementarity polishing via multiplier snap
+    if let Some(result) = try_complementarity_polish_promotion(
+        state, options, conv_info, ws, n, m,
+    ) {
+        return result;
+    }
+
+    if options.print_level >= 5 {
+        timings.print_summary(iteration + 1, ipm_start.elapsed());
+    }
+    // Promoted to SolveStatus::Acceptable (matches Ipopt's
+    // Solved_To_Acceptable_Level). Previously this fell through
+    // to NumericalError, which caused problems that met Ipopt's
+    // default acceptable-level tolerances to show as unsolved in
+    // benchmarks. Benchmark reporter counts Acceptable as solved.
+    make_result(state, SolveStatus::Acceptable)
+}
+
 fn check_convergence_and_handle_promotions<P: NlpProblem>(
     state: &mut SolverState,
     problem: &P,
@@ -5434,43 +5492,11 @@ fn check_convergence_and_handle_promotions<P: NlpProblem>(
             }
             Some(make_result(state, SolveStatus::Optimal))
         }
-        ConvergenceStatus::Acceptable => {
-            // Strategy 1: Try iterate averaging before declaring Acceptable
-            if let Some(result) = try_iterate_averaging_promotion(
-                state, problem, options, ws, AVG_WINDOW, n, m,
-                linear_constraints, lbfgs_mode,
-            ) {
-                return Some(result);
-            }
-
-            // Strategy 3: Try active set identification + reduced solve
-            if !*ws.tried_active_set {
-                *ws.tried_active_set = true;
-                if let Some(result) = try_active_set_solve(state, problem, options, linear_constraints, lbfgs_mode) {
-                    if options.print_level >= 3 {
-                        rip_log!("ripopt: Active set solve promoted Acceptable -> Optimal");
-                    }
-                    return Some(result);
-                }
-            }
-
-            // Strategy 4: Complementarity polishing via multiplier snap
-            if let Some(result) = try_complementarity_polish_promotion(
-                state, options, &conv_info, ws, n, m,
-            ) {
-                return Some(result);
-            }
-
-            if options.print_level >= 5 {
-                timings.print_summary(iteration + 1, ipm_start.elapsed());
-            }
-            // Promoted to SolveStatus::Acceptable (matches Ipopt's
-            // Solved_To_Acceptable_Level). Previously this fell through
-            // to NumericalError, which caused problems that met Ipopt's
-            // default acceptable-level tolerances to show as unsolved in
-            // benchmarks. Benchmark reporter counts Acceptable as solved.
-            Some(make_result(state, SolveStatus::Acceptable))
-        }
+        ConvergenceStatus::Acceptable => Some(handle_acceptable_status_with_promotions(
+            state, problem, options, &conv_info, ws, timings,
+            iteration, ipm_start, n, m, AVG_WINDOW,
+            linear_constraints, lbfgs_mode,
+        )),
         ConvergenceStatus::Diverging => {
             Some(make_result(state, SolveStatus::Unbounded))
         }
