@@ -20,16 +20,15 @@ where a reader short on time should start.
    1e4 cap.**~~ **DONE (commit 698a79f).** `src/convergence.rs` now
    computes separate denominators with `s_max=100` and no upper cap,
    matching `IpIpoptCalculatedQuantities.cpp:3663-3700`.
-2. **ripopt: post-hoc unscaled complementarity gate (HS13 root cause).**
-   *Re-scoped*: the expert pass on `IpIpoptAlg.cpp:1055-1135` showed
-   that Ipopt's actual mechanism is `correct_bound_multiplier` (a
+2. ~~**ripopt: post-hoc unscaled complementarity gate (HS13 root cause).**~~
+   **DONE (re-scoped).** The expert pass on `IpIpoptAlg.cpp:1055-1135`
+   showed Ipopt's actual mechanism is `correct_bound_multiplier` (a
    `kappa_sigma=1e10` projection on `z` after each accepted step), not
-   a post-hoc recompute. **Already implemented** in
+   a post-hoc recompute. Already implemented in
    `apply_kappa_sigma_bound_multiplier_reset` at `src/ipm.rs:2665-2696`,
    called unconditionally from `update_dual_variables`. The convergence
-   gate at `src/convergence.rs:73` therefore reads a `z` that has
-   already been clamped, which is what Ipopt's gate sees too. No
-   additional code change needed for this item.
+   gate at `src/convergence.rs:73` reads a `z` that has already been
+   clamped, matching Ipopt's gate.
 3. **rmumps: wire up CNTL(4)-equivalent static-pivot threshold.**
    `frontal.rs:745` hardcodes `seuil = 0.0`, so the "must-eliminate"
    branch at `frontal.rs:864-881` accepts a tiny pivot at its literal
@@ -98,13 +97,13 @@ where a reader short on time should start.
     non-feasible exit. Gate 3 (parent iterate accepts with
     resto-relaxation) is implicit because the caller augments the
     parent filter with a margin entry before invoking restoration.
-14. **ripopt: quality-function mu oracle must include centrality term.**
-    Production Free-mode oracle is `compute_loqo_mu` at `src/ipm.rs`,
-    which already incorporates centrality via the Loqo σ formula
-    `0.1·min(0.05·(1-ξ)/ξ, 2)³`. The standalone reference QF oracle
-    `quality_function_mu` (still `#[allow(dead_code)]`) now matches
-    Ipopt's `IpQualityFunctionMuOracle.cpp:622-646` formula structure
-    (1-norm averages summed, plus `compl_inf / xi` when
+14. ~~**ripopt: quality-function mu oracle must include centrality term.**~~
+    **DONE (commit dc43034).** Production Free-mode oracle is
+    `compute_loqo_mu` at `src/ipm.rs`, which incorporates centrality
+    via the Loqo σ formula `0.1·min(0.05·(1-ξ)/ξ, 2)³`. The standalone
+    reference QF oracle `quality_function_mu` matches Ipopt's
+    `IpQualityFunctionMuOracle.cpp:622-646` formula structure (1-norm
+    averages summed, plus `compl_inf / xi` when
     `quality_function_centrality=true`; default false matches Ipopt's
     `centrality=none`). Wiring it as a selectable production oracle
     is deferred — Loqo with embedded centrality already covers the
@@ -370,56 +369,59 @@ but materially improves HS and adversary benchmark pass rates.
 Prioritized for HS/CUTEst pass-rate improvement and correctness-first.
 Effort: S < 1 day, M 1-5 days, L > 1 week.
 
-1. **Separate `s_d` and `s_c`, remove the 1e4 cap.** Port
-   `ComputeOptimalityErrorScaling` from
-   `IpIpoptCalculatedQuantities.cpp:3663-3700` verbatim. Fixes D1.
-   **Effort: S.** Test: `check_convergence` with y large / z small and
-   vice-versa.
+**v0.8 status: all 10 ripopt-side recommendations are landed (or
+re-scoped).** Remaining gaps are on the rmumps side; see the rmumps
+recommendations section.
 
-2. **Fix the unscaled complementarity gate (HS13 root cause).** Add a
-   post-hoc unscaled `z` recomputation in `check_convergence`, or
-   separately evaluate `unscaled_curr_complementarity` using
-   `mu_target = 0` rather than the current barrier mu.
-   Where: `src/convergence.rs:71-73` and new helper equivalent to
-   `IpIpoptCalculatedQuantities.cpp:1720-1873`. Fixes D2, HS13, likely
-   several CUTEst `NumericalError` misclassifications. **Effort: M.**
+1. ~~**Separate `s_d` and `s_c`, remove the 1e4 cap.**~~ DONE (commit
+   698a79f). Ported `ComputeOptimalityErrorScaling` from
+   `IpIpoptCalculatedQuantities.cpp:3663-3700` to `src/convergence.rs`.
 
-3. **Port `PDPerturbationHandler` faithfully, including mu-dependent
-   `delta_c = delta_cd_val * mu^kappa_c`.** Where: `src/kkt.rs:333-651`
-   → replace with a port of `IpPDPerturbationHandler.cpp:17-356`. Add
-   delta_s for the slack block, delta_d for the d-block. Addresses D3,
-   D5, D10. **Effort: L.**
+2. ~~**Fix the unscaled complementarity gate (HS13 root cause).**~~
+   DONE (re-scoped). Ipopt's actual mechanism is the `kappa_sigma`
+   bound-multiplier projection (`IpIpoptAlg.cpp:1055-1135`), already
+   implemented in `apply_kappa_sigma_bound_multiplier_reset`. The
+   convergence gate reads a clamped `z`, matching Ipopt.
 
-4. **Remove `±1` inertia acceptance; keep only the `delta_c-only`
-   selective perturbation path.** Where: `src/kkt.rs:438-444,505-511,590-594`.
-   Replace with exact match; when exact match fails, escalate delta_c
-   first (the existing selective path at lines 524-563 is correct),
-   then delta_w. Fixes D4. **Effort: S.**
+3. ~~**Port `PDPerturbationHandler` faithfully, including mu-dependent
+   `delta_c = delta_cd_val * mu^kappa_c`.**~~ DONE (commits 83fcbc0
+   and a449dba). Distinct first-time vs subsequent inc factors
+   (100/8), 1/3 dec_fact warm-shrink, delta_w_max give-up threshold,
+   mu^0.25 delta_c scaling. delta_s is N/A (slack-less); delta_d is
+   folded into delta_c per Ipopt's convention.
 
-5. **Implement `soft_resto` acceptor.** Port
-   `IpBacktrackingLineSearch.cpp:173-220` and `IpSoftRestoLSAcceptor`.
-   Fixes D8. **Effort: M.**
+4. ~~**Remove `±1` inertia acceptance; keep only the `delta_c-only`
+   selective perturbation path.**~~ DONE (commit 53f4275).
 
-6. **Fix `user_x_scaling` application.** `src/options.rs:188` is wired
-   in, but `src/ipm.rs:2094-2170` and the evaluations must apply it.
-   Fixes D7. **Effort: S.**
+5. ~~**Implement `soft_resto` acceptor.**~~ DONE (commit 541c059).
+   Ported `IpBacktrackingLineSearch.cpp:1113-1217` (filter OR averaged
+   1-norm `E_μ` reduction; cap 10 consecutive accepts).
 
-7. **Guard preprocessing redundancy detection with a third probe point
-   OR disable by default.** Where: `src/preprocessing.rs:216-334`.
-   Fixes D6. **Effort: S.**
+6. ~~**Fix `user_x_scaling` application.**~~ DONE (commit b321ae3,
+   re-scoped). The silent no-op is now a loud `InternalError` rejection.
+   Full IpScaledNLP-equivalent x-wrapping is deferred to v0.9; until
+   then refusing the request is the only honest behavior matching
+   Ipopt's `nlp_scaling_method` semantics.
 
-8. **Port the full quality-function oracle including centrality term.**
-   Where: `src/ipm.rs:6331-6366`. Fixes D9. Expected outcome: ~10-20%
-   iteration reduction on off-center problems. **Effort: M.**
+7. ~~**Guard preprocessing redundancy detection.**~~ DONE (commit
+   77a37ce). The `src/preprocessing.rs` redundancy phase aborts when
+   the displacement probe is too small (variables wedged in tight
+   bounds), preventing the false-positive on the WedgedNonlinearTwins
+   pattern.
 
-9. **Port restoration convergence check (`RestoFilterConvCheck`).**
-   Where: `src/restoration.rs:42-...`. Several CUTEst failures where
-   ripopt re-enters main IPM with an inferior iterate that re-enters
-   restoration (ping-pong) would be resolved. **Effort: M.**
+8. ~~**Port the full quality-function oracle including centrality
+   term.**~~ DONE (commit dc43034). Loqo σ formula already incorporates
+   centrality in production; standalone QF oracle exposes
+   `quality_function_centrality` for selectable centrality.
 
-10. **Expose `warm_start_target_mu` and per-component
-    `warm_start_bound_push` paths.** Where: `src/warmstart.rs:25-100`.
-    Critical for sequential solves (parametric NLP, MPC). **Effort: S.**
+9. ~~**Port restoration convergence check (`RestoFilterConvCheck`).**~~
+   DONE (commit 9a59b2f). Three-gate check ported to
+   `src/restoration.rs`.
+
+10. ~~**Expose `warm_start_target_mu`.**~~ DONE (commit c2e4f1a). The
+    initial barrier parameter is overridden at warm-start when
+    `SolverOptions::warm_start_target_mu` is set. Per-component
+    `warm_start_bound_push` remains a v0.9 follow-up.
 
 **Not recommended** (acceptable simplifications for ripopt's scope):
 full MA28-style dependency detection (recommendation 7 is sufficient);
