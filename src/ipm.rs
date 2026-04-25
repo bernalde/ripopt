@@ -2759,16 +2759,20 @@ fn apply_kappa_sigma_bound_multiplier_reset(
     mu_ks
 }
 
-fn update_dual_variables(
+/// Apply the y multiplier update with sign-flip damping. Once the
+/// solver is near convergence (`consecutive_acceptable >= 1`),
+/// components of `dy` whose sign has flipped relative to the previous
+/// iterate accumulate a counter; when the count hits 3, the step is
+/// halved (0.5·dy). Components without a flip reset their counter.
+/// `state.y[i] += alpha_y * dy_i` for each row, then `prev_dy` is
+/// rotated to hold the current `dy`.
+fn apply_damped_y_update(
     state: &mut SolverState,
-    mu_state: &MuState,
-    alpha_dual_max: f64,
+    alpha_y: f64,
     prev_dy: &mut Option<Vec<f64>>,
     dy_sign_change_count: &mut [u8],
-) -> f64 {
+) {
     let m = state.m;
-    let alpha_y = state.alpha_primal;
-    let alpha_d = alpha_dual_max;
     let near_convergence = state.consecutive_acceptable >= 1;
     for i in 0..m {
         let sign_change = if let Some(ref pdy) = prev_dy {
@@ -2789,6 +2793,19 @@ fn update_dual_variables(
         state.y[i] += alpha_y * dy_i;
     }
     *prev_dy = Some(state.dy.clone());
+}
+
+fn update_dual_variables(
+    state: &mut SolverState,
+    mu_state: &MuState,
+    alpha_dual_max: f64,
+    prev_dy: &mut Option<Vec<f64>>,
+    dy_sign_change_count: &mut [u8],
+) -> f64 {
+    let alpha_y = state.alpha_primal;
+    let alpha_d = alpha_dual_max;
+
+    apply_damped_y_update(state, alpha_y, prev_dy, dy_sign_change_count);
 
     let mu_ks = apply_kappa_sigma_bound_multiplier_reset(state, mu_state, alpha_d);
 
