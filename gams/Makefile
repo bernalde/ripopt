@@ -3,7 +3,12 @@
 # Usage:
 #   make                       — build libGamsRipopt.dylib (macOS) or .so (Linux)
 #   make GAMS_PATH=/path/gams  — override GAMS installation path
-#   make clean                 — remove build artifacts
+#   make clean                 — remove build artifacts (the shared library)
+#   make clean-bench-<size>    — remove benchmark outputs for one size
+#                                so `make bench-<size>` actually re-runs
+#                                (sizes: smoke, small, medium, large)
+#   make clean-bench           — remove all benchmark outputs
+#   make clean-all             — clean + clean-bench
 #
 # Prerequisites:
 #   - GAMS installation (for C API headers and stubs)
@@ -46,7 +51,32 @@ TARGET = libGamsRipopt.$(SHLIB_EXT)
 
 GAMS_SRCS = $(GAMS_API)/gmomcc.c $(GAMS_API)/gevmcc.c
 
-.PHONY: all clean install test
+.PHONY: all clean install test help
+
+help:
+	@echo "Targets:"
+	@echo "  all                  Build libGamsRipopt.dylib/.so (default)"
+	@echo "  install              Build and install library + register RIPOPT solver in GAMS"
+	@echo "  test                 install + run test_hs071.gms"
+	@echo "  clean                Remove build artifacts (shared library)"
+	@echo "  clean-bench-smoke    Remove smoke benchmark outputs"
+	@echo "  clean-bench-small    Remove small benchmark outputs"
+	@echo "  clean-bench-medium   Remove medium benchmark outputs"
+	@echo "  clean-bench-large    Remove large benchmark outputs"
+	@echo "  clean-bench          Remove all benchmark outputs"
+	@echo "  clean-all            clean + clean-bench"
+	@echo "  bench-smoke          Run ~10 problems, TIMELIMIT=30s"
+	@echo "  bench-small          Run 50 problems, TIMELIMIT=60s"
+	@echo "  bench-medium         Run 50 problems, TIMELIMIT=300s"
+	@echo "  bench-large          Run 50 problems, TIMELIMIT=900s"
+	@echo "  bench-all            Run all four benchmark sizes"
+	@echo "  testsets             Regenerate nlpbench/testsets/*.gms"
+	@echo ""
+	@echo "Variables:"
+	@echo "  GAMS_PATH=<path>     Override GAMS installation directory"
+	@echo "  TIMELIMIT=<sec>      Override per-instance timeout for bench targets"
+	@echo "  VERSION=vX.Y.Z       Override version tag in report filenames"
+	@echo "  REPORT_SOLVERS=...   Solvers to include in reports (default: ripopt ipopt)"
 
 all: $(TARGET)
 
@@ -118,3 +148,44 @@ bench-all: bench-smoke bench-small bench-medium bench-large
 # Regenerate nlpbench/testsets/*.gms from the upstream conopt3 reference trace.
 testsets:
 	python3 nlpbench/gen_testsets.py
+
+# --- Benchmark cleanup ---
+#
+# The upstream runsolver/Makefile caches per-instance trace CSVs at
+#   nlpbench/runsolver/<solver>/<instance>.csv
+# and the concatenated trace at
+#   nlpbench/runsolver/<testset>.gms_<solver>.csv
+# Make's dependency tracking means a rerun skips instances whose CSV already
+# exists. To actually re-run, those files must be removed first.
+#
+# clean-bench-<size> reads nlpbench/testsets/<size>.gms and removes:
+#   - the concatenated trace for each solver in $(REPORT_SOLVERS)
+#   - the per-instance .csv/.log/.lst for each instance and each solver
+#   - the BENCHMARK_REPORT_<size>_*.md reports
+# Per-instance files are shared across testsets, so cleaning `small` does NOT
+# clean instances that only `medium` or `large` cover.
+
+.PHONY: clean-bench clean-bench-smoke clean-bench-small clean-bench-medium clean-bench-large clean-all
+
+clean-bench-smoke clean-bench-small clean-bench-medium clean-bench-large:
+	@size=$(patsubst clean-bench-%,%,$@); \
+	testset="nlpbench/testsets/$${size}.gms"; \
+	echo "=== cleaning $$size benchmark outputs ==="; \
+	for s in $(REPORT_SOLVERS); do \
+	    rm -fv "nlpbench/runsolver/$${size}.gms_$${s}.csv" 2>/dev/null || true; \
+	    if [ -f "$$testset" ]; then \
+	        while IFS= read -r inst; do \
+	            case "$$inst" in ''|\#*) continue ;; esac; \
+	            rm -f "nlpbench/runsolver/$${s}/$${inst}.csv" \
+	                  "nlpbench/runsolver/$${s}/$${inst}.log" \
+	                  "nlpbench/runsolver/$${s}/$${inst}.lst"; \
+	        done < "$$testset"; \
+	    else \
+	        echo "warning: $$testset not found; skipping per-instance cleanup" >&2; \
+	    fi; \
+	done; \
+	rm -fv nlpbench/BENCHMARK_REPORT_$${size}_*.md 2>/dev/null || true
+
+clean-bench: clean-bench-smoke clean-bench-small clean-bench-medium clean-bench-large
+
+clean-all: clean clean-bench
