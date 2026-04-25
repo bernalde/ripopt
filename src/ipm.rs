@@ -759,36 +759,10 @@ impl SolverState {
     /// f(x) - mu * sum(ln(x_i - x_l_i) + ln(x_u_i - x_i))
     /// Optionally includes constraint slack log-barriers when enabled.
     fn barrier_objective(&self, options: &SolverOptions) -> f64 {
-        let mut phi = self.obj;
-        for i in 0..self.n {
-            if self.x_l[i].is_finite() {
-                phi -= self.mu * slack_xl(self, i).ln();
-            }
-            if self.x_u[i].is_finite() {
-                phi -= self.mu * slack_xu(self, i).ln();
-            }
-        }
-        if options.constraint_slack_barrier {
-            for i in 0..self.m {
-                // Skip equality constraints (g_l == g_u): slack is zero by definition
-                if constraint_is_equality(self, i) {
-                    continue;
-                }
-                if self.g_l[i].is_finite() {
-                    let slack = self.g[i] - self.g_l[i];
-                    if slack > self.mu * 1e-2 {
-                        phi -= self.mu * slack.ln();
-                    }
-                }
-                if self.g_u[i].is_finite() {
-                    let slack = self.g_u[i] - self.g[i];
-                    if slack > self.mu * 1e-2 {
-                        phi -= self.mu * slack.ln();
-                    }
-                }
-            }
-        }
-        phi
+        compute_barrier_phi(
+            self.obj, &self.x, &self.g, self,
+            self.n, self.m, options.constraint_slack_barrier,
+        )
     }
 
     /// Compute constraint violation (theta).
