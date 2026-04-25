@@ -3484,6 +3484,37 @@ fn solve_dense_condensed_direction<P: NlpProblem>(
     }
 
     // Condensed failed — build full KKT on demand.
+    fall_back_to_full_kkt_after_condensed_failure(
+        state, problem, options, n, m, use_sparse, sigma,
+        kkt_system_opt, lin_solver, inertia_params, filter, restoration,
+        lbfgs_state, lbfgs_mode, linear_constraints, deadline,
+    )
+}
+
+/// Build the full augmented KKT on demand and try to solve it after the
+/// dense-condensed Bunch–Kaufman path failed. On factor or solve failure,
+/// dispatches to `restore_after_solve_failure`. On success, transfers
+/// ownership of the freshly built `KktSystem` into `kkt_system_opt` so
+/// downstream consumers (line search, SOC) see the same matrix.
+#[allow(clippy::too_many_arguments)]
+fn fall_back_to_full_kkt_after_condensed_failure<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    options: &SolverOptions,
+    n: usize,
+    m: usize,
+    use_sparse: bool,
+    sigma: &[f64],
+    kkt_system_opt: &mut Option<kkt::KktSystem>,
+    lin_solver: &mut dyn LinearSolver,
+    inertia_params: &mut InertiaCorrectionParams,
+    filter: &Filter,
+    restoration: &mut RestorationPhase,
+    lbfgs_state: &mut Option<LbfgsIpmState>,
+    lbfgs_mode: bool,
+    linear_constraints: Option<&[bool]>,
+    deadline: Option<Instant>,
+) -> CondensedDirectionOutcome {
     let mut kkt = kkt::assemble_kkt(
         n, m,
         &state.hess_rows, &state.hess_cols, &state.hess_vals,
