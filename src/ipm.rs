@@ -5093,13 +5093,8 @@ fn update_barrier_parameter(
 
     let kkt_error = {
         let pi = state.constraint_violation();
-        let di = convergence::dual_infeasibility(
-            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-            &state.y, &state.z_l, &state.z_u, n,
-        );
-        let ci = convergence::complementarity_error(
-            &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
-        );
+        let di = compute_dual_inf_at_state(state);
+        let ci = compute_compl_err_at_state(state);
         pi * pi + di * di + ci * ci
     };
 
@@ -5109,10 +5104,7 @@ fn update_barrier_parameter(
     // If du is not decreasing over 3 consecutive iterations in Free mode,
     // force switch to Fixed mode with mu = 0.8 * avg_compl.
     {
-        let du_now = convergence::dual_infeasibility(
-            &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-            &state.y, &state.z_l, &state.z_u, n,
-        );
+        let du_now = compute_dual_inf_at_state(state);
         if mu_state.dual_inf_window.len() >= 3 {
             mu_state.dual_inf_window.remove(0);
         }
@@ -5500,13 +5492,8 @@ fn try_complementarity_polish_promotion(
             state.z_u[i] = 0.0;
         }
     }
-    let snap_du = convergence::dual_infeasibility(
-        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-        &state.y, &state.z_l, &state.z_u, n,
-    );
-    let snap_compl = convergence::complementarity_error(
-        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
-    );
+    let snap_du = compute_dual_inf_at_state(state);
+    let snap_compl = compute_compl_err_at_state(state);
     let snap_mult_sum = compute_multiplier_sum(state);
     let snap_conv = ConvergenceInfo {
         primal_inf: conv_info.primal_inf,
@@ -5736,16 +5723,7 @@ fn compute_optimality_measures(state: &SolverState) -> OptimalityMeasures {
     // Iterative-z dual infeasibility (matches Ipopt's curr_dual_infeasibility):
     // honest KKT residual. If iterative z is inconsistent with ∇f + J^T y the
     // residual stays large and iteration continues.
-    let dual_inf = convergence::dual_infeasibility(
-        &state.grad_f,
-        &state.jac_rows,
-        &state.jac_cols,
-        &state.jac_vals,
-        &state.y,
-        &state.z_l,
-        &state.z_u,
-        n,
-    );
+    let dual_inf = compute_dual_inf_at_state(state);
     let dual_inf_unscaled = convergence::dual_infeasibility_scaled(
         &state.grad_f,
         &state.jac_rows,
@@ -5756,9 +5734,7 @@ fn compute_optimality_measures(state: &SolverState) -> OptimalityMeasures {
         &state.z_u,
         n,
     );
-    let compl_inf = convergence::complementarity_error(
-        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
-    );
+    let compl_inf = compute_compl_err_at_state(state);
     OptimalityMeasures {
         primal_inf,
         primal_inf_max,
@@ -6371,13 +6347,8 @@ fn check_restored_point_near_tolerance(
     m: usize,
 ) -> Option<SolveResult> {
     let rest_pr = state.constraint_violation();
-    let rest_du = convergence::dual_infeasibility(
-        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-        &state.y, &state.z_l, &state.z_u, n,
-    );
-    let rest_co = convergence::complementarity_error(
-        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
-    );
+    let rest_du = compute_dual_inf_at_state(state);
+    let rest_co = compute_compl_err_at_state(state);
     let s_d = compute_s_d_scaling(compute_multiplier_sum(state), m + 2 * n);
     let near_tol = 100.0 * options.tol;
     let du_tol = (near_tol * s_d).max(1e-2);
@@ -6444,10 +6415,7 @@ fn handle_dual_stagnation<P: NlpProblem>(
     let n = state.n;
     let m = state.m;
 
-    let current_du = convergence::dual_infeasibility(
-        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-        &state.y, &state.z_l, &state.z_u, n,
-    );
+    let current_du = compute_dual_inf_at_state(state);
     if current_du < 0.5 * *last_good_du {
         *last_good_du = current_du;
         *last_good_iter = iteration;
@@ -7768,17 +7736,12 @@ fn print_max_iter_diagnostics(
         return;
     }
     let final_primal_inf = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
-    let final_dual_inf = convergence::dual_infeasibility(
-        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-        &state.y, &state.z_l, &state.z_u, n,
-    );
+    let final_dual_inf = compute_dual_inf_at_state(state);
     let final_dual_inf_unscaled = convergence::dual_infeasibility_scaled(
         &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
         &state.y, &state.z_l, &state.z_u, n,
     );
-    let final_compl = convergence::complementarity_error(
-        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
-    );
+    let final_compl = compute_compl_err_at_state(state);
     let s_d = compute_s_d_scaling(compute_multiplier_sum(state), m + 2 * n);
     rip_log!(
         "ripopt: MaxIter diag: pr={:.2e} du={:.2e}(t={:.2e}) du_u={:.2e}(t={:.0e}) co={:.2e}(t={:.2e}) mu={:.2e} sd={:.1} ac={}",
@@ -7818,13 +7781,8 @@ fn finalize_after_max_iter(
     }
 
     let primal_inf = state.constraint_violation();
-    let dual_inf = convergence::dual_infeasibility(
-        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-        &state.y, &state.z_l, &state.z_u, state.n,
-    );
-    let compl_inf = convergence::complementarity_error(
-        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
-    );
+    let dual_inf = compute_dual_inf_at_state(state);
+    let compl_inf = compute_compl_err_at_state(state);
     if primal_inf <= options.constr_viol_tol
         && dual_inf <= options.dual_inf_tol
         && compl_inf <= options.compl_inf_tol
@@ -8529,12 +8487,8 @@ fn quality_function_mu(state: &SolverState, mu_lower: f64, mu_upper: f64, n_cand
         return mu_upper;
     }
 
-    let n = state.n;
     let pi = state.constraint_violation();
-    let di = convergence::dual_infeasibility(
-        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-        &state.y, &state.z_l, &state.z_u, n,
-    );
+    let di = compute_dual_inf_at_state(state);
     let fixed_part = pi * pi + di * di;
 
     let log_min = mu_lower.max(1e-20).ln();
@@ -8937,6 +8891,26 @@ fn compute_grad_theta_norm(state: &SolverState) -> f64 {
     grad_theta.iter().map(|v| v.abs()).fold(0.0f64, f64::max)
 }
 
+/// `convergence::dual_infeasibility` at the current iterate using
+/// `state.{grad_f, jac_*, y, z_l, z_u}`. This combination of args
+/// appears at over a dozen call sites; the helper makes them all
+/// uniform.
+fn compute_dual_inf_at_state(state: &SolverState) -> f64 {
+    convergence::dual_infeasibility(
+        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
+        &state.y, &state.z_l, &state.z_u, state.n,
+    )
+}
+
+/// `convergence::complementarity_error` at the current iterate using
+/// `state.{x, x_l, x_u, z_l, z_u}` with `μ = 0` (i.e. the
+/// optimality complementarity rather than the centered-path one).
+fn compute_compl_err_at_state(state: &SolverState) -> f64 {
+    convergence::complementarity_error(
+        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
+    )
+}
+
 /// Sum of absolute values of all Lagrange multipliers in the iterate:
 /// equality multipliers `y` plus bound multipliers `z_l` and `z_u`.
 /// Used together with `multiplier_count = m + 2*n` to compute the dual
@@ -8960,13 +8934,8 @@ fn compute_convergence_info_from_state(
     m: usize,
 ) -> ConvergenceInfo {
     let primal_inf = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
-    let dual_inf = convergence::dual_infeasibility(
-        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-        &state.y, &state.z_l, &state.z_u, n,
-    );
-    let compl_inf = convergence::complementarity_error(
-        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
-    );
+    let dual_inf = compute_dual_inf_at_state(state);
+    let compl_inf = compute_compl_err_at_state(state);
     ConvergenceInfo {
         primal_inf,
         dual_inf,
@@ -9073,10 +9042,7 @@ fn compute_barrier_error(state: &SolverState) -> f64 {
     // Dual infeasibility safeguard: prevent the barrier subproblem from being
     // declared "solved" when the NLP dual infeasibility is still large.
     // This prevents mu from collapsing to 1e-11 while du remains huge (issue #8 Class 2).
-    let unscaled_du = convergence::dual_infeasibility(
-        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-        &state.y, &state.z_l, &state.z_u, n,
-    );
+    let unscaled_du = compute_dual_inf_at_state(state);
     let du_floor = unscaled_du * 0.1; // 10% of unscaled du as floor on barrier error
 
     dual_err.max(compl_err).max(primal_err).max(du_floor)
@@ -9413,13 +9379,8 @@ fn populate_final_diagnostics(state: &SolverState) -> SolverDiagnostics {
     let mut diag = state.diagnostics.clone();
     diag.final_mu = state.mu;
     diag.final_primal_inf = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
-    diag.final_dual_inf = convergence::dual_infeasibility(
-        &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-        &state.y, &state.z_l, &state.z_u, n,
-    );
-    diag.final_compl = convergence::complementarity_error(
-        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
-    );
+    diag.final_dual_inf = compute_dual_inf_at_state(state);
+    diag.final_compl = compute_compl_err_at_state(state);
     diag.final_s_d = compute_s_d_scaling(compute_multiplier_sum(state), m + 2 * n);
     diag
 }
