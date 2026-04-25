@@ -128,9 +128,18 @@ where a reader short on time should start.
     (initial-mu override + bound multiplier init at chosen mu). Test:
     `tests/correctness.rs::warm_start_target_mu_sets_initial_mu`.
     Per-component bound_push remains a follow-up.
-19. **ripopt: full `PDPerturbationHandler` port including `delta_s`
-    and `delta_d`.** Required for correct regularization trajectory
-    on inequality-only rank deficiency.
+19. **[PARTIAL] ripopt: full `PDPerturbationHandler` port.** Done:
+    distinct first-time vs subsequent inc factors (`delta_w_inc_fact_first`
+    = 100, `delta_w_inc_fact` = 8), `delta_w_dec_fact` = 1/3 warm-shrink,
+    `delta_w_max` give-up threshold (1e20), `delta_w_min` floor (1e-20).
+    See `src/kkt.rs::InertiaCorrectionParams` and the escalation in
+    `factor_with_inertia_correction`. Tests:
+    `test_inertia_first_inc_factor_used_when_cold`,
+    `test_inertia_dec_fact_warm_shrinks_by_one_third`,
+    `test_inertia_max_perturbation_cap`. Remaining gap: `delta_s`
+    (separate slack perturbation) is N/A for ripopt's slack-less
+    formulation; `delta_d` is folded into `delta_c` per Ipopt's own
+    convention (`IpPDPerturbationHandler.cpp:217`).
 20. **rmumps: static 2×2 pivots.** `frontal.rs:864-881` only does 1×1
     static fallback; MUMPS keeps trying 2×2 under `STATICMODE`.
 
@@ -154,11 +163,11 @@ equivalent.
 |---|---|---|---|
 | Full-space KKT with dense/sparse LDL^T | Faithful | `src/kkt.rs:52-261` (assemble), `src/kkt.rs:690-842` (solve + iter-refinement) | `IpPDFullSpaceSolver.cpp` |
 | Sigma = Z / (x - x_L) + Z / (x_U - x), bound-mult elimination | Faithful | `src/kkt.rs:263-295` | `IpPDFullSpaceSolver.cpp` |
-| `PDPerturbationHandler`: delta_w, delta_c, delta_d escalation with history | **Partial / simplified** | `src/kkt.rs:333-651` (`factor_with_inertia_correction` + `InertiaCorrectionParams`) | `IpPDPerturbationHandler.cpp:17-356` |
-| delta_s (separate slack perturbation) | **Absent** — ripopt lumps slacks into x | n/a | `IpPDPerturbationHandler.cpp:130-181` |
-| `perturb_dec_fact` (kappa_w^-) warm-shrink on success | Partial (`delta_w_last / delta_w_growth`, `src/kkt.rs:571`) | | `IpPDPerturbationHandler.cpp:73` |
-| `perturb_inc_fact_first` distinct from `perturb_inc_fact` | Absent (single growth factor 4.0, `src/kkt.rs:358`) | | `IpPDPerturbationHandler.cpp:50-65` |
-| delta_c tied to mu^kappa_c (`jacobian_regularization_exponent=0.25`) | Absent (`delta_c_base = 1e-4`, fixed) | `src/kkt.rs:357` | `IpPDPerturbationHandler.cpp:82-94` |
+| `PDPerturbationHandler`: delta_w, delta_c, delta_d escalation with history | Faithful (Ipopt-aligned constants and two-stage growth) | `src/kkt.rs::InertiaCorrectionParams`, `factor_with_inertia_correction` | `IpPDPerturbationHandler.cpp:17-356` |
+| delta_s (separate slack perturbation) | N/A — ripopt is slack-less; `delta_d == delta_c` matches Ipopt | n/a | `IpPDPerturbationHandler.cpp:130-181,217` |
+| `perturb_dec_fact` (kappa_w^-) warm-shrink on success | Faithful (1/3) | `src/kkt.rs::InertiaCorrectionParams::delta_w_dec_fact` | `IpPDPerturbationHandler.cpp:71` |
+| `perturb_inc_fact_first` distinct from `perturb_inc_fact` | Faithful (100 vs 8) | `src/kkt.rs::InertiaCorrectionParams::{delta_w_inc_fact_first, delta_w_inc_fact}` | `IpPDPerturbationHandler.cpp:53,62` |
+| delta_c tied to mu^kappa_c (`jacobian_regularization_exponent=0.25`) | Faithful | `src/kkt.rs::factor_with_inertia_correction` (`delta_c_active = delta_c_base * mu.powf(0.25)`) | `IpPDPerturbationHandler.cpp:82-94` |
 | Filter: (theta, phi) entries with gamma_theta/gamma_phi envelope | Faithful | `src/filter.rs:64-79,171-178` | `IpFilter.cpp`, `IpFilterLSAcceptor.cpp:311-437` |
 | Switching condition, f/h-type classification | Faithful | `src/filter.rs:86-99,133-168` | `IpFilterLSAcceptor.cpp` |
 | Armijo on phi | Faithful | `src/filter.rs:102-110` | `IpFilterLSAcceptor.cpp` |

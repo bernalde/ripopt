@@ -1406,7 +1406,15 @@ fn dispatch_failure_recovery<P: NlpProblem>(
             }
         }
         FailureDiagnosis::StallNearOptimal => {
-            try_sqp_fallback(result, problem, options, solve_start, diagnosis, has_constraints);
+            // A stall *at* a near-feasible point with growing Hessian
+            // perturbation often indicates the user-provided Hessian has
+            // wrong curvature: inertia correction recovers definiteness
+            // but at the cost of vanishing step sizes. Try the L-BFGS
+            // Hessian fallback first (cheap, often diagnostic), then SQP.
+            try_lbfgs_hessian_fallback(result, problem, options, solve_start, diagnosis);
+            if !matches!(result.status, SolveStatus::Optimal) {
+                try_sqp_fallback(result, problem, options, solve_start, diagnosis, has_constraints);
+            }
         }
     }
     None
@@ -3388,7 +3396,7 @@ fn solve_with_quality_escalation(
                 }
             }
             if !ps_resolved && matches!(dir_result, Err(crate::linear_solver::SolverError::PretendSingular)) {
-                let dw = if ic_delta_w == 0.0 { inertia_params.delta_w_init } else { ic_delta_w * inertia_params.delta_w_growth };
+                let dw = if ic_delta_w == 0.0 { inertia_params.delta_w_init } else { ic_delta_w * inertia_params.delta_w_inc_fact };
                 let dc = if m > 0 && ic_delta_c == 0.0 { inertia_params.delta_c_base } else { ic_delta_c };
                 let mut perturbed = kkt_system.matrix.clone();
                 perturbed.add_diagonal_range(0, n, dw);

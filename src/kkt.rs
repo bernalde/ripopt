@@ -336,15 +336,40 @@ pub fn ruiz_equilibrate(matrix: &mut KktMatrix, rhs: &mut [f64]) -> Vec<f64> {
     cumulative
 }
 
-/// Parameters for inertia correction.
+/// Parameters for inertia correction. Mirrors Ipopt's
+/// `PDPerturbationHandler` (see `IpPDPerturbationHandler.cpp`):
+/// distinct first-time vs subsequent inc factors, a 1/3 dec factor for
+/// the warm-shrink between successive solves, a hard cap `delta_w_max`,
+/// and a floor `delta_w_min`.
 pub struct InertiaCorrectionParams {
-    /// Initial primal regularization.
+    /// Initial primal regularization, `first_hessian_perturbation`
+    /// (Ipopt default 1e-4, `IpPDPerturbationHandler.cpp:79`).
     pub delta_w_init: f64,
     /// Base constraint regularization.
     pub delta_c_base: f64,
-    /// Growth factor for delta_w.
-    pub delta_w_growth: f64,
-    /// Maximum number of correction attempts.
+    /// First-time growth factor `perturb_inc_fact_first` (Ipopt
+    /// default 100, `IpPDPerturbationHandler.cpp:53`). Used when
+    /// `delta_w_last == 0` (no previous perturbation in the run) or
+    /// `1e5 * delta_w_last < delta_w_curr` (current already vastly
+    /// exceeds the last successful level).
+    pub delta_w_inc_fact_first: f64,
+    /// Subsequent growth factor `perturb_inc_fact` (Ipopt default 8,
+    /// `IpPDPerturbationHandler.cpp:62`).
+    pub delta_w_inc_fact: f64,
+    /// Warm-shrink factor `perturb_dec_fact` applied to delta_w_last
+    /// between successive calls (Ipopt default 1/3,
+    /// `IpPDPerturbationHandler.cpp:71`).
+    pub delta_w_dec_fact: f64,
+    /// Give-up threshold `max_hessian_perturbation` (Ipopt default
+    /// 1e20, `IpPDPerturbationHandler.cpp:31`). When delta_w exceeds
+    /// this, restoration is the only recourse.
+    pub delta_w_max: f64,
+    /// Floor `min_hessian_perturbation` (Ipopt default 1e-20,
+    /// `IpPDPerturbationHandler.cpp:45`). Clamps the warm-shrink so
+    /// it never collapses to exactly zero.
+    pub delta_w_min: f64,
+    /// Maximum number of correction attempts (safety net; the primary
+    /// stop is `delta_w > delta_w_max`).
     pub max_attempts: usize,
     /// Last successful delta_w (for warm-starting perturbation).
     pub delta_w_last: f64,
@@ -365,8 +390,12 @@ impl Default for InertiaCorrectionParams {
             // the actual delta_c applied is this base scaled by mu^0.25 inside
             // factor_with_inertia_correction.
             delta_c_base: 1e-8,
-            delta_w_growth: 4.0,
-            max_attempts: 15,
+            delta_w_inc_fact_first: 100.0,
+            delta_w_inc_fact: 8.0,
+            delta_w_dec_fact: 1.0 / 3.0,
+            delta_w_max: 1e20,
+            delta_w_min: 1e-20,
+            max_attempts: 30,
             delta_w_last: 0.0,
             use_scaling: false,
             degeneracy_count: 0,
@@ -562,15 +591,34 @@ pub fn factor_with_inertia_correction(
 
     } // end if !structurally_degenerate
 
-    // Inertia is wrong or backward error too large — apply perturbation and re-factor
+    // Inertia is wrong or backward error too large — apply perturbation and re-factor.
+    //
+    // Initial delta_w within this call. Mirrors Ipopt's
+    // `get_deltas_for_wrong_inertia` start (`IpPDPerturbationHandler.cpp:375-382`):
+    //   - cold (no prior perturbation in this run): start at delta_w_init.
+    //   - warm: start at max(delta_w_min, delta_w_last * delta_w_dec_fact),
+    //     i.e. one-third of the last successful perturbation, allowing
+    //     the schedule to shrink across successive iterations when the
+    //     problem is becoming locally easier.
     let mut delta_w = if params.delta_w_last == 0.0 {
         params.delta_w_init
     } else {
-        (params.delta_w_last / params.delta_w_growth).max(params.delta_w_init)
+        (params.delta_w_last * params.delta_w_dec_fact).max(params.delta_w_min)
     };
     let mut best_delta_w = delta_w;
 
     for attempt in 0..params.max_attempts {
+        // Give-up threshold (Ipopt: `delta_xs_max_`,
+        // `IpPDPerturbationHandler.cpp:31,395-403`). Once exceeded, the
+        // matrix is hopelessly indefinite and only restoration can recover.
+        if delta_w > params.delta_w_max {
+            log::debug!(
+                "Inertia correction: delta_w={:.2e} exceeds delta_w_max={:.2e}, giving up",
+                delta_w, params.delta_w_max
+            );
+            break;
+        }
+
         let delta_c = delta_c_active;
 
         // Create perturbed matrix
@@ -603,13 +651,27 @@ pub fn factor_with_inertia_correction(
 
         best_delta_w = delta_w;
 
-        // Increase perturbation
-        delta_w *= params.delta_w_growth;
+        // Two-stage growth (Ipopt's first-vs-subsequent inc fact,
+        // `IpPDPerturbationHandler.cpp:386-393`). The first factor (100x)
+        // applies when the system has never been perturbed before
+        // (`delta_w_last == 0`) or when the current perturbation has
+        // already vastly outgrown the last successful level
+        // (`1e5 * delta_w_last < delta_w_curr`). Otherwise, the gentler
+        // 8x factor keeps us near the previously successful regime.
+        let inc = if params.delta_w_last == 0.0
+            || 1e5 * params.delta_w_last < delta_w
+        {
+            params.delta_w_inc_fact_first
+        } else {
+            params.delta_w_inc_fact
+        };
+        delta_w *= inc;
 
         log::debug!(
-            "Inertia correction attempt {}: delta_w = {:.2e}, delta_c = {:.2e}, inertia = {:?}",
+            "Inertia correction attempt {}: delta_w = {:.2e} (x{}), delta_c = {:.2e}, inertia = {:?}",
             attempt + 1,
             delta_w,
+            inc,
             delta_c,
             inertia
         );
@@ -1975,8 +2037,14 @@ mod tests {
         params.delta_w_last = 1.0; // Warm-start from previous
 
         let (delta_w, _) = factor_with_inertia_correction(&mut kkt, &mut solver, &mut params, 1e-4).unwrap();
-        // Should start from delta_w_last / growth = 1.0 / 8.0 = 0.125
-        assert!(delta_w >= 0.125 - 1e-10, "Warm-start should begin from delta_w_last/growth");
+        // Ipopt-style warm-shrink: start at delta_w_last * delta_w_dec_fact = 1.0 * 1/3.
+        // The first acceptable delta_w is at least that (escalation grows from there).
+        let warm_start = 1.0 * params.delta_w_dec_fact;
+        assert!(
+            delta_w >= warm_start - 1e-12,
+            "Warm-start should begin from delta_w_last * dec_fact ({}); got {}",
+            warm_start, delta_w
+        );
     }
 
     #[test]
@@ -2010,6 +2078,126 @@ mod tests {
             "delta_w_last should equal the successful delta_w");
         // degeneracy_count should bump once per successful perturbation
         assert_eq!(params.degeneracy_count, 1);
+    }
+
+    #[test]
+    fn test_inertia_first_inc_factor_used_when_cold() {
+        // First-time perturbation (delta_w_last == 0): escalation should
+        // multiply by the first-inc factor (100), not the subsequent
+        // inc factor (8). Mirrors Ipopt
+        // PDPerturbationHandler::get_deltas_for_wrong_inertia
+        // (IpPDPerturbationHandler.cpp:386-393).
+        //
+        // Construct a KKT requiring at least one escalation: identity
+        // (2,2) block + identity constraint block has inertia (4,0,0),
+        // so the loop must perturb to flip 2 eigenvalues to negative
+        // via the -delta_c addition. The initial delta_w starts at
+        // delta_w_init = 1e-4, and the next delta_w (if needed) is
+        // 1e-4 * 100 = 1e-2 — never 1e-4 * 8 = 8e-4.
+        let n = 2;
+        let m = 2;
+        let mut matrix = SymmetricMatrix::zeros(4);
+        for i in 0..4 { matrix.set(i, i, 1.0); }
+        matrix.set(2, 0, 0.5);
+        matrix.set(3, 1, 0.5);
+        let mut kkt = KktSystem {
+            dim: 4, n, m,
+            matrix: KktMatrix::Dense(matrix),
+            rhs: vec![1.0, 2.0, 3.0, 4.0],
+            delta_c_diag: vec![0.0; m],
+            scale_factors: None,
+        };
+        let mut solver = DenseLdl::new();
+        let mut params = InertiaCorrectionParams::default();
+        // Inject a high mu so delta_c_active is meaningful.
+        let result = factor_with_inertia_correction(&mut kkt, &mut solver, &mut params, 1.0);
+        assert!(result.is_ok());
+        let (delta_w, _) = result.unwrap();
+        // Either the first try (1e-4) succeeded, or the loop escalated
+        // to >= 1e-4 * 100 = 1e-2. The intermediate value 1e-4 * 8 must
+        // never appear.
+        if delta_w > params.delta_w_init * 1.5 {
+            assert!(
+                delta_w >= params.delta_w_init * params.delta_w_inc_fact_first - 1e-12,
+                "Cold escalation should jump by 100x, not 8x; got delta_w={:.3e}",
+                delta_w
+            );
+        }
+    }
+
+    #[test]
+    fn test_inertia_dec_fact_warm_shrinks_by_one_third() {
+        // Warm start with delta_w_last = 0.9: the next call should begin
+        // at 0.9 * (1/3) = 0.3, not 0.9 / 8.0 (the old growth-based
+        // shrink). Verifies the dec_fact warm-shrink path
+        // (IpPDPerturbationHandler.cpp:381). We force wrong inertia via
+        // an indefinite (1,1) block so the perturbation loop actually
+        // runs (the unperturbed factorization would otherwise pass).
+        let n = 2;
+        let m = 1;
+        let mut matrix = SymmetricMatrix::zeros(3);
+        matrix.set(0, 0, -1.0);
+        matrix.set(1, 1, -1.0);
+        matrix.set(2, 2, 1.0);
+        matrix.set(2, 0, 0.1);
+        matrix.set(2, 1, 0.1);
+        let mut kkt2 = KktSystem {
+            dim: 3, n, m,
+            matrix: KktMatrix::Dense(matrix),
+            rhs: vec![1.0, 2.0, 3.0],
+            delta_c_diag: vec![0.0; m],
+            scale_factors: None,
+        };
+        let mut solver = DenseLdl::new();
+        let mut params = InertiaCorrectionParams::default();
+        params.delta_w_last = 0.9;
+        let (delta_w, _) =
+            factor_with_inertia_correction(&mut kkt2, &mut solver, &mut params, 1e-4).unwrap();
+        // The first delta_w tried is 0.9 * (1/3) = 0.3. If the
+        // unperturbed (cold) path had been used, we would see <= 1e-4.
+        // The successful delta_w should match (or escalate beyond) 0.3.
+        let expected_initial = 0.9 * (1.0 / 3.0);
+        assert!(
+            delta_w >= expected_initial - 1e-12,
+            "Warm-shrink should start at delta_w_last * 1/3 = {:.3e}; got {:.3e}",
+            expected_initial, delta_w
+        );
+        // Also confirm we did NOT use the old 1/8 shrink (which would
+        // give 0.1125 — strictly less than 1/3 of last). The strictly-
+        // greater check rules that out.
+        assert!(
+            delta_w > 0.9 / 8.0,
+            "delta_w should not match the deprecated /growth shrink"
+        );
+    }
+
+    #[test]
+    fn test_inertia_max_perturbation_cap() {
+        // Setting delta_w_max small and forcing impossible inertia
+        // exercises the give-up path. The function must return Ok
+        // (fall through to the warning path with best_delta_w),
+        // not loop forever.
+        let n = 2;
+        let m = 2;
+        let mut matrix = SymmetricMatrix::zeros(4);
+        for i in 0..4 { matrix.set(i, i, 1.0); }
+        matrix.set(2, 0, 0.1);
+        matrix.set(3, 1, 0.1);
+        let mut kkt = KktSystem {
+            dim: 4, n, m,
+            matrix: KktMatrix::Dense(matrix),
+            rhs: vec![1.0, 2.0, 3.0, 4.0],
+            delta_c_diag: vec![0.0; m],
+            scale_factors: None,
+        };
+        let mut solver = DenseLdl::new();
+        let mut params = InertiaCorrectionParams {
+            delta_w_max: 1e-2,
+            max_attempts: 100,
+            ..Default::default()
+        };
+        let result = factor_with_inertia_correction(&mut kkt, &mut solver, &mut params, 1e-4);
+        assert!(result.is_ok(), "delta_w_max give-up must return Ok");
     }
 
     #[test]
