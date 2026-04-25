@@ -5245,6 +5245,38 @@ impl SavedIterate {
     }
 }
 
+/// Compute the arithmetic mean of the last `iterate_history.len()`
+/// iterates in `(x, y, z_l, z_u)`, then clamp `avg_x` strictly inside
+/// the variable bounds (push 1e-15 off each finite bound) and clamp
+/// `avg_zl, avg_zu` non-negative.
+fn compute_iterate_average(
+    iterate_history: &[(Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>)],
+    state: &SolverState,
+    n: usize,
+    m: usize,
+) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
+    let len = iterate_history.len() as f64;
+    let mut avg_x = vec![0.0; n];
+    let mut avg_y = vec![0.0; m];
+    let mut avg_zl = vec![0.0; n];
+    let mut avg_zu = vec![0.0; n];
+    for (hx, hy, hzl, hzu) in iterate_history.iter() {
+        for i in 0..n { avg_x[i] += hx[i] / len; }
+        for i in 0..m { avg_y[i] += hy[i] / len; }
+        for i in 0..n { avg_zl[i] += hzl[i] / len; }
+        for i in 0..n { avg_zu[i] += hzu[i] / len; }
+    }
+    for i in 0..n {
+        avg_x[i] = avg_x[i].clamp(
+            if state.x_l[i].is_finite() { state.x_l[i] + 1e-15 } else { f64::NEG_INFINITY },
+            if state.x_u[i].is_finite() { state.x_u[i] - 1e-15 } else { f64::INFINITY },
+        );
+        avg_zl[i] = avg_zl[i].max(0.0);
+        avg_zu[i] = avg_zu[i].max(0.0);
+    }
+    (avg_x, avg_y, avg_zl, avg_zu)
+}
+
 /// Strategy 1 (Acceptable promotion): if the dual-infeasibility history has
 /// `AVG_WINDOW` entries and shows oscillation (>= AVG_WINDOW/2 sign changes
 /// in consecutive differences), average the last `AVG_WINDOW` iterates and
@@ -5278,25 +5310,8 @@ fn try_iterate_averaging_promotion<P: NlpProblem>(
         return None;
     }
     *ws.tried_iterate_averaging = true;
-    let len = ws.iterate_history.len() as f64;
-    let mut avg_x = vec![0.0; n];
-    let mut avg_y = vec![0.0; m];
-    let mut avg_zl = vec![0.0; n];
-    let mut avg_zu = vec![0.0; n];
-    for (hx, hy, hzl, hzu) in ws.iterate_history.iter() {
-        for i in 0..n { avg_x[i] += hx[i] / len; }
-        for i in 0..m { avg_y[i] += hy[i] / len; }
-        for i in 0..n { avg_zl[i] += hzl[i] / len; }
-        for i in 0..n { avg_zu[i] += hzu[i] / len; }
-    }
-    for i in 0..n {
-        avg_x[i] = avg_x[i].clamp(
-            if state.x_l[i].is_finite() { state.x_l[i] + 1e-15 } else { f64::NEG_INFINITY },
-            if state.x_u[i].is_finite() { state.x_u[i] - 1e-15 } else { f64::INFINITY },
-        );
-        avg_zl[i] = avg_zl[i].max(0.0);
-        avg_zu[i] = avg_zu[i].max(0.0);
-    }
+    let (avg_x, avg_y, avg_zl, avg_zu) =
+        compute_iterate_average(ws.iterate_history, state, n, m);
     let saved = SavedIterate::snapshot(state);
     state.x.copy_from_slice(&avg_x);
     state.y.copy_from_slice(&avg_y);
@@ -5306,19 +5321,17 @@ fn try_iterate_averaging_promotion<P: NlpProblem>(
     let avg_pr = convergence::primal_infeasibility_max(&state.g, &state.g_l, &state.g_u);
     let avg_du = convergence::dual_infeasibility(
         &state.grad_f, &state.jac_rows, &state.jac_cols, &state.jac_vals,
-        &avg_y, &avg_zl, &avg_zu, n,
+        &state.y, &state.z_l, &state.z_u, n,
     );
     let avg_compl = convergence::complementarity_error(
-        &avg_x, &state.x_l, &state.x_u, &avg_zl, &avg_zu, 0.0,
+        &state.x, &state.x_l, &state.x_u, &state.z_l, &state.z_u, 0.0,
     );
     let avg_conv = ConvergenceInfo {
         primal_inf: avg_pr, dual_inf: avg_du,
         dual_inf_unscaled: avg_du,
         compl_inf: avg_compl,
         mu: state.mu, objective: state.obj,
-        multiplier_sum: avg_y.iter().map(|v| v.abs()).sum::<f64>()
-            + avg_zl.iter().map(|v| v.abs()).sum::<f64>()
-            + avg_zu.iter().map(|v| v.abs()).sum::<f64>(),
+        multiplier_sum: compute_multiplier_sum(state),
         multiplier_count: m + 2 * n,
     };
     if let ConvergenceStatus::Converged = check_convergence(&avg_conv, options, 0) {
