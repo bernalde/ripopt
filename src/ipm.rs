@@ -5682,6 +5682,24 @@ fn reset_filter_with_current_theta(state: &SolverState, filter: &mut Filter) {
     filter.set_theta_min_from_initial(theta);
 }
 
+/// Stall-recovery cleanup: re-seed the filter from the current θ and
+/// clear the no-progress window so the next iteration starts fresh.
+/// Used by every branch in `handle_near_tolerance_stall` /
+/// `try_boost_mu_for_stall` that mutates μ to escape a stall — the
+/// metric history before the μ change is meaningless once μ jumps.
+fn reset_stall_counters_and_filter(
+    state: &SolverState,
+    filter: &mut Filter,
+    stall_no_progress_count: &mut usize,
+    stall_best_pr: &mut f64,
+    stall_best_du: &mut f64,
+) {
+    reset_filter_with_current_theta(state, filter);
+    *stall_no_progress_count = 0;
+    *stall_best_pr = f64::INFINITY;
+    *stall_best_du = f64::INFINITY;
+}
+
 /// Per-iteration KKT residuals used by the log row, filter, and
 /// convergence check.
 struct OptimalityMeasures {
@@ -6021,10 +6039,10 @@ fn handle_near_tolerance_stall(
             );
         }
         state.mu = new_mu;
-        reset_filter_with_current_theta(state, filter);
-        *stall_no_progress_count = 0;
-        *stall_best_pr = f64::INFINITY;
-        *stall_best_du = f64::INFINITY;
+        reset_stall_counters_and_filter(
+            state, filter,
+            stall_no_progress_count, stall_best_pr, stall_best_du,
+        );
         mu_state.mode = MuMode::Fixed;
         mu_state.first_iter_in_mode = true;
         return StallDecision::Continue;
@@ -6040,10 +6058,10 @@ fn handle_near_tolerance_stall(
             );
         }
         state.mu = new_mu;
-        reset_filter_with_current_theta(state, filter);
-        *stall_no_progress_count = 0;
-        *stall_best_pr = f64::INFINITY;
-        *stall_best_du = f64::INFINITY;
+        reset_stall_counters_and_filter(
+            state, filter,
+            stall_no_progress_count, stall_best_pr, stall_best_du,
+        );
         return StallDecision::Continue;
     }
     let acc_pr_ok = primal_inf_max <= 1e-2;
@@ -6096,10 +6114,10 @@ fn try_boost_mu_for_stall(
         );
     }
     state.mu = new_mu;
-    reset_filter_with_current_theta(state, filter);
-    *stall_no_progress_count = 0;
-    *stall_best_pr = f64::INFINITY;
-    *stall_best_du = f64::INFINITY;
+    reset_stall_counters_and_filter(
+        state, filter,
+        stall_no_progress_count, stall_best_pr, stall_best_du,
+    );
     mu_state.mode = MuMode::Fixed;
     mu_state.first_iter_in_mode = true;
     Some(StallDecision::Continue)
