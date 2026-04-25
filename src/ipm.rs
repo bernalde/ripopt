@@ -4085,18 +4085,42 @@ fn apply_restoration_recovery_strategy<P: NlpProblem>(
     inertia_params.delta_w_last = 0.0;
 
     if fail_count >= 3 {
-        for i in 0..n {
-            let range = if state.x_l[i].is_finite() && state.x_u[i].is_finite() {
-                state.x_u[i] - state.x_l[i]
-            } else {
-                state.x[i].abs().max(1.0)
-            };
-            let sign = if (i * 7 + fail_count * 13) % 3 == 0 { -1.0 } else { 1.0 };
-            state.x[i] += sign * 1e-4 * range;
-            clamp_to_open_bounds(&mut state.x, &state.x_l, &state.x_u, i);
-        }
-        let _ = evaluate_and_refresh_lbfgs(state, problem, lbfgs_state, linear_constraints, lbfgs_mode);
+        perturb_x_after_repeated_restoration_failures(
+            state, problem, lbfgs_state, fail_count, n,
+            linear_constraints, lbfgs_mode,
+        );
     }
+}
+
+/// After a third (or later) restoration failure, perturb every
+/// component of `state.x` by `±1e-4·range` with a deterministic
+/// `(7i + 13·fail_count) mod 3` sign pattern, where `range` is the
+/// finite bound width when both bounds exist or `max(|x_i|, 1)`
+/// otherwise. Each component is then re-clamped to its open-bound
+/// interior, and the problem is re-evaluated (refreshing the
+/// L-BFGS Hessian as a side effect). Mirrors the deterministic
+/// perturbation scheme already used by `try_last_resort_perturbation`.
+#[allow(clippy::too_many_arguments)]
+fn perturb_x_after_repeated_restoration_failures<P: NlpProblem>(
+    state: &mut SolverState,
+    problem: &P,
+    lbfgs_state: &mut Option<LbfgsIpmState>,
+    fail_count: usize,
+    n: usize,
+    linear_constraints: Option<&[bool]>,
+    lbfgs_mode: bool,
+) {
+    for i in 0..n {
+        let range = if state.x_l[i].is_finite() && state.x_u[i].is_finite() {
+            state.x_u[i] - state.x_l[i]
+        } else {
+            state.x[i].abs().max(1.0)
+        };
+        let sign = if (i * 7 + fail_count * 13) % 3 == 0 { -1.0 } else { 1.0 };
+        state.x[i] += sign * 1e-4 * range;
+        clamp_to_open_bounds(&mut state.x, &state.x_l, &state.x_u, i);
+    }
+    let _ = evaluate_and_refresh_lbfgs(state, problem, lbfgs_state, linear_constraints, lbfgs_mode);
 }
 
 /// Classify the terminal status when the restoration cascade has exhausted its
