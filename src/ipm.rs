@@ -4803,6 +4803,29 @@ fn try_last_resort_perturbation<P: NlpProblem>(
 /// Extracted from `solve_ipm` as part of the v0.8 main-loop decomposition
 /// (pre-work step 2). Does not return a value — all effects are via
 /// `&mut` on state, mu_state, filter, last_mehrotra_sigma.
+/// Centrality measure used by the Loqo μ oracle:
+/// `ξ = min_i(z_i · s_i) / avg_compl`, clamped to `[0, 1]`. ξ near 1
+/// indicates a well-centered iterate (uniform complementarity
+/// products); ξ near 0 indicates one product is much smaller than the
+/// average. Returns 1.0 when `avg_compl` is non-positive or no active
+/// bound products exist (no centrality information available).
+fn compute_centrality_xi(state: &SolverState, avg_compl: f64) -> f64 {
+    let mut min_compl = f64::INFINITY;
+    for i in 0..state.n {
+        if state.x_l[i].is_finite() {
+            min_compl = min_compl.min(slack_xl(state, i) * state.z_l[i]);
+        }
+        if state.x_u[i].is_finite() {
+            min_compl = min_compl.min(slack_xu(state, i) * state.z_u[i]);
+        }
+    }
+    if avg_compl > 0.0 && min_compl.is_finite() {
+        (min_compl / avg_compl).clamp(0.0, 1.0)
+    } else {
+        1.0
+    }
+}
+
 /// Loqo barrier-parameter oracle (IpLoqoMuOracle.cpp).
 ///
 /// Centrality-driven μ update: ξ = min(z_i·s_i) / avg_compl, then
@@ -4818,7 +4841,6 @@ fn compute_loqo_mu(
     options: &SolverOptions,
     avg_compl: f64,
 ) -> f64 {
-    let n = state.n;
     let barrier_err = compute_barrier_error(state);
     let mu_floor = if barrier_err <= options.barrier_tol_factor * state.mu {
         options.mu_min
@@ -4826,21 +4848,7 @@ fn compute_loqo_mu(
         (state.mu / 5.0).max(options.mu_min)
     };
 
-    // Compute centrality measure: xi = min(z_i*s_i) / avg_compl
-    let mut min_compl = f64::INFINITY;
-    for i in 0..n {
-        if state.x_l[i].is_finite() {
-            min_compl = min_compl.min(slack_xl(state, i) * state.z_l[i]);
-        }
-        if state.x_u[i].is_finite() {
-            min_compl = min_compl.min(slack_xu(state, i) * state.z_u[i]);
-        }
-    }
-    let xi = if avg_compl > 0.0 && min_compl.is_finite() {
-        (min_compl / avg_compl).clamp(0.0, 1.0)
-    } else {
-        1.0
-    };
+    let xi = compute_centrality_xi(state, avg_compl);
 
     let ratio = if xi > 1e-20 {
         (0.05 * (1.0 - xi) / xi).min(2.0)
