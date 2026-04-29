@@ -5,7 +5,8 @@
 //! decomposition or transform API.
 
 use crate::problem::NlpProblem;
-use std::collections::VecDeque;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, VecDeque};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -605,67 +606,77 @@ fn indices_where(flags: &[bool]) -> Vec<usize> {
 }
 
 fn tarjan_strongly_connected_components(adj: &[Vec<usize>]) -> Vec<Vec<usize>> {
+    struct Frame {
+        node: usize,
+        next_edge: usize,
+    }
+
     let n = adj.len();
     let mut next_index = 0usize;
     let mut index = vec![None; n];
     let mut lowlink = vec![0usize; n];
-    let mut stack = Vec::new();
+    let mut scc_stack = Vec::new();
     let mut on_stack = vec![false; n];
     let mut components = Vec::new();
 
-    fn strong_connect(
-        node: usize,
-        adj: &[Vec<usize>],
-        next_index: &mut usize,
-        index: &mut [Option<usize>],
-        lowlink: &mut [usize],
-        stack: &mut Vec<usize>,
-        on_stack: &mut [bool],
-        components: &mut Vec<Vec<usize>>,
-    ) {
-        index[node] = Some(*next_index);
-        lowlink[node] = *next_index;
-        *next_index += 1;
-        stack.push(node);
-        on_stack[node] = true;
-
-        for &next in &adj[node] {
-            if index[next].is_none() {
-                strong_connect(
-                    next, adj, next_index, index, lowlink, stack, on_stack, components,
-                );
-                lowlink[node] = lowlink[node].min(lowlink[next]);
-            } else if on_stack[next] {
-                lowlink[node] = lowlink[node].min(index[next].expect("visited node has index"));
-            }
+    for start in 0..n {
+        if index[start].is_some() {
+            continue;
         }
 
-        if lowlink[node] == index[node].expect("visited node has index") {
-            let mut component = Vec::new();
-            while let Some(member) = stack.pop() {
-                on_stack[member] = false;
-                component.push(member);
-                if member == node {
-                    break;
+        index[start] = Some(next_index);
+        lowlink[start] = next_index;
+        next_index += 1;
+        scc_stack.push(start);
+        on_stack[start] = true;
+
+        let mut dfs_stack = vec![Frame {
+            node: start,
+            next_edge: 0,
+        }];
+
+        while !dfs_stack.is_empty() {
+            let frame_idx = dfs_stack.len() - 1;
+            let node = dfs_stack[frame_idx].node;
+
+            if dfs_stack[frame_idx].next_edge < adj[node].len() {
+                let next = adj[node][dfs_stack[frame_idx].next_edge];
+                dfs_stack[frame_idx].next_edge += 1;
+
+                if index[next].is_none() {
+                    index[next] = Some(next_index);
+                    lowlink[next] = next_index;
+                    next_index += 1;
+                    scc_stack.push(next);
+                    on_stack[next] = true;
+                    dfs_stack.push(Frame {
+                        node: next,
+                        next_edge: 0,
+                    });
+                } else if on_stack[next] {
+                    lowlink[node] = lowlink[node].min(index[next].expect("visited node has index"));
                 }
+                continue;
             }
-            component.sort_unstable();
-            components.push(component);
-        }
-    }
 
-    for node in 0..n {
-        if index[node].is_none() {
-            strong_connect(
-                node,
-                adj,
-                &mut next_index,
-                &mut index,
-                &mut lowlink,
-                &mut stack,
-                &mut on_stack,
-                &mut components,
-            );
+            dfs_stack.pop();
+
+            if lowlink[node] == index[node].expect("visited node has index") {
+                let mut component = Vec::new();
+                while let Some(member) = scc_stack.pop() {
+                    on_stack[member] = false;
+                    component.push(member);
+                    if member == node {
+                        break;
+                    }
+                }
+                component.sort_unstable();
+                components.push(component);
+            }
+
+            if let Some(parent) = dfs_stack.last() {
+                lowlink[parent.node] = lowlink[parent.node].min(lowlink[node]);
+            }
         }
     }
 
@@ -727,21 +738,24 @@ fn topologically_order_blocks(
         .collect();
 
     let mut ordered_blocks = Vec::with_capacity(blocks.len());
-    let mut ready: Vec<_> = (0..components.len())
-        .filter(|&component| indegree[component] == 0)
-        .collect();
-    ready.sort_by_key(|&component| equality_block_sort_key(&blocks[component]));
+    let mut ready = BinaryHeap::new();
+    for component in 0..components.len() {
+        if indegree[component] == 0 {
+            ready.push(Reverse((
+                equality_block_sort_key(&blocks[component]),
+                component,
+            )));
+        }
+    }
 
-    while !ready.is_empty() {
-        let component = ready.remove(0);
+    while let Some(Reverse((_key, component))) = ready.pop() {
         ordered_blocks.push(blocks[component].clone());
         for &next in &component_edges[component] {
             indegree[next] -= 1;
             if indegree[next] == 0 {
-                ready.push(next);
+                ready.push(Reverse((equality_block_sort_key(&blocks[next]), next)));
             }
         }
-        ready.sort_by_key(|&component| equality_block_sort_key(&blocks[component]));
     }
 
     ordered_blocks
@@ -1233,5 +1247,50 @@ mod tests {
                 unmatched_vars: vec![1],
             }
         );
+    }
+
+    #[test]
+    fn btd_handles_long_triangular_dependency_chain_iteratively() {
+        let chain_len = 10_000;
+        let bounds = equality_bounds(chain_len);
+        let mut edges = Vec::with_capacity(2 * chain_len - 1);
+        edges.push((0, 0));
+        for row in 1..chain_len {
+            edges.push((row, row - 1));
+            edges.push((row, row));
+        }
+        let problem = graph_problem(chain_len, &bounds, &edges);
+        let inc = EqualityIncidence::from_problem(&problem, TOL);
+
+        let selected: Vec<_> = (0..chain_len).collect();
+        let blocks = inc
+            .block_triangular_decomposition(&selected, &selected)
+            .unwrap();
+
+        assert_eq!(blocks.len(), chain_len);
+        for (idx, block) in blocks.iter().enumerate() {
+            assert_eq!(block.rows, vec![idx]);
+            assert_eq!(block.vars, vec![idx]);
+        }
+    }
+
+    #[test]
+    fn btd_handles_many_independent_blocks_with_heap_ready_set() {
+        let block_count = 10_000;
+        let bounds = equality_bounds(block_count);
+        let edges: Vec<_> = (0..block_count).map(|idx| (idx, idx)).collect();
+        let problem = graph_problem(block_count, &bounds, &edges);
+        let inc = EqualityIncidence::from_problem(&problem, TOL);
+
+        let selected: Vec<_> = (0..block_count).rev().collect();
+        let blocks = inc
+            .block_triangular_decomposition(&selected, &selected)
+            .unwrap();
+
+        assert_eq!(blocks.len(), block_count);
+        for (idx, block) in blocks.iter().enumerate() {
+            assert_eq!(block.rows, vec![idx]);
+            assert_eq!(block.vars, vec![idx]);
+        }
     }
 }
