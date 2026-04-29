@@ -4,7 +4,9 @@
 //! implementation detail of `enable_preprocessing`; it must not expose a public
 //! decomposition or transform API.
 
+use crate::options::SolverOptions;
 use crate::problem::NlpProblem;
+use crate::result::{SolveResult, SolveStatus};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
 
@@ -19,6 +21,31 @@ pub(crate) struct EqualityBlock {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PresolveCandidate {
     pub(crate) blocks: Vec<EqualityBlock>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct AuxiliarySolveOutcome {
+    pub(crate) x: Vec<f64>,
+    pub(crate) blocks_solved: usize,
+    pub(crate) max_residual: f64,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum AuxiliarySolveError {
+    InvalidBlock {
+        block: EqualityBlock,
+        reason: &'static str,
+    },
+    EvaluationFailed {
+        block: EqualityBlock,
+    },
+    BlockSolveFailed {
+        block: EqualityBlock,
+        status: SolveStatus,
+        residual: f64,
+    },
 }
 
 #[allow(dead_code)]
@@ -43,6 +70,466 @@ pub(crate) struct EqualityIncidence {
     pub(crate) row_local_for_global: Vec<Option<usize>>,
     pub(crate) row_adj_vars: Vec<Vec<usize>>,
     pub(crate) var_adj_rows: Vec<Vec<usize>>,
+}
+
+#[allow(dead_code)]
+pub(crate) struct AuxiliaryBlockProblem<'a> {
+    inner: &'a dyn NlpProblem,
+    n_orig: usize,
+    m_orig: usize,
+    rows: Vec<usize>,
+    vars: Vec<usize>,
+    fixed_x: Vec<f64>,
+    jac_rows: Vec<usize>,
+    jac_cols: Vec<usize>,
+    jac_entry_map: Vec<usize>,
+    inner_jac_nnz: usize,
+    hess_rows: Vec<usize>,
+    hess_cols: Vec<usize>,
+    hess_entry_map: Vec<usize>,
+    inner_hess_nnz: usize,
+}
+
+impl<'a> AuxiliaryBlockProblem<'a> {
+    pub(crate) fn new(
+        inner: &'a dyn NlpProblem,
+        block: &EqualityBlock,
+        fixed_x: &[f64],
+    ) -> Result<Self, AuxiliarySolveError> {
+        let n_orig = inner.num_variables();
+        let m_orig = inner.num_constraints();
+        validate_auxiliary_block(block, fixed_x, n_orig, m_orig)?;
+
+        let mut row_local_for_global = vec![None; m_orig];
+        for (local, &row) in block.rows.iter().enumerate() {
+            row_local_for_global[row] = Some(local);
+        }
+        let mut var_local_for_global = vec![None; n_orig];
+        for (local, &var) in block.vars.iter().enumerate() {
+            var_local_for_global[var] = Some(local);
+        }
+
+        let (inner_jac_rows, inner_jac_cols) = inner.jacobian_structure();
+        let mut jac_rows = Vec::new();
+        let mut jac_cols = Vec::new();
+        let mut jac_entry_map = Vec::new();
+        for (idx, (&row, &col)) in inner_jac_rows.iter().zip(inner_jac_cols.iter()).enumerate() {
+            if row >= m_orig || col >= n_orig {
+                continue;
+            }
+            if let (Some(local_row), Some(local_col)) =
+                (row_local_for_global[row], var_local_for_global[col])
+            {
+                jac_rows.push(local_row);
+                jac_cols.push(local_col);
+                jac_entry_map.push(idx);
+            }
+        }
+
+        let (inner_hess_rows, inner_hess_cols) = inner.hessian_structure();
+        let mut hess_rows = Vec::new();
+        let mut hess_cols = Vec::new();
+        let mut hess_entry_map = Vec::new();
+        for (idx, (&row, &col)) in inner_hess_rows
+            .iter()
+            .zip(inner_hess_cols.iter())
+            .enumerate()
+        {
+            if row >= n_orig || col >= n_orig {
+                continue;
+            }
+            if let (Some(local_row), Some(local_col)) =
+                (var_local_for_global[row], var_local_for_global[col])
+            {
+                if local_row >= local_col {
+                    hess_rows.push(local_row);
+                    hess_cols.push(local_col);
+                } else {
+                    hess_rows.push(local_col);
+                    hess_cols.push(local_row);
+                }
+                hess_entry_map.push(idx);
+            }
+        }
+
+        Ok(Self {
+            inner,
+            n_orig,
+            m_orig,
+            rows: block.rows.clone(),
+            vars: block.vars.clone(),
+            fixed_x: fixed_x.to_vec(),
+            jac_rows,
+            jac_cols,
+            jac_entry_map,
+            inner_jac_nnz: inner_jac_rows.len(),
+            hess_rows,
+            hess_cols,
+            hess_entry_map,
+            inner_hess_nnz: inner_hess_rows.len(),
+        })
+    }
+
+    fn block(&self) -> EqualityBlock {
+        EqualityBlock {
+            rows: self.rows.clone(),
+            vars: self.vars.clone(),
+        }
+    }
+
+    fn expand_x(&self, x_block: &[f64]) -> Vec<f64> {
+        let mut x_full = self.fixed_x.clone();
+        for (local, &var) in self.vars.iter().enumerate() {
+            x_full[var] = x_block[local];
+        }
+        x_full
+    }
+}
+
+impl NlpProblem for AuxiliaryBlockProblem<'_> {
+    fn num_variables(&self) -> usize {
+        self.vars.len()
+    }
+
+    fn num_constraints(&self) -> usize {
+        self.rows.len()
+    }
+
+    fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+        let mut x_l_full = vec![0.0; self.n_orig];
+        let mut x_u_full = vec![0.0; self.n_orig];
+        self.inner.bounds(&mut x_l_full, &mut x_u_full);
+        for (local, &var) in self.vars.iter().enumerate() {
+            x_l[local] = x_l_full[var];
+            x_u[local] = x_u_full[var];
+        }
+    }
+
+    fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+        let mut g_l_full = vec![0.0; self.m_orig];
+        let mut g_u_full = vec![0.0; self.m_orig];
+        self.inner.constraint_bounds(&mut g_l_full, &mut g_u_full);
+        for (local, &row) in self.rows.iter().enumerate() {
+            g_l[local] = g_l_full[row];
+            g_u[local] = g_u_full[row];
+        }
+    }
+
+    fn initial_point(&self, x0: &mut [f64]) {
+        for (local, &var) in self.vars.iter().enumerate() {
+            x0[local] = self.fixed_x[var];
+        }
+    }
+
+    fn objective(&self, _x: &[f64], _new_x: bool, obj: &mut f64) -> bool {
+        *obj = 0.0;
+        true
+    }
+
+    fn gradient(&self, _x: &[f64], _new_x: bool, grad: &mut [f64]) -> bool {
+        grad.fill(0.0);
+        true
+    }
+
+    fn constraints(&self, x: &[f64], new_x: bool, g: &mut [f64]) -> bool {
+        let x_full = self.expand_x(x);
+        let mut g_full = vec![0.0; self.m_orig];
+        if !self.inner.constraints(&x_full, new_x, &mut g_full) {
+            return false;
+        }
+        for (local, &row) in self.rows.iter().enumerate() {
+            g[local] = g_full[row];
+        }
+        true
+    }
+
+    fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+        (self.jac_rows.clone(), self.jac_cols.clone())
+    }
+
+    fn jacobian_values(&self, x: &[f64], new_x: bool, vals: &mut [f64]) -> bool {
+        if self.jac_entry_map.is_empty() {
+            return true;
+        }
+        let x_full = self.expand_x(x);
+        let mut inner_vals = vec![0.0; self.inner_jac_nnz];
+        if !self.inner.jacobian_values(&x_full, new_x, &mut inner_vals) {
+            return false;
+        }
+        for (local, &inner_idx) in self.jac_entry_map.iter().enumerate() {
+            vals[local] = inner_vals[inner_idx];
+        }
+        true
+    }
+
+    fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+        (self.hess_rows.clone(), self.hess_cols.clone())
+    }
+
+    fn hessian_values(
+        &self,
+        x: &[f64],
+        new_x: bool,
+        _obj_factor: f64,
+        lambda: &[f64],
+        vals: &mut [f64],
+    ) -> bool {
+        if self.hess_entry_map.is_empty() {
+            return true;
+        }
+        let x_full = self.expand_x(x);
+        let mut lambda_full = vec![0.0; self.m_orig];
+        for (local, &row) in self.rows.iter().enumerate() {
+            lambda_full[row] = lambda[local];
+        }
+
+        let mut inner_vals = vec![0.0; self.inner_hess_nnz];
+        if !self
+            .inner
+            .hessian_values(&x_full, new_x, 0.0, &lambda_full, &mut inner_vals)
+        {
+            return false;
+        }
+        for (local, &inner_idx) in self.hess_entry_map.iter().enumerate() {
+            vals[local] = inner_vals[inner_idx];
+        }
+        true
+    }
+}
+
+pub(crate) struct SeededInitialPointProblem<'a> {
+    inner: &'a dyn NlpProblem,
+    x0: Vec<f64>,
+}
+
+impl<'a> SeededInitialPointProblem<'a> {
+    pub(crate) fn new(inner: &'a dyn NlpProblem, x0: Vec<f64>) -> Self {
+        Self { inner, x0 }
+    }
+}
+
+impl NlpProblem for SeededInitialPointProblem<'_> {
+    fn num_variables(&self) -> usize {
+        self.inner.num_variables()
+    }
+
+    fn num_constraints(&self) -> usize {
+        self.inner.num_constraints()
+    }
+
+    fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+        self.inner.bounds(x_l, x_u);
+    }
+
+    fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+        self.inner.constraint_bounds(g_l, g_u);
+    }
+
+    fn initial_point(&self, x0: &mut [f64]) {
+        x0.copy_from_slice(&self.x0);
+    }
+
+    fn initial_multipliers(&self, lam_g: &mut [f64], z_l: &mut [f64], z_u: &mut [f64]) -> bool {
+        self.inner.initial_multipliers(lam_g, z_l, z_u)
+    }
+
+    fn objective(&self, x: &[f64], new_x: bool, obj: &mut f64) -> bool {
+        self.inner.objective(x, new_x, obj)
+    }
+
+    fn gradient(&self, x: &[f64], new_x: bool, grad: &mut [f64]) -> bool {
+        self.inner.gradient(x, new_x, grad)
+    }
+
+    fn constraints(&self, x: &[f64], new_x: bool, g: &mut [f64]) -> bool {
+        self.inner.constraints(x, new_x, g)
+    }
+
+    fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+        self.inner.jacobian_structure()
+    }
+
+    fn jacobian_values(&self, x: &[f64], new_x: bool, vals: &mut [f64]) -> bool {
+        self.inner.jacobian_values(x, new_x, vals)
+    }
+
+    fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+        self.inner.hessian_structure()
+    }
+
+    fn hessian_values(
+        &self,
+        x: &[f64],
+        new_x: bool,
+        obj_factor: f64,
+        lambda: &[f64],
+        vals: &mut [f64],
+    ) -> bool {
+        self.inner
+            .hessian_values(x, new_x, obj_factor, lambda, vals)
+    }
+}
+
+pub(crate) fn solve_auxiliary_blocks(
+    problem: &dyn NlpProblem,
+    candidates: &[PresolveCandidate],
+    options: &SolverOptions,
+) -> Result<AuxiliarySolveOutcome, AuxiliarySolveError> {
+    let mut x_full = vec![0.0; problem.num_variables()];
+    problem.initial_point(&mut x_full);
+    solve_auxiliary_blocks_from(problem, candidates, options, &mut x_full)
+}
+
+pub(crate) fn solve_auxiliary_blocks_from(
+    problem: &dyn NlpProblem,
+    candidates: &[PresolveCandidate],
+    options: &SolverOptions,
+    x_full: &mut [f64],
+) -> Result<AuxiliarySolveOutcome, AuxiliarySolveError> {
+    let mut blocks_solved = 0;
+    let mut max_residual: f64 = 0.0;
+
+    for candidate in candidates {
+        for block in &candidate.blocks {
+            let block_problem = AuxiliaryBlockProblem::new(problem, block, x_full)?;
+            let aux_options = auxiliary_solver_options(options);
+            let result = crate::solve(&block_problem, &aux_options);
+            let residual = auxiliary_result_residual(&block_problem, &result)?;
+
+            if !(matches!(
+                result.status,
+                SolveStatus::Optimal | SolveStatus::Acceptable
+            ) && residual <= options.auxiliary_tol)
+            {
+                return Err(AuxiliarySolveError::BlockSolveFailed {
+                    block: block_problem.block(),
+                    status: result.status,
+                    residual,
+                });
+            }
+
+            for (local, &var) in block.vars.iter().enumerate() {
+                x_full[var] = result.x[local];
+            }
+            blocks_solved += 1;
+            max_residual = max_residual.max(residual);
+        }
+    }
+
+    Ok(AuxiliarySolveOutcome {
+        x: x_full.to_vec(),
+        blocks_solved,
+        max_residual,
+    })
+}
+
+fn validate_auxiliary_block(
+    block: &EqualityBlock,
+    fixed_x: &[f64],
+    n_orig: usize,
+    m_orig: usize,
+) -> Result<(), AuxiliarySolveError> {
+    if fixed_x.len() != n_orig {
+        return Err(AuxiliarySolveError::InvalidBlock {
+            block: block.clone(),
+            reason: "fixed_x length does not match problem variables",
+        });
+    }
+    if block.rows.is_empty() || block.vars.is_empty() {
+        return Err(AuxiliarySolveError::InvalidBlock {
+            block: block.clone(),
+            reason: "block must contain at least one row and one variable",
+        });
+    }
+    if block.rows.iter().any(|&row| row >= m_orig) {
+        return Err(AuxiliarySolveError::InvalidBlock {
+            block: block.clone(),
+            reason: "block row is out of range",
+        });
+    }
+    if block.vars.iter().any(|&var| var >= n_orig) {
+        return Err(AuxiliarySolveError::InvalidBlock {
+            block: block.clone(),
+            reason: "block variable is out of range",
+        });
+    }
+    if has_duplicates(&block.rows) {
+        return Err(AuxiliarySolveError::InvalidBlock {
+            block: block.clone(),
+            reason: "block rows must be unique",
+        });
+    }
+    if has_duplicates(&block.vars) {
+        return Err(AuxiliarySolveError::InvalidBlock {
+            block: block.clone(),
+            reason: "block variables must be unique",
+        });
+    }
+    Ok(())
+}
+
+fn has_duplicates(values: &[usize]) -> bool {
+    let mut values = values.to_vec();
+    values.sort_unstable();
+    values.windows(2).any(|pair| pair[0] == pair[1])
+}
+
+fn auxiliary_solver_options(options: &SolverOptions) -> SolverOptions {
+    let mut aux_options = options.clone();
+    aux_options.enable_preprocessing = false;
+    aux_options.warm_start = false;
+    aux_options.warm_start_y = None;
+    aux_options.warm_start_z_l = None;
+    aux_options.warm_start_z_u = None;
+    aux_options.user_obj_scaling = None;
+    aux_options.user_g_scaling = None;
+    aux_options.user_x_scaling = None;
+    aux_options
+}
+
+fn auxiliary_result_residual(
+    problem: &AuxiliaryBlockProblem<'_>,
+    result: &SolveResult,
+) -> Result<f64, AuxiliarySolveError> {
+    let m = problem.num_constraints();
+    let g = if result.constraint_values.len() == m {
+        result.constraint_values.clone()
+    } else {
+        let mut values = vec![0.0; m];
+        if !problem.constraints(&result.x, true, &mut values) {
+            return Err(AuxiliarySolveError::EvaluationFailed {
+                block: problem.block(),
+            });
+        }
+        values
+    };
+
+    let mut g_l = vec![0.0; m];
+    let mut g_u = vec![0.0; m];
+    problem.constraint_bounds(&mut g_l, &mut g_u);
+
+    let mut residual: f64 = 0.0;
+    for i in 0..m {
+        let violation = if !g[i].is_finite() {
+            f64::INFINITY
+        } else if g_l[i].is_finite() && g_u[i].is_finite() && (g_u[i] - g_l[i]).abs() <= 1e-12 {
+            (g[i] - 0.5 * (g_l[i] + g_u[i])).abs()
+        } else {
+            let lower = if g_l[i].is_finite() {
+                (g_l[i] - g[i]).max(0.0)
+            } else {
+                0.0
+            };
+            let upper = if g_u[i].is_finite() {
+                (g[i] - g_u[i]).max(0.0)
+            } else {
+                0.0
+            };
+            lower.max(upper)
+        };
+        residual = residual.max(violation);
+    }
+    Ok(residual)
 }
 
 #[allow(dead_code)]
@@ -958,6 +1445,235 @@ mod tests {
 
     fn equality_bounds(n_rows: usize) -> Vec<(f64, f64)> {
         vec![(0.0, 0.0); n_rows]
+    }
+
+    fn quiet_aux_options() -> SolverOptions {
+        let mut options = SolverOptions::default();
+        options.print_level = 0;
+        options.max_iter = 200;
+        options.auxiliary_tol = 1e-7;
+        options
+    }
+
+    struct TriangularAuxProblem;
+
+    impl NlpProblem for TriangularAuxProblem {
+        fn num_variables(&self) -> usize {
+            2
+        }
+
+        fn num_constraints(&self) -> usize {
+            2
+        }
+
+        fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+            x_l[0] = 0.1;
+            x_u[0] = 10.0;
+            x_l[1] = 0.0;
+            x_u[1] = 10.0;
+        }
+
+        fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+            g_l[0] = 4.0;
+            g_u[0] = 4.0;
+            g_l[1] = 0.0;
+            g_u[1] = 0.0;
+        }
+
+        fn initial_point(&self, x0: &mut [f64]) {
+            x0[0] = 1.0;
+            x0[1] = 0.0;
+        }
+
+        fn objective(&self, x: &[f64], _new_x: bool, obj: &mut f64) -> bool {
+            *obj = x[0] + x[1];
+            true
+        }
+
+        fn gradient(&self, _x: &[f64], _new_x: bool, grad: &mut [f64]) -> bool {
+            grad[0] = 1.0;
+            grad[1] = 1.0;
+            true
+        }
+
+        fn constraints(&self, x: &[f64], _new_x: bool, g: &mut [f64]) -> bool {
+            g[0] = x[0] * x[0];
+            g[1] = x[1] - x[0] - 1.0;
+            true
+        }
+
+        fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+            (vec![0, 1, 1], vec![0, 0, 1])
+        }
+
+        fn jacobian_values(&self, x: &[f64], _new_x: bool, vals: &mut [f64]) -> bool {
+            vals[0] = 2.0 * x[0];
+            vals[1] = -1.0;
+            vals[2] = 1.0;
+            true
+        }
+
+        fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+            (vec![0], vec![0])
+        }
+
+        fn hessian_values(
+            &self,
+            _x: &[f64],
+            _new_x: bool,
+            _obj_factor: f64,
+            lambda: &[f64],
+            vals: &mut [f64],
+        ) -> bool {
+            vals[0] = 2.0 * lambda[0];
+            true
+        }
+    }
+
+    struct InfeasibleBoundAuxProblem;
+
+    impl NlpProblem for InfeasibleBoundAuxProblem {
+        fn num_variables(&self) -> usize {
+            1
+        }
+
+        fn num_constraints(&self) -> usize {
+            1
+        }
+
+        fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+            x_l[0] = 0.0;
+            x_u[0] = 1.0;
+        }
+
+        fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+            g_l[0] = 2.0;
+            g_u[0] = 2.0;
+        }
+
+        fn initial_point(&self, x0: &mut [f64]) {
+            x0[0] = 0.5;
+        }
+
+        fn objective(&self, _x: &[f64], _new_x: bool, obj: &mut f64) -> bool {
+            *obj = 0.0;
+            true
+        }
+
+        fn gradient(&self, _x: &[f64], _new_x: bool, grad: &mut [f64]) -> bool {
+            grad[0] = 0.0;
+            true
+        }
+
+        fn constraints(&self, x: &[f64], _new_x: bool, g: &mut [f64]) -> bool {
+            g[0] = x[0];
+            true
+        }
+
+        fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+            (vec![0], vec![0])
+        }
+
+        fn jacobian_values(&self, _x: &[f64], _new_x: bool, vals: &mut [f64]) -> bool {
+            vals[0] = 1.0;
+            true
+        }
+
+        fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+            (vec![], vec![])
+        }
+
+        fn hessian_values(
+            &self,
+            _x: &[f64],
+            _new_x: bool,
+            _obj_factor: f64,
+            _lambda: &[f64],
+            _vals: &mut [f64],
+        ) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn auxiliary_solve_handles_one_variable_nonlinear_equality() {
+        let problem = TriangularAuxProblem;
+        let candidates = vec![PresolveCandidate {
+            blocks: vec![EqualityBlock {
+                rows: vec![0],
+                vars: vec![0],
+            }],
+        }];
+        let options = quiet_aux_options();
+
+        let outcome =
+            solve_auxiliary_blocks(&problem, &candidates, &options).expect("auxiliary solve");
+
+        assert_eq!(outcome.blocks_solved, 1);
+        assert!(outcome.max_residual <= options.auxiliary_tol);
+        assert!((outcome.x[0] - 2.0).abs() < 1e-5, "x = {:?}", outcome.x);
+        assert_eq!(outcome.x[1], 0.0);
+    }
+
+    #[test]
+    fn auxiliary_solve_updates_full_vector_between_triangular_blocks() {
+        let problem = TriangularAuxProblem;
+        let candidates = find_presolve_candidates(&problem, TOL);
+        let options = quiet_aux_options();
+
+        let outcome =
+            solve_auxiliary_blocks(&problem, &candidates, &options).expect("auxiliary solve");
+
+        assert_eq!(outcome.blocks_solved, 2);
+        assert!(outcome.max_residual <= options.auxiliary_tol);
+        assert!((outcome.x[0] - 2.0).abs() < 1e-5, "x = {:?}", outcome.x);
+        assert!((outcome.x[1] - 3.0).abs() < 1e-5, "x = {:?}", outcome.x);
+    }
+
+    #[test]
+    fn auxiliary_solve_failure_returns_structured_failure() {
+        let problem = InfeasibleBoundAuxProblem;
+        let candidates = find_presolve_candidates(&problem, TOL);
+        let options = quiet_aux_options();
+
+        let err = solve_auxiliary_blocks(&problem, &candidates, &options).unwrap_err();
+
+        match err {
+            AuxiliarySolveError::BlockSolveFailed {
+                block,
+                status: _,
+                residual,
+            } => {
+                assert_eq!(block.rows, vec![0]);
+                assert_eq!(block.vars, vec![0]);
+                assert!(residual > options.auxiliary_tol || !residual.is_finite());
+            }
+            other => panic!("unexpected auxiliary error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn auxiliary_block_problem_respects_original_variable_bounds() {
+        let problem = InfeasibleBoundAuxProblem;
+        let block = EqualityBlock {
+            rows: vec![0],
+            vars: vec![0],
+        };
+        let fixed_x = vec![0.5];
+        let aux = AuxiliaryBlockProblem::new(&problem, &block, &fixed_x).unwrap();
+
+        let mut x_l = vec![0.0; 1];
+        let mut x_u = vec![0.0; 1];
+        aux.bounds(&mut x_l, &mut x_u);
+        assert_eq!(x_l, vec![0.0]);
+        assert_eq!(x_u, vec![1.0]);
+
+        let result = crate::solve(&aux, &quiet_aux_options());
+        assert!(
+            result.x[0] >= -1e-10 && result.x[0] <= 1.0 + 1e-10,
+            "auxiliary solution violated bounds: {:?}",
+            result.x
+        );
     }
 
     #[test]

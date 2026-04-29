@@ -1631,6 +1631,73 @@ fn try_slow_optimal_slack_fallback<P: NlpProblem>(
     try_slack_fallback(result, problem, options, solve_start, diagnosis, has_inequalities)
 }
 
+/// Auxiliary preprocessing attempt: solve block-triangular equality
+/// subsystems first, use the solved full-space point as the initial point,
+/// then run a non-preprocessing recursive solve. If either the auxiliary
+/// blocks or the seeded solve fail, fall back to the normal solve path.
+fn try_auxiliary_preprocessed_solve<P: NlpProblem>(
+    problem: &P,
+    options: &SolverOptions,
+    solve_start: Instant,
+) -> Option<SolveResult> {
+    if !options.enable_preprocessing {
+        return None;
+    }
+
+    let problem_dyn = problem as &dyn NlpProblem;
+    let candidates =
+        crate::auxiliary_preprocessing::find_presolve_candidates(problem_dyn, options.auxiliary_tol);
+    if candidates.is_empty() {
+        return None;
+    }
+
+    let outcome =
+        match crate::auxiliary_preprocessing::solve_auxiliary_blocks(problem_dyn, &candidates, options)
+        {
+            Ok(outcome) if outcome.blocks_solved > 0 => outcome,
+            Ok(_) => return None,
+            Err(err) => {
+                if options.print_level >= 5 {
+                    rip_log!("ripopt: Auxiliary preprocessing skipped after failure: {:?}", err);
+                }
+                return None;
+            }
+        };
+
+    if options.print_level >= 5 {
+        rip_log!(
+            "ripopt: Auxiliary preprocessing solved {} block(s), max residual {:.2e}",
+            outcome.blocks_solved,
+            outcome.max_residual,
+        );
+    }
+
+    let seeded = crate::auxiliary_preprocessing::SeededInitialPointProblem::new(problem_dyn, outcome.x);
+    let mut seeded_opts = options.clone();
+    seeded_opts.enable_preprocessing = false;
+    if options.max_wall_time > 0.0 {
+        let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
+        if remaining <= 0.1 {
+            return None;
+        }
+        seeded_opts.max_wall_time = remaining * 0.5;
+    }
+
+    let mut result = solve(&seeded, &seeded_opts);
+    if matches!(result.status, SolveStatus::Optimal) {
+        result.diagnostics.fallback_used = Some("auxiliary_preprocessing".into());
+        return Some(result);
+    }
+
+    if options.print_level >= 5 {
+        rip_log!(
+            "ripopt: Auxiliary-seeded solve failed ({:?}), retrying without auxiliary preprocessing",
+            result.status,
+        );
+    }
+    None
+}
+
 /// Run preprocessing (fixed-variable and redundant-constraint elimination)
 /// and, if it reduces the problem, recursively `solve` the smaller problem
 /// then unmap the solution. Returns `Some(result)` only when the
@@ -1647,6 +1714,9 @@ fn try_preprocessed_solve<P: NlpProblem>(
 ) -> Option<SolveResult> {
     if !options.enable_preprocessing {
         return None;
+    }
+    if let Some(result) = try_auxiliary_preprocessed_solve(problem, options, solve_start) {
+        return Some(result);
     }
     let prep = crate::preprocessing::PreprocessedProblem::new(problem as &dyn NlpProblem, options.bound_push);
     if !prep.did_reduce() {
