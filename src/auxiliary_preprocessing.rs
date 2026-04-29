@@ -21,9 +21,13 @@ pub(crate) struct EqualityIncidence {
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BipartiteMatching {
+    /// Local equality-row index -> matched original variable index.
     pub(crate) row_to_var: Vec<Option<usize>>,
+    /// Original variable index -> matched local equality-row index.
     pub(crate) var_to_row: Vec<Option<usize>>,
+    /// Unmatched local equality-row indices.
     pub(crate) unmatched_rows: Vec<usize>,
+    /// Unmatched original variable indices.
     pub(crate) unmatched_vars: Vec<usize>,
 }
 
@@ -31,13 +35,21 @@ pub(crate) struct BipartiteMatching {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DulmageMendelsohnPartition {
     pub(crate) matching: BipartiteMatching,
+    /// Overconstrained local equality-row indices.
     pub(crate) overconstrained_rows: Vec<usize>,
+    /// Overconstrained original variable indices.
     pub(crate) overconstrained_vars: Vec<usize>,
+    /// Square local equality-row indices.
     pub(crate) square_rows: Vec<usize>,
+    /// Square original variable indices.
     pub(crate) square_vars: Vec<usize>,
+    /// Underconstrained local equality-row indices.
     pub(crate) underconstrained_rows: Vec<usize>,
+    /// Underconstrained original variable indices.
     pub(crate) underconstrained_vars: Vec<usize>,
+    /// Unmatched local equality-row indices.
     pub(crate) unmatched_rows: Vec<usize>,
+    /// Unmatched original variable indices.
     pub(crate) unmatched_vars: Vec<usize>,
 }
 
@@ -310,22 +322,47 @@ fn matching_dfs(
     var_to_row: &mut [Option<usize>],
     dist: &mut [usize],
 ) -> bool {
-    for &var in &row_adj_vars[row] {
-        if let Some(next_row) = var_to_row[var] {
-            if dist[next_row] != dist[row] + 1 {
-                continue;
+    struct Frame {
+        row: usize,
+        next_edge: usize,
+    }
+
+    let mut stack = vec![Frame { row, next_edge: 0 }];
+    let mut path_vars = Vec::new();
+
+    while let Some(frame) = stack.last_mut() {
+        if frame.next_edge == row_adj_vars[frame.row].len() {
+            dist[frame.row] = usize::MAX;
+            stack.pop();
+            while path_vars.len() >= stack.len() && !path_vars.is_empty() {
+                path_vars.pop();
             }
-            if !matching_dfs(next_row, row_adj_vars, row_to_var, var_to_row, dist) {
-                continue;
-            }
+            continue;
         }
 
-        row_to_var[row] = Some(var);
-        var_to_row[var] = Some(row);
+        let current_row = frame.row;
+        let var = row_adj_vars[current_row][frame.next_edge];
+        frame.next_edge += 1;
+
+        if let Some(next_row) = var_to_row[var] {
+            if dist[next_row] == dist[current_row] + 1 {
+                path_vars.push(var);
+                stack.push(Frame {
+                    row: next_row,
+                    next_edge: 0,
+                });
+            }
+            continue;
+        }
+
+        path_vars.push(var);
+        for (frame, &path_var) in stack.iter().zip(&path_vars) {
+            row_to_var[frame.row] = Some(path_var);
+            var_to_row[path_var] = Some(frame.row);
+        }
         return true;
     }
 
-    dist[row] = usize::MAX;
     false
 }
 
@@ -565,6 +602,32 @@ mod tests {
         assert_eq!(matching.var_to_row, vec![Some(1), Some(0)]);
         assert!(matching.unmatched_rows.is_empty());
         assert!(matching.unmatched_vars.is_empty());
+    }
+
+    #[test]
+    fn matching_handles_long_augmenting_path_iteratively() {
+        let chain_len = 10_000;
+        let bounds = equality_bounds(chain_len + 1);
+        let mut edges = Vec::with_capacity(2 * chain_len + 1);
+        edges.push((0, 0));
+        edges.push((0, chain_len));
+        for row in 1..chain_len {
+            edges.push((row, row - 1));
+            edges.push((row, row));
+        }
+        edges.push((chain_len, chain_len - 1));
+
+        let problem = graph_problem(chain_len + 1, &bounds, &edges);
+        let inc = EqualityIncidence::from_problem(&problem, TOL);
+        let matching = inc.maximum_matching();
+
+        assert!(matching.unmatched_rows.is_empty());
+        assert!(matching.unmatched_vars.is_empty());
+        assert_eq!(matching.row_to_var[0], Some(chain_len));
+        for row in 1..chain_len {
+            assert_eq!(matching.row_to_var[row], Some(row - 1));
+        }
+        assert_eq!(matching.row_to_var[chain_len], Some(chain_len - 1));
     }
 
     #[test]
