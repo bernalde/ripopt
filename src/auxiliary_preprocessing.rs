@@ -5,6 +5,7 @@
 //! decomposition or transform API.
 
 use crate::problem::NlpProblem;
+use std::collections::VecDeque;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -15,6 +16,47 @@ pub(crate) struct EqualityIncidence {
     pub(crate) row_local_for_global: Vec<Option<usize>>,
     pub(crate) row_adj_vars: Vec<Vec<usize>>,
     pub(crate) var_adj_rows: Vec<Vec<usize>>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BipartiteMatching {
+    /// Local equality-row index -> matched original variable index.
+    pub(crate) row_to_var: Vec<Option<usize>>,
+    /// Original variable index -> matched local equality-row index.
+    pub(crate) var_to_row: Vec<Option<usize>>,
+    /// Unmatched local equality-row indices.
+    pub(crate) unmatched_rows: Vec<usize>,
+    /// Unmatched original variable indices.
+    pub(crate) unmatched_vars: Vec<usize>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DulmageMendelsohnPartition {
+    pub(crate) matching: BipartiteMatching,
+    /// Overconstrained local equality-row indices.
+    pub(crate) overconstrained_rows: Vec<usize>,
+    /// Overconstrained original variable indices.
+    pub(crate) overconstrained_vars: Vec<usize>,
+    /// Square local equality-row indices.
+    pub(crate) square_rows: Vec<usize>,
+    /// Square original variable indices.
+    pub(crate) square_vars: Vec<usize>,
+    /// Underconstrained local equality-row indices.
+    pub(crate) underconstrained_rows: Vec<usize>,
+    /// Underconstrained original variable indices.
+    pub(crate) underconstrained_vars: Vec<usize>,
+    /// Unmatched local equality-row indices.
+    pub(crate) unmatched_rows: Vec<usize>,
+    /// Unmatched original variable indices.
+    pub(crate) unmatched_vars: Vec<usize>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BipartiteNode {
+    Row(usize),
+    Var(usize),
 }
 
 impl EqualityIncidence {
@@ -69,6 +111,267 @@ impl EqualityIncidence {
             var_adj_rows,
         }
     }
+
+    #[allow(dead_code)]
+    pub(crate) fn maximum_matching(&self) -> BipartiteMatching {
+        let (row_adj_vars, _) = self.deterministic_adjacency();
+        hopcroft_karp(self.n_vars, &row_adj_vars)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn dulmage_mendelsohn_partition(&self) -> DulmageMendelsohnPartition {
+        let (row_adj_vars, var_adj_rows) = self.deterministic_adjacency();
+        let matching = hopcroft_karp(self.n_vars, &row_adj_vars);
+
+        let n_rows = row_adj_vars.len();
+        let mut over_rows = vec![false; n_rows];
+        let mut over_vars = vec![false; self.n_vars];
+        let mut queue = VecDeque::new();
+
+        for &row in &matching.unmatched_rows {
+            over_rows[row] = true;
+            queue.push_back(BipartiteNode::Row(row));
+        }
+
+        while let Some(node) = queue.pop_front() {
+            match node {
+                BipartiteNode::Row(row) => {
+                    for &var in &row_adj_vars[row] {
+                        if matching.row_to_var[row] == Some(var) || over_vars[var] {
+                            continue;
+                        }
+                        over_vars[var] = true;
+                        queue.push_back(BipartiteNode::Var(var));
+                    }
+                }
+                BipartiteNode::Var(var) => {
+                    if let Some(row) = matching.var_to_row[var] {
+                        if !over_rows[row] {
+                            over_rows[row] = true;
+                            queue.push_back(BipartiteNode::Row(row));
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut under_rows = vec![false; n_rows];
+        let mut under_vars = vec![false; self.n_vars];
+        let mut queue = VecDeque::new();
+
+        for &var in &matching.unmatched_vars {
+            under_vars[var] = true;
+            queue.push_back(BipartiteNode::Var(var));
+        }
+
+        while let Some(node) = queue.pop_front() {
+            match node {
+                BipartiteNode::Var(var) => {
+                    for &row in &var_adj_rows[var] {
+                        if matching.var_to_row[var] == Some(row) || under_rows[row] {
+                            continue;
+                        }
+                        under_rows[row] = true;
+                        queue.push_back(BipartiteNode::Row(row));
+                    }
+                }
+                BipartiteNode::Row(row) => {
+                    if let Some(var) = matching.row_to_var[row] {
+                        if !under_vars[var] {
+                            under_vars[var] = true;
+                            queue.push_back(BipartiteNode::Var(var));
+                        }
+                    }
+                }
+            }
+        }
+
+        let overconstrained_rows = indices_where(&over_rows);
+        let overconstrained_vars = indices_where(&over_vars);
+        let underconstrained_rows = indices_where(&under_rows);
+        let underconstrained_vars = indices_where(&under_vars);
+        let square_rows = (0..n_rows)
+            .filter(|&row| {
+                !over_rows[row] && !under_rows[row] && matching.row_to_var[row].is_some()
+            })
+            .collect();
+        let square_vars = (0..self.n_vars)
+            .filter(|&var| {
+                !over_vars[var] && !under_vars[var] && matching.var_to_row[var].is_some()
+            })
+            .collect();
+
+        DulmageMendelsohnPartition {
+            unmatched_rows: matching.unmatched_rows.clone(),
+            unmatched_vars: matching.unmatched_vars.clone(),
+            matching,
+            overconstrained_rows,
+            overconstrained_vars,
+            square_rows,
+            square_vars,
+            underconstrained_rows,
+            underconstrained_vars,
+        }
+    }
+
+    fn deterministic_adjacency(&self) -> (Vec<Vec<usize>>, Vec<Vec<usize>>) {
+        let mut row_adj_vars = Vec::with_capacity(self.row_adj_vars.len());
+        let mut var_adj_rows = vec![Vec::new(); self.n_vars];
+
+        for (row, adj) in self.row_adj_vars.iter().enumerate() {
+            let mut vars: Vec<usize> = adj
+                .iter()
+                .copied()
+                .filter(|&var| var < self.n_vars)
+                .collect();
+            vars.sort_unstable();
+            vars.dedup();
+
+            for &var in &vars {
+                var_adj_rows[var].push(row);
+            }
+            row_adj_vars.push(vars);
+        }
+
+        for adj in &mut var_adj_rows {
+            adj.sort_unstable();
+            adj.dedup();
+        }
+
+        (row_adj_vars, var_adj_rows)
+    }
+}
+
+fn hopcroft_karp(n_vars: usize, row_adj_vars: &[Vec<usize>]) -> BipartiteMatching {
+    let n_rows = row_adj_vars.len();
+    let mut row_to_var = vec![None; n_rows];
+    let mut var_to_row = vec![None; n_vars];
+    let mut dist = vec![usize::MAX; n_rows];
+
+    while matching_bfs(row_adj_vars, &row_to_var, &var_to_row, &mut dist) {
+        for row in 0..n_rows {
+            if row_to_var[row].is_none() {
+                matching_dfs(
+                    row,
+                    row_adj_vars,
+                    &mut row_to_var,
+                    &mut var_to_row,
+                    &mut dist,
+                );
+            }
+        }
+    }
+
+    let unmatched_rows = row_to_var
+        .iter()
+        .enumerate()
+        .filter_map(|(row, var)| var.is_none().then_some(row))
+        .collect();
+    let unmatched_vars = var_to_row
+        .iter()
+        .enumerate()
+        .filter_map(|(var, row)| row.is_none().then_some(var))
+        .collect();
+
+    BipartiteMatching {
+        row_to_var,
+        var_to_row,
+        unmatched_rows,
+        unmatched_vars,
+    }
+}
+
+fn matching_bfs(
+    row_adj_vars: &[Vec<usize>],
+    row_to_var: &[Option<usize>],
+    var_to_row: &[Option<usize>],
+    dist: &mut [usize],
+) -> bool {
+    let mut queue = VecDeque::new();
+    let mut found_unmatched_var = false;
+
+    for row in 0..row_adj_vars.len() {
+        if row_to_var[row].is_none() {
+            dist[row] = 0;
+            queue.push_back(row);
+        } else {
+            dist[row] = usize::MAX;
+        }
+    }
+
+    while let Some(row) = queue.pop_front() {
+        for &var in &row_adj_vars[row] {
+            if let Some(next_row) = var_to_row[var] {
+                if dist[next_row] == usize::MAX {
+                    dist[next_row] = dist[row] + 1;
+                    queue.push_back(next_row);
+                }
+            } else {
+                found_unmatched_var = true;
+            }
+        }
+    }
+
+    found_unmatched_var
+}
+
+fn matching_dfs(
+    row: usize,
+    row_adj_vars: &[Vec<usize>],
+    row_to_var: &mut [Option<usize>],
+    var_to_row: &mut [Option<usize>],
+    dist: &mut [usize],
+) -> bool {
+    struct Frame {
+        row: usize,
+        next_edge: usize,
+    }
+
+    let mut stack = vec![Frame { row, next_edge: 0 }];
+    let mut path_vars = Vec::new();
+
+    while let Some(frame) = stack.last_mut() {
+        if frame.next_edge == row_adj_vars[frame.row].len() {
+            dist[frame.row] = usize::MAX;
+            stack.pop();
+            while path_vars.len() >= stack.len() && !path_vars.is_empty() {
+                path_vars.pop();
+            }
+            continue;
+        }
+
+        let current_row = frame.row;
+        let var = row_adj_vars[current_row][frame.next_edge];
+        frame.next_edge += 1;
+
+        if let Some(next_row) = var_to_row[var] {
+            if dist[next_row] == dist[current_row] + 1 {
+                path_vars.push(var);
+                stack.push(Frame {
+                    row: next_row,
+                    next_edge: 0,
+                });
+            }
+            continue;
+        }
+
+        path_vars.push(var);
+        for (frame, &path_var) in stack.iter().zip(&path_vars) {
+            row_to_var[frame.row] = Some(path_var);
+            var_to_row[path_var] = Some(frame.row);
+        }
+        return true;
+    }
+
+    false
+}
+
+fn indices_where(flags: &[bool]) -> Vec<usize> {
+    flags
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, &flag)| flag.then_some(idx))
+        .collect()
 }
 
 #[cfg(test)]
@@ -159,6 +462,10 @@ mod tests {
         }
     }
 
+    fn equality_bounds(n_rows: usize) -> Vec<(f64, f64)> {
+        vec![(0.0, 0.0); n_rows]
+    }
+
     #[test]
     fn incidence_handles_no_constraints() {
         let problem = graph_problem(2, &[], &[]);
@@ -240,5 +547,153 @@ mod tests {
 
         assert_eq!(inc.row_adj_vars, vec![vec![0], vec![2]]);
         assert_eq!(inc.var_adj_rows, vec![vec![0], Vec::new(), vec![1]]);
+    }
+
+    #[test]
+    fn matching_and_dm_square_1x1() {
+        let bounds = equality_bounds(1);
+        let problem = graph_problem(1, &bounds, &[(0, 0)]);
+        let inc = EqualityIncidence::from_problem(&problem, TOL);
+
+        let matching = inc.maximum_matching();
+        assert_eq!(matching.row_to_var, vec![Some(0)]);
+        assert_eq!(matching.var_to_row, vec![Some(0)]);
+        assert!(matching.unmatched_rows.is_empty());
+        assert!(matching.unmatched_vars.is_empty());
+
+        let dm = inc.dulmage_mendelsohn_partition();
+        assert_eq!(dm.square_rows, vec![0]);
+        assert_eq!(dm.square_vars, vec![0]);
+        assert!(dm.overconstrained_rows.is_empty());
+        assert!(dm.overconstrained_vars.is_empty());
+        assert!(dm.underconstrained_rows.is_empty());
+        assert!(dm.underconstrained_vars.is_empty());
+        assert!(dm.unmatched_rows.is_empty());
+        assert!(dm.unmatched_vars.is_empty());
+    }
+
+    #[test]
+    fn matching_square_2x2_is_deterministic() {
+        let bounds = equality_bounds(2);
+        let problem = graph_problem(2, &bounds, &[(0, 1), (1, 1), (0, 0), (1, 0), (0, 1)]);
+        let inc = EqualityIncidence::from_problem(&problem, TOL);
+
+        let matching = inc.maximum_matching();
+        assert_eq!(matching.row_to_var, vec![Some(0), Some(1)]);
+        assert_eq!(matching.var_to_row, vec![Some(0), Some(1)]);
+        assert!(matching.unmatched_rows.is_empty());
+        assert!(matching.unmatched_vars.is_empty());
+
+        let dm = inc.dulmage_mendelsohn_partition();
+        assert_eq!(dm.square_rows, vec![0, 1]);
+        assert_eq!(dm.square_vars, vec![0, 1]);
+        assert!(dm.overconstrained_rows.is_empty());
+        assert!(dm.underconstrained_rows.is_empty());
+    }
+
+    #[test]
+    fn matching_reroutes_along_augmenting_path() {
+        let bounds = equality_bounds(2);
+        let problem = graph_problem(2, &bounds, &[(0, 0), (0, 1), (1, 0)]);
+        let inc = EqualityIncidence::from_problem(&problem, TOL);
+
+        let matching = inc.maximum_matching();
+        assert_eq!(matching.row_to_var, vec![Some(1), Some(0)]);
+        assert_eq!(matching.var_to_row, vec![Some(1), Some(0)]);
+        assert!(matching.unmatched_rows.is_empty());
+        assert!(matching.unmatched_vars.is_empty());
+    }
+
+    #[test]
+    fn matching_handles_long_augmenting_path_iteratively() {
+        let chain_len = 10_000;
+        let bounds = equality_bounds(chain_len + 1);
+        let mut edges = Vec::with_capacity(2 * chain_len + 1);
+        edges.push((0, 0));
+        edges.push((0, chain_len));
+        for row in 1..chain_len {
+            edges.push((row, row - 1));
+            edges.push((row, row));
+        }
+        edges.push((chain_len, chain_len - 1));
+
+        let problem = graph_problem(chain_len + 1, &bounds, &edges);
+        let inc = EqualityIncidence::from_problem(&problem, TOL);
+        let matching = inc.maximum_matching();
+
+        assert!(matching.unmatched_rows.is_empty());
+        assert!(matching.unmatched_vars.is_empty());
+        assert_eq!(matching.row_to_var[0], Some(chain_len));
+        for row in 1..chain_len {
+            assert_eq!(matching.row_to_var[row], Some(row - 1));
+        }
+        assert_eq!(matching.row_to_var[chain_len], Some(chain_len - 1));
+    }
+
+    #[test]
+    fn dm_underconstrained_1_row_2_variables() {
+        let bounds = equality_bounds(1);
+        let problem = graph_problem(2, &bounds, &[(0, 1), (0, 0)]);
+        let inc = EqualityIncidence::from_problem(&problem, TOL);
+
+        let dm = inc.dulmage_mendelsohn_partition();
+        assert_eq!(dm.matching.row_to_var, vec![Some(0)]);
+        assert_eq!(dm.matching.var_to_row, vec![Some(0), None]);
+        assert!(dm.unmatched_rows.is_empty());
+        assert_eq!(dm.unmatched_vars, vec![1]);
+        assert!(dm.overconstrained_rows.is_empty());
+        assert!(dm.overconstrained_vars.is_empty());
+        assert!(dm.square_rows.is_empty());
+        assert!(dm.square_vars.is_empty());
+        assert_eq!(dm.underconstrained_rows, vec![0]);
+        assert_eq!(dm.underconstrained_vars, vec![0, 1]);
+    }
+
+    #[test]
+    fn dm_overconstrained_2_rows_1_variable() {
+        let bounds = equality_bounds(2);
+        let problem = graph_problem(1, &bounds, &[(1, 0), (0, 0)]);
+        let inc = EqualityIncidence::from_problem(&problem, TOL);
+
+        let dm = inc.dulmage_mendelsohn_partition();
+        assert_eq!(dm.matching.row_to_var, vec![Some(0), None]);
+        assert_eq!(dm.matching.var_to_row, vec![Some(0)]);
+        assert_eq!(dm.unmatched_rows, vec![1]);
+        assert!(dm.unmatched_vars.is_empty());
+        assert_eq!(dm.overconstrained_rows, vec![0, 1]);
+        assert_eq!(dm.overconstrained_vars, vec![0]);
+        assert!(dm.square_rows.is_empty());
+        assert!(dm.square_vars.is_empty());
+        assert!(dm.underconstrained_rows.is_empty());
+        assert!(dm.underconstrained_vars.is_empty());
+    }
+
+    #[test]
+    fn dm_mixed_square_over_and_under_blocks() {
+        let bounds = equality_bounds(5);
+        let problem = graph_problem(
+            5,
+            &bounds,
+            &[(0, 0), (1, 1), (2, 2), (3, 2), (4, 4), (4, 3)],
+        );
+        let inc = EqualityIncidence::from_problem(&problem, TOL);
+
+        let dm = inc.dulmage_mendelsohn_partition();
+        assert_eq!(
+            dm.matching.row_to_var,
+            vec![Some(0), Some(1), Some(2), None, Some(3)]
+        );
+        assert_eq!(
+            dm.matching.var_to_row,
+            vec![Some(0), Some(1), Some(2), Some(4), None]
+        );
+        assert_eq!(dm.unmatched_rows, vec![3]);
+        assert_eq!(dm.unmatched_vars, vec![4]);
+        assert_eq!(dm.overconstrained_rows, vec![2, 3]);
+        assert_eq!(dm.overconstrained_vars, vec![2]);
+        assert_eq!(dm.square_rows, vec![0, 1]);
+        assert_eq!(dm.square_vars, vec![0, 1]);
+        assert_eq!(dm.underconstrained_rows, vec![4]);
+        assert_eq!(dm.underconstrained_vars, vec![3, 4]);
     }
 }
