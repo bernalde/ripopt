@@ -17,6 +17,12 @@ pub(crate) struct EqualityBlock {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PresolveCandidate {
+    pub(crate) blocks: Vec<EqualityBlock>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BlockTriangularizationError {
     NonSquare {
         rows: usize,
@@ -72,6 +78,87 @@ pub(crate) struct DulmageMendelsohnPartition {
     pub(crate) unmatched_rows: Vec<usize>,
     /// Unmatched original variable indices.
     pub(crate) unmatched_vars: Vec<usize>,
+}
+
+#[allow(dead_code)]
+pub(crate) fn find_presolve_candidates(
+    problem: &dyn NlpProblem,
+    tol: f64,
+) -> Vec<PresolveCandidate> {
+    let incidence = EqualityIncidence::from_problem(problem, tol);
+    if incidence.row_global.is_empty() {
+        return Vec::new();
+    }
+
+    let selected_rows: Vec<_> = (0..incidence.row_adj_vars.len()).collect();
+    let selected_vars: Vec<_> = incidence
+        .var_adj_rows
+        .iter()
+        .enumerate()
+        .filter_map(|(var, rows)| (!rows.is_empty()).then_some(var))
+        .collect();
+
+    incidence
+        .connected_components(&selected_rows, &selected_vars)
+        .into_iter()
+        .filter_map(|component| presolve_candidate_from_component(&incidence, component))
+        .collect()
+}
+
+fn presolve_candidate_from_component(
+    incidence: &EqualityIncidence,
+    component: EqualityBlock,
+) -> Option<PresolveCandidate> {
+    if component.rows.len() != component.vars.len() || component.rows.is_empty() {
+        return None;
+    }
+
+    let local_rows: Vec<_> = component
+        .rows
+        .iter()
+        .map(|&row| incidence.row_local_for_global[row])
+        .collect::<Option<_>>()?;
+
+    if !is_closed_equality_component(incidence, &local_rows, &component.vars) {
+        return None;
+    }
+
+    incidence
+        .block_triangular_decomposition(&local_rows, &component.vars)
+        .ok()
+        .map(|blocks| PresolveCandidate { blocks })
+}
+
+fn is_closed_equality_component(
+    incidence: &EqualityIncidence,
+    local_rows: &[usize],
+    vars: &[usize],
+) -> bool {
+    let mut selected_rows = vec![false; incidence.row_adj_vars.len()];
+    let mut selected_vars = vec![false; incidence.n_vars];
+
+    for &row in local_rows {
+        if row >= selected_rows.len() {
+            return false;
+        }
+        selected_rows[row] = true;
+    }
+    for &var in vars {
+        if var >= selected_vars.len() {
+            return false;
+        }
+        selected_vars[var] = true;
+    }
+
+    local_rows.iter().all(|&row| {
+        incidence.row_adj_vars[row]
+            .iter()
+            .all(|&var| selected_vars[var])
+    }) && vars.iter().all(|&var| {
+        incidence.var_adj_rows[var]
+            .iter()
+            .all(|&row| selected_rows[row])
+    })
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -773,6 +860,7 @@ mod tests {
         gl: Vec<f64>,
         gu: Vec<f64>,
         edges: Vec<(usize, usize)>,
+        objective_vars: Vec<usize>,
     }
 
     impl NlpProblem for GraphProblem {
@@ -800,13 +888,16 @@ mod tests {
             x0.fill(0.0);
         }
 
-        fn objective(&self, _x: &[f64], _new_x: bool, obj: &mut f64) -> bool {
-            *obj = 0.0;
+        fn objective(&self, x: &[f64], _new_x: bool, obj: &mut f64) -> bool {
+            *obj = self.objective_vars.iter().map(|&var| x[var]).sum();
             true
         }
 
         fn gradient(&self, _x: &[f64], _new_x: bool, grad: &mut [f64]) -> bool {
             grad.fill(0.0);
+            for &var in &self.objective_vars {
+                grad[var] = 1.0;
+            }
             true
         }
 
@@ -846,6 +937,22 @@ mod tests {
             gl: bounds.iter().map(|b| b.0).collect(),
             gu: bounds.iter().map(|b| b.1).collect(),
             edges: edges.to_vec(),
+            objective_vars: Vec::new(),
+        }
+    }
+
+    fn graph_problem_with_objective(
+        n: usize,
+        bounds: &[(f64, f64)],
+        edges: &[(usize, usize)],
+        objective_vars: &[usize],
+    ) -> GraphProblem {
+        GraphProblem {
+            n,
+            gl: bounds.iter().map(|b| b.0).collect(),
+            gu: bounds.iter().map(|b| b.1).collect(),
+            edges: edges.to_vec(),
+            objective_vars: objective_vars.to_vec(),
         }
     }
 
@@ -1292,5 +1399,125 @@ mod tests {
             assert_eq!(block.rows, vec![idx]);
             assert_eq!(block.vars, vec![idx]);
         }
+    }
+
+    #[test]
+    fn find_candidates_detects_independent_auxiliary_system() {
+        let bounds = equality_bounds(2);
+        let problem = graph_problem(3, &bounds, &[(0, 1), (1, 2), (1, 1)]);
+
+        let candidates = find_presolve_candidates(&problem, TOL);
+
+        assert_eq!(
+            candidates,
+            vec![PresolveCandidate {
+                blocks: vec![
+                    EqualityBlock {
+                        rows: vec![0],
+                        vars: vec![1],
+                    },
+                    EqualityBlock {
+                        rows: vec![1],
+                        vars: vec![2],
+                    },
+                ],
+            }]
+        );
+    }
+
+    #[test]
+    fn find_candidates_rejects_underconstrained_equality_component() {
+        let bounds = equality_bounds(1);
+        let problem = graph_problem(2, &bounds, &[(0, 0), (0, 1)]);
+
+        let candidates = find_presolve_candidates(&problem, TOL);
+
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn find_candidates_rejects_overconstrained_equality_component() {
+        let bounds = equality_bounds(2);
+        let problem = graph_problem(1, &bounds, &[(0, 0), (1, 0)]);
+
+        let candidates = find_presolve_candidates(&problem, TOL);
+
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn find_candidates_rejects_equality_component_coupled_to_unsolved_variable() {
+        let bounds = equality_bounds(2);
+        let problem = graph_problem(3, &bounds, &[(0, 0), (1, 0), (1, 1), (1, 2)]);
+
+        let candidates = find_presolve_candidates(&problem, TOL);
+
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn find_candidates_allows_candidate_variables_in_objective_terms() {
+        let bounds = equality_bounds(1);
+        let problem = graph_problem_with_objective(2, &bounds, &[(0, 1)], &[1]);
+
+        let candidates = find_presolve_candidates(&problem, TOL);
+
+        assert_eq!(
+            candidates,
+            vec![PresolveCandidate {
+                blocks: vec![EqualityBlock {
+                    rows: vec![0],
+                    vars: vec![1],
+                }],
+            }]
+        );
+    }
+
+    #[test]
+    fn find_candidates_allows_candidate_variables_in_inequality_rows() {
+        let problem = graph_problem(2, &[(0.0, 0.0), (0.0, 1.0)], &[(0, 1), (1, 1)]);
+
+        let candidates = find_presolve_candidates(&problem, TOL);
+
+        assert_eq!(
+            candidates,
+            vec![PresolveCandidate {
+                blocks: vec![EqualityBlock {
+                    rows: vec![0],
+                    vars: vec![1],
+                }],
+            }]
+        );
+    }
+
+    #[test]
+    fn find_candidates_returns_btd_ordered_blocks() {
+        let problem = graph_problem(
+            3,
+            &[(0.0, 1.0), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0)],
+            &[(1, 0), (2, 0), (2, 1), (3, 1), (3, 2)],
+        );
+
+        let candidates = find_presolve_candidates(&problem, TOL);
+
+        assert_eq!(
+            candidates,
+            vec![PresolveCandidate {
+                blocks: vec![
+                    EqualityBlock {
+                        rows: vec![1],
+                        vars: vec![0],
+                    },
+                    EqualityBlock {
+                        rows: vec![2],
+                        vars: vec![1],
+                    },
+                    EqualityBlock {
+                        rows: vec![3],
+                        vars: vec![2],
+                    },
+                ],
+            }]
+        );
     }
 }
