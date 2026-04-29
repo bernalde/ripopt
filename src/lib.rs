@@ -75,6 +75,7 @@
 //! - Parametric sensitivity analysis ([`solve_with_sensitivity`])
 
 pub mod augmented_lagrangian;
+pub(crate) mod auxiliary_preprocessing;
 pub mod intermediate;
 pub(crate) mod logging;
 pub mod c_api;
