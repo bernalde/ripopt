@@ -1633,8 +1633,8 @@ fn try_slow_optimal_slack_fallback<P: NlpProblem>(
 
 /// Auxiliary preprocessing attempt: solve block-triangular equality
 /// subsystems first, use the solved full-space point as the initial point,
-/// then run a non-preprocessing recursive solve. If either the auxiliary
-/// blocks or the seeded solve fail, fall back to the normal solve path.
+/// then run a non-preprocessing recursive solve. The caller decides whether
+/// the seeded result improves on the normal solve.
 fn try_auxiliary_preprocessed_solve<P: NlpProblem>(
     problem: &P,
     options: &SolverOptions,
@@ -1652,7 +1652,7 @@ fn try_auxiliary_preprocessed_solve<P: NlpProblem>(
     }
 
     let outcome =
-        match crate::auxiliary_preprocessing::solve_auxiliary_blocks(problem_dyn, &candidates, options)
+        match crate::auxiliary_preprocessing::solve_auxiliary_blocks(problem_dyn, &candidates, options, solve_start)
         {
             Ok(outcome) if outcome.blocks_solved > 0 => outcome,
             Ok(_) => return None,
@@ -1683,9 +1683,8 @@ fn try_auxiliary_preprocessed_solve<P: NlpProblem>(
         seeded_opts.max_wall_time = remaining * 0.5;
     }
 
-    let mut result = solve(&seeded, &seeded_opts);
+    let result = solve(&seeded, &seeded_opts);
     if matches!(result.status, SolveStatus::Optimal) {
-        result.diagnostics.fallback_used = Some("auxiliary_preprocessing".into());
         return Some(result);
     }
 
@@ -1714,9 +1713,6 @@ fn try_preprocessed_solve<P: NlpProblem>(
 ) -> Option<SolveResult> {
     if !options.enable_preprocessing {
         return None;
-    }
-    if let Some(result) = try_auxiliary_preprocessed_solve(problem, options, solve_start) {
-        return Some(result);
     }
     let prep = crate::preprocessing::PreprocessedProblem::new(problem as &dyn NlpProblem, options.bound_push);
     if !prep.did_reduce() {
@@ -2218,6 +2214,18 @@ fn solve_inner<P: NlpProblem>(
     }
 
     try_conservative_ipm_retry(&mut result, problem, options, solve_start);
+
+    if !matches!(result.status, SolveStatus::Optimal) {
+        if let Some(candidate) = try_auxiliary_preprocessed_solve(problem, options, solve_start) {
+            adopt_candidate_if_better(
+                &mut result,
+                candidate,
+                options,
+                "Auxiliary preprocessing fallback",
+                "auxiliary_preprocessing",
+            );
+        }
+    }
 
     if !matches!(result.status, SolveStatus::Optimal) {
         if let Some(slack_result) = dispatch_failure_recovery(

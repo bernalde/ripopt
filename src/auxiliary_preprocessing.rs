@@ -9,6 +9,7 @@ use crate::problem::NlpProblem;
 use crate::result::{SolveResult, SolveStatus};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
+use std::time::Instant;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +41,9 @@ pub(crate) enum AuxiliarySolveError {
     },
     EvaluationFailed {
         block: EqualityBlock,
+    },
+    TimeBudgetExceeded {
+        blocks_solved: usize,
     },
     BlockSolveFailed {
         block: EqualityBlock,
@@ -374,16 +378,18 @@ pub(crate) fn solve_auxiliary_blocks(
     problem: &dyn NlpProblem,
     candidates: &[PresolveCandidate],
     options: &SolverOptions,
+    solve_start: Instant,
 ) -> Result<AuxiliarySolveOutcome, AuxiliarySolveError> {
     let mut x_full = vec![0.0; problem.num_variables()];
     problem.initial_point(&mut x_full);
-    solve_auxiliary_blocks_from(problem, candidates, options, &mut x_full)
+    solve_auxiliary_blocks_from(problem, candidates, options, solve_start, &mut x_full)
 }
 
 pub(crate) fn solve_auxiliary_blocks_from(
     problem: &dyn NlpProblem,
     candidates: &[PresolveCandidate],
     options: &SolverOptions,
+    solve_start: Instant,
     x_full: &mut [f64],
 ) -> Result<AuxiliarySolveOutcome, AuxiliarySolveError> {
     let mut blocks_solved = 0;
@@ -392,7 +398,9 @@ pub(crate) fn solve_auxiliary_blocks_from(
     for candidate in candidates {
         for block in &candidate.blocks {
             let block_problem = AuxiliaryBlockProblem::new(problem, block, x_full)?;
-            let aux_options = auxiliary_solver_options(options);
+            let Some(aux_options) = auxiliary_solver_options(options, solve_start) else {
+                return Err(AuxiliarySolveError::TimeBudgetExceeded { blocks_solved });
+            };
             let result = crate::solve(&block_problem, &aux_options);
             let residual = auxiliary_result_residual(&block_problem, &result)?;
 
@@ -474,7 +482,10 @@ fn has_duplicates(values: &[usize]) -> bool {
     values.windows(2).any(|pair| pair[0] == pair[1])
 }
 
-fn auxiliary_solver_options(options: &SolverOptions) -> SolverOptions {
+fn auxiliary_solver_options(
+    options: &SolverOptions,
+    solve_start: Instant,
+) -> Option<SolverOptions> {
     let mut aux_options = options.clone();
     aux_options.enable_preprocessing = false;
     aux_options.warm_start = false;
@@ -484,7 +495,14 @@ fn auxiliary_solver_options(options: &SolverOptions) -> SolverOptions {
     aux_options.user_obj_scaling = None;
     aux_options.user_g_scaling = None;
     aux_options.user_x_scaling = None;
-    aux_options
+    if options.max_wall_time > 0.0 {
+        let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
+        if remaining <= 0.0 {
+            return None;
+        }
+        aux_options.max_wall_time = remaining;
+    }
+    Some(aux_options)
 }
 
 fn auxiliary_result_residual(
@@ -1607,7 +1625,8 @@ mod tests {
         let options = quiet_aux_options();
 
         let outcome =
-            solve_auxiliary_blocks(&problem, &candidates, &options).expect("auxiliary solve");
+            solve_auxiliary_blocks(&problem, &candidates, &options, std::time::Instant::now())
+                .expect("auxiliary solve");
 
         assert_eq!(outcome.blocks_solved, 1);
         assert!(outcome.max_residual <= options.auxiliary_tol);
@@ -1622,7 +1641,8 @@ mod tests {
         let options = quiet_aux_options();
 
         let outcome =
-            solve_auxiliary_blocks(&problem, &candidates, &options).expect("auxiliary solve");
+            solve_auxiliary_blocks(&problem, &candidates, &options, std::time::Instant::now())
+                .expect("auxiliary solve");
 
         assert_eq!(outcome.blocks_solved, 2);
         assert!(outcome.max_residual <= options.auxiliary_tol);
@@ -1636,7 +1656,9 @@ mod tests {
         let candidates = find_presolve_candidates(&problem, TOL);
         let options = quiet_aux_options();
 
-        let err = solve_auxiliary_blocks(&problem, &candidates, &options).unwrap_err();
+        let err =
+            solve_auxiliary_blocks(&problem, &candidates, &options, std::time::Instant::now())
+                .unwrap_err();
 
         match err {
             AuxiliarySolveError::BlockSolveFailed {
@@ -1650,6 +1672,23 @@ mod tests {
             }
             other => panic!("unexpected auxiliary error: {:?}", other),
         }
+    }
+
+    #[test]
+    fn auxiliary_solve_stops_when_outer_wall_time_is_exhausted() {
+        let problem = TriangularAuxProblem;
+        let candidates = find_presolve_candidates(&problem, TOL);
+        let mut options = quiet_aux_options();
+        options.max_wall_time = 0.01;
+        let expired_start = std::time::Instant::now() - std::time::Duration::from_secs(1);
+
+        let err =
+            solve_auxiliary_blocks(&problem, &candidates, &options, expired_start).unwrap_err();
+
+        assert_eq!(
+            err,
+            AuxiliarySolveError::TimeBudgetExceeded { blocks_solved: 0 }
+        );
     }
 
     #[test]
