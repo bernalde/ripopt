@@ -301,64 +301,301 @@ impl NlpProblem for AuxiliaryBlockProblem<'_> {
     }
 }
 
-pub(crate) struct SeededInitialPointProblem<'a> {
+#[allow(dead_code)]
+pub(crate) struct AuxiliaryReducedProblem<'a> {
     inner: &'a dyn NlpProblem,
-    x0: Vec<f64>,
+    n_orig: usize,
+    m_orig: usize,
+    fixed_x: Vec<f64>,
+    var_map: Vec<usize>,
+    constr_map: Vec<usize>,
+    jac_rows: Vec<usize>,
+    jac_cols: Vec<usize>,
+    jac_entry_map: Vec<usize>,
+    inner_jac_nnz: usize,
+    hess_rows: Vec<usize>,
+    hess_cols: Vec<usize>,
+    hess_entry_map: Vec<usize>,
+    inner_hess_nnz: usize,
 }
 
-impl<'a> SeededInitialPointProblem<'a> {
-    pub(crate) fn new(inner: &'a dyn NlpProblem, x0: Vec<f64>) -> Self {
-        Self { inner, x0 }
+impl<'a> AuxiliaryReducedProblem<'a> {
+    pub(crate) fn new(
+        inner: &'a dyn NlpProblem,
+        candidates: &[PresolveCandidate],
+        fixed_x: Vec<f64>,
+    ) -> Result<Self, AuxiliarySolveError> {
+        let n_orig = inner.num_variables();
+        let m_orig = inner.num_constraints();
+        if fixed_x.len() != n_orig {
+            return Err(AuxiliarySolveError::InvalidBlock {
+                block: EqualityBlock {
+                    rows: Vec::new(),
+                    vars: Vec::new(),
+                },
+                reason: "fixed_x length does not match problem variables",
+            });
+        }
+
+        let mut fixed_vars = vec![false; n_orig];
+        let mut removed_constraints = vec![false; m_orig];
+        for candidate in candidates {
+            for block in &candidate.blocks {
+                validate_auxiliary_block(block, &fixed_x, n_orig, m_orig)?;
+                for &var in &block.vars {
+                    fixed_vars[var] = true;
+                }
+                for &row in &block.rows {
+                    removed_constraints[row] = true;
+                }
+            }
+        }
+
+        let var_map: Vec<_> = (0..n_orig).filter(|&var| !fixed_vars[var]).collect();
+        let constr_map: Vec<_> = (0..m_orig)
+            .filter(|&row| !removed_constraints[row])
+            .collect();
+
+        let mut orig_to_reduced_var = vec![None; n_orig];
+        for (reduced, &orig) in var_map.iter().enumerate() {
+            orig_to_reduced_var[orig] = Some(reduced);
+        }
+        let mut orig_to_reduced_constr = vec![None; m_orig];
+        for (reduced, &orig) in constr_map.iter().enumerate() {
+            orig_to_reduced_constr[orig] = Some(reduced);
+        }
+
+        let (inner_jac_rows, inner_jac_cols) = inner.jacobian_structure();
+        let mut jac_rows = Vec::new();
+        let mut jac_cols = Vec::new();
+        let mut jac_entry_map = Vec::new();
+        for (idx, (&row, &col)) in inner_jac_rows.iter().zip(inner_jac_cols.iter()).enumerate() {
+            if row >= m_orig || col >= n_orig {
+                continue;
+            }
+            if let (Some(reduced_row), Some(reduced_col)) =
+                (orig_to_reduced_constr[row], orig_to_reduced_var[col])
+            {
+                jac_rows.push(reduced_row);
+                jac_cols.push(reduced_col);
+                jac_entry_map.push(idx);
+            }
+        }
+
+        let (inner_hess_rows, inner_hess_cols) = inner.hessian_structure();
+        let mut hess_rows = Vec::new();
+        let mut hess_cols = Vec::new();
+        let mut hess_entry_map = Vec::new();
+        for (idx, (&row, &col)) in inner_hess_rows
+            .iter()
+            .zip(inner_hess_cols.iter())
+            .enumerate()
+        {
+            if row >= n_orig || col >= n_orig {
+                continue;
+            }
+            if let (Some(reduced_row), Some(reduced_col)) =
+                (orig_to_reduced_var[row], orig_to_reduced_var[col])
+            {
+                if reduced_row >= reduced_col {
+                    hess_rows.push(reduced_row);
+                    hess_cols.push(reduced_col);
+                } else {
+                    hess_rows.push(reduced_col);
+                    hess_cols.push(reduced_row);
+                }
+                hess_entry_map.push(idx);
+            }
+        }
+
+        Ok(Self {
+            inner,
+            n_orig,
+            m_orig,
+            fixed_x,
+            var_map,
+            constr_map,
+            jac_rows,
+            jac_cols,
+            jac_entry_map,
+            inner_jac_nnz: inner_jac_rows.len(),
+            hess_rows,
+            hess_cols,
+            hess_entry_map,
+            inner_hess_nnz: inner_hess_rows.len(),
+        })
+    }
+
+    pub(crate) fn did_reduce(&self) -> bool {
+        self.var_map.len() < self.n_orig || self.constr_map.len() < self.m_orig
+    }
+
+    pub(crate) fn num_fixed(&self) -> usize {
+        self.n_orig - self.var_map.len()
+    }
+
+    pub(crate) fn num_removed_constraints(&self) -> usize {
+        self.m_orig - self.constr_map.len()
+    }
+
+    fn expand_x(&self, x_reduced: &[f64]) -> Vec<f64> {
+        let mut x_full = self.fixed_x.clone();
+        for (reduced, &orig) in self.var_map.iter().enumerate() {
+            x_full[orig] = x_reduced[reduced];
+        }
+        x_full
+    }
+
+    pub(crate) fn unmap_solution(&self, reduced: &SolveResult) -> SolveResult {
+        let x_full = self.expand_x(&reduced.x);
+
+        let mut constraint_multipliers = vec![0.0; self.m_orig];
+        for (reduced_idx, &orig_idx) in self.constr_map.iter().enumerate() {
+            if reduced_idx < reduced.constraint_multipliers.len() {
+                constraint_multipliers[orig_idx] = reduced.constraint_multipliers[reduced_idx];
+            }
+        }
+
+        let mut bound_multipliers_lower = vec![0.0; self.n_orig];
+        let mut bound_multipliers_upper = vec![0.0; self.n_orig];
+        for (reduced_idx, &orig_idx) in self.var_map.iter().enumerate() {
+            if reduced_idx < reduced.bound_multipliers_lower.len() {
+                bound_multipliers_lower[orig_idx] = reduced.bound_multipliers_lower[reduced_idx];
+            }
+            if reduced_idx < reduced.bound_multipliers_upper.len() {
+                bound_multipliers_upper[orig_idx] = reduced.bound_multipliers_upper[reduced_idx];
+            }
+        }
+
+        let mut objective = reduced.objective;
+        let _ = self.inner.objective(&x_full, true, &mut objective);
+
+        let mut constraint_values = vec![0.0; self.m_orig];
+        if self.m_orig > 0 {
+            let _ = self
+                .inner
+                .constraints(&x_full, true, &mut constraint_values);
+        }
+
+        SolveResult {
+            x: x_full,
+            objective,
+            constraint_multipliers,
+            bound_multipliers_lower,
+            bound_multipliers_upper,
+            constraint_values,
+            status: reduced.status,
+            iterations: reduced.iterations,
+            diagnostics: reduced.diagnostics.clone(),
+        }
     }
 }
 
-impl NlpProblem for SeededInitialPointProblem<'_> {
+impl NlpProblem for AuxiliaryReducedProblem<'_> {
     fn num_variables(&self) -> usize {
-        self.inner.num_variables()
+        self.var_map.len()
     }
 
     fn num_constraints(&self) -> usize {
-        self.inner.num_constraints()
+        self.constr_map.len()
     }
 
     fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
-        self.inner.bounds(x_l, x_u);
+        let mut x_l_full = vec![0.0; self.n_orig];
+        let mut x_u_full = vec![0.0; self.n_orig];
+        self.inner.bounds(&mut x_l_full, &mut x_u_full);
+        for (reduced, &orig) in self.var_map.iter().enumerate() {
+            x_l[reduced] = x_l_full[orig];
+            x_u[reduced] = x_u_full[orig];
+        }
     }
 
     fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
-        self.inner.constraint_bounds(g_l, g_u);
+        let mut g_l_full = vec![0.0; self.m_orig];
+        let mut g_u_full = vec![0.0; self.m_orig];
+        self.inner.constraint_bounds(&mut g_l_full, &mut g_u_full);
+        for (reduced, &orig) in self.constr_map.iter().enumerate() {
+            g_l[reduced] = g_l_full[orig];
+            g_u[reduced] = g_u_full[orig];
+        }
     }
 
     fn initial_point(&self, x0: &mut [f64]) {
-        x0.copy_from_slice(&self.x0);
+        for (reduced, &orig) in self.var_map.iter().enumerate() {
+            x0[reduced] = self.fixed_x[orig];
+        }
     }
 
     fn initial_multipliers(&self, lam_g: &mut [f64], z_l: &mut [f64], z_u: &mut [f64]) -> bool {
-        self.inner.initial_multipliers(lam_g, z_l, z_u)
+        let mut lam_g_full = vec![0.0; self.m_orig];
+        let mut z_l_full = vec![0.0; self.n_orig];
+        let mut z_u_full = vec![0.0; self.n_orig];
+        if !self
+            .inner
+            .initial_multipliers(&mut lam_g_full, &mut z_l_full, &mut z_u_full)
+        {
+            return false;
+        }
+        for (reduced, &orig) in self.constr_map.iter().enumerate() {
+            lam_g[reduced] = lam_g_full[orig];
+        }
+        for (reduced, &orig) in self.var_map.iter().enumerate() {
+            z_l[reduced] = z_l_full[orig];
+            z_u[reduced] = z_u_full[orig];
+        }
+        true
     }
 
     fn objective(&self, x: &[f64], new_x: bool, obj: &mut f64) -> bool {
-        self.inner.objective(x, new_x, obj)
+        let x_full = self.expand_x(x);
+        self.inner.objective(&x_full, new_x, obj)
     }
 
     fn gradient(&self, x: &[f64], new_x: bool, grad: &mut [f64]) -> bool {
-        self.inner.gradient(x, new_x, grad)
+        let x_full = self.expand_x(x);
+        let mut grad_full = vec![0.0; self.n_orig];
+        if !self.inner.gradient(&x_full, new_x, &mut grad_full) {
+            return false;
+        }
+        for (reduced, &orig) in self.var_map.iter().enumerate() {
+            grad[reduced] = grad_full[orig];
+        }
+        true
     }
 
     fn constraints(&self, x: &[f64], new_x: bool, g: &mut [f64]) -> bool {
-        self.inner.constraints(x, new_x, g)
+        let x_full = self.expand_x(x);
+        let mut g_full = vec![0.0; self.m_orig];
+        if !self.inner.constraints(&x_full, new_x, &mut g_full) {
+            return false;
+        }
+        for (reduced, &orig) in self.constr_map.iter().enumerate() {
+            g[reduced] = g_full[orig];
+        }
+        true
     }
 
     fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
-        self.inner.jacobian_structure()
+        (self.jac_rows.clone(), self.jac_cols.clone())
     }
 
     fn jacobian_values(&self, x: &[f64], new_x: bool, vals: &mut [f64]) -> bool {
-        self.inner.jacobian_values(x, new_x, vals)
+        if self.jac_entry_map.is_empty() {
+            return true;
+        }
+        let x_full = self.expand_x(x);
+        let mut inner_vals = vec![0.0; self.inner_jac_nnz];
+        if !self.inner.jacobian_values(&x_full, new_x, &mut inner_vals) {
+            return false;
+        }
+        for (reduced, &inner_idx) in self.jac_entry_map.iter().enumerate() {
+            vals[reduced] = inner_vals[inner_idx];
+        }
+        true
     }
 
     fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
-        self.inner.hessian_structure()
+        (self.hess_rows.clone(), self.hess_cols.clone())
     }
 
     fn hessian_values(
@@ -369,8 +606,27 @@ impl NlpProblem for SeededInitialPointProblem<'_> {
         lambda: &[f64],
         vals: &mut [f64],
     ) -> bool {
-        self.inner
-            .hessian_values(x, new_x, obj_factor, lambda, vals)
+        if self.hess_entry_map.is_empty() {
+            return true;
+        }
+
+        let x_full = self.expand_x(x);
+        let mut lambda_full = vec![0.0; self.m_orig];
+        for (reduced, &orig) in self.constr_map.iter().enumerate() {
+            lambda_full[orig] = lambda[reduced];
+        }
+
+        let mut inner_vals = vec![0.0; self.inner_hess_nnz];
+        if !self
+            .inner
+            .hessian_values(&x_full, new_x, obj_factor, &lambda_full, &mut inner_vals)
+        {
+            return false;
+        }
+        for (reduced, &inner_idx) in self.hess_entry_map.iter().enumerate() {
+            vals[reduced] = inner_vals[inner_idx];
+        }
+        true
     }
 }
 
@@ -1611,6 +1867,217 @@ mod tests {
         ) -> bool {
             true
         }
+    }
+
+    struct ReducedMappingProblem;
+
+    impl NlpProblem for ReducedMappingProblem {
+        fn num_variables(&self) -> usize {
+            4
+        }
+
+        fn num_constraints(&self) -> usize {
+            4
+        }
+
+        fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+            x_l[0] = -10.0;
+            x_u[0] = 10.0;
+            x_l[1] = 2.0;
+            x_u[1] = 2.0;
+            x_l[2] = -20.0;
+            x_u[2] = 20.0;
+            x_l[3] = 5.0;
+            x_u[3] = 5.0;
+        }
+
+        fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+            g_l[0] = 0.0;
+            g_u[0] = 0.0;
+            g_l[1] = f64::NEG_INFINITY;
+            g_u[1] = 100.0;
+            g_l[2] = 0.0;
+            g_u[2] = 0.0;
+            g_l[3] = 1.0;
+            g_u[3] = 1.0;
+        }
+
+        fn initial_point(&self, x0: &mut [f64]) {
+            x0.copy_from_slice(&[9.0, 2.0, 8.0, 5.0]);
+        }
+
+        fn objective(&self, x: &[f64], _new_x: bool, obj: &mut f64) -> bool {
+            *obj = x[0] * x[0] + 4.0 * x[0] * x[2] + 3.0 * x[2] * x[2] + 5.0 * x[1] + 7.0 * x[3];
+            true
+        }
+
+        fn gradient(&self, x: &[f64], _new_x: bool, grad: &mut [f64]) -> bool {
+            grad[0] = 2.0 * x[0] + 4.0 * x[2];
+            grad[1] = 5.0;
+            grad[2] = 4.0 * x[0] + 6.0 * x[2];
+            grad[3] = 7.0;
+            true
+        }
+
+        fn constraints(&self, x: &[f64], _new_x: bool, g: &mut [f64]) -> bool {
+            g[0] = x[1] - 2.0;
+            g[1] = x[0] + 10.0 * x[1] + 2.0 * x[2];
+            g[2] = x[3] - 5.0;
+            g[3] = x[0] * x[0] + x[2] - 3.0 * x[3];
+            true
+        }
+
+        fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+            (vec![0, 1, 1, 1, 2, 3, 3, 3], vec![1, 0, 1, 2, 3, 0, 2, 3])
+        }
+
+        fn jacobian_values(&self, x: &[f64], _new_x: bool, vals: &mut [f64]) -> bool {
+            vals[0] = 1.0;
+            vals[1] = 1.0;
+            vals[2] = 10.0;
+            vals[3] = 2.0;
+            vals[4] = 1.0;
+            vals[5] = 2.0 * x[0];
+            vals[6] = 1.0;
+            vals[7] = -3.0;
+            true
+        }
+
+        fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+            (vec![0, 1, 2, 2, 3, 3], vec![0, 0, 0, 2, 2, 3])
+        }
+
+        fn hessian_values(
+            &self,
+            _x: &[f64],
+            _new_x: bool,
+            obj_factor: f64,
+            lambda: &[f64],
+            vals: &mut [f64],
+        ) -> bool {
+            vals[0] = 2.0 * obj_factor + 2.0 * lambda[3];
+            vals[1] = 0.0;
+            vals[2] = 4.0 * obj_factor;
+            vals[3] = 6.0 * obj_factor;
+            vals[4] = 0.0;
+            vals[5] = 0.0;
+            true
+        }
+    }
+
+    fn reduced_mapping_problem<'a>(problem: &'a dyn NlpProblem) -> AuxiliaryReducedProblem<'a> {
+        let candidates = vec![PresolveCandidate {
+            blocks: vec![
+                EqualityBlock {
+                    rows: vec![0],
+                    vars: vec![1],
+                },
+                EqualityBlock {
+                    rows: vec![2],
+                    vars: vec![3],
+                },
+            ],
+        }];
+        AuxiliaryReducedProblem::new(problem, &candidates, vec![9.0, 2.0, 8.0, 5.0]).unwrap()
+    }
+
+    #[test]
+    fn auxiliary_reduced_problem_expands_evaluations_through_fixed_auxiliaries() {
+        let problem = ReducedMappingProblem;
+        let reduced = reduced_mapping_problem(&problem);
+
+        assert!(reduced.did_reduce());
+        assert_eq!(reduced.num_fixed(), 2);
+        assert_eq!(reduced.num_removed_constraints(), 2);
+        assert_eq!(reduced.num_variables(), 2);
+        assert_eq!(reduced.num_constraints(), 2);
+        assert_eq!(reduced.var_map, vec![0, 2]);
+        assert_eq!(reduced.constr_map, vec![1, 3]);
+
+        let mut x0 = vec![0.0; 2];
+        reduced.initial_point(&mut x0);
+        assert_eq!(x0, vec![9.0, 8.0]);
+
+        let mut x_l = vec![0.0; 2];
+        let mut x_u = vec![0.0; 2];
+        reduced.bounds(&mut x_l, &mut x_u);
+        assert_eq!(x_l, vec![-10.0, -20.0]);
+        assert_eq!(x_u, vec![10.0, 20.0]);
+
+        let mut g_l = vec![0.0; 2];
+        let mut g_u = vec![0.0; 2];
+        reduced.constraint_bounds(&mut g_l, &mut g_u);
+        assert_eq!(g_l, vec![f64::NEG_INFINITY, 1.0]);
+        assert_eq!(g_u, vec![100.0, 1.0]);
+
+        let x_reduced = vec![11.0, 13.0];
+        let mut obj = 0.0;
+        assert!(reduced.objective(&x_reduced, true, &mut obj));
+        assert_eq!(obj, 1245.0);
+
+        let mut grad = vec![0.0; 2];
+        assert!(reduced.gradient(&x_reduced, true, &mut grad));
+        assert_eq!(grad, vec![74.0, 122.0]);
+
+        let mut g = vec![0.0; 2];
+        assert!(reduced.constraints(&x_reduced, true, &mut g));
+        assert_eq!(g, vec![57.0, 119.0]);
+    }
+
+    #[test]
+    fn auxiliary_reduced_problem_remaps_jacobian_entries() {
+        let problem = ReducedMappingProblem;
+        let reduced = reduced_mapping_problem(&problem);
+
+        let (rows, cols) = reduced.jacobian_structure();
+        assert_eq!(rows, vec![0, 0, 1, 1]);
+        assert_eq!(cols, vec![0, 1, 0, 1]);
+
+        let mut vals = vec![0.0; rows.len()];
+        assert!(reduced.jacobian_values(&[11.0, 13.0], true, &mut vals));
+        assert_eq!(vals, vec![1.0, 2.0, 22.0, 1.0]);
+    }
+
+    #[test]
+    fn auxiliary_reduced_problem_remaps_sparse_lower_hessian_entries() {
+        let problem = ReducedMappingProblem;
+        let reduced = reduced_mapping_problem(&problem);
+
+        let (rows, cols) = reduced.hessian_structure();
+        assert_eq!(rows, vec![0, 1, 1]);
+        assert_eq!(cols, vec![0, 0, 1]);
+
+        let mut vals = vec![0.0; rows.len()];
+        assert!(reduced.hessian_values(&[11.0, 13.0], true, 0.5, &[7.0, 11.0], &mut vals));
+        assert_eq!(vals, vec![23.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn auxiliary_reduced_problem_unmaps_full_solution() {
+        let problem = ReducedMappingProblem;
+        let reduced = reduced_mapping_problem(&problem);
+        let reduced_result = SolveResult {
+            x: vec![11.0, 13.0],
+            objective: -1.0,
+            constraint_multipliers: vec![7.0, 11.0],
+            bound_multipliers_lower: vec![0.1, 0.2],
+            bound_multipliers_upper: vec![0.3, 0.4],
+            constraint_values: vec![-1.0, -1.0],
+            status: SolveStatus::Optimal,
+            iterations: 12,
+            diagnostics: Default::default(),
+        };
+
+        let full = reduced.unmap_solution(&reduced_result);
+
+        assert_eq!(full.x, vec![11.0, 2.0, 13.0, 5.0]);
+        assert_eq!(full.objective, 1245.0);
+        assert_eq!(full.constraint_values, vec![0.0, 57.0, 0.0, 119.0]);
+        assert_eq!(full.constraint_multipliers, vec![0.0, 7.0, 0.0, 11.0]);
+        assert_eq!(full.bound_multipliers_lower, vec![0.1, 0.0, 0.2, 0.0]);
+        assert_eq!(full.bound_multipliers_upper, vec![0.3, 0.0, 0.4, 0.0]);
+        assert_eq!(full.status, SolveStatus::Optimal);
+        assert_eq!(full.iterations, 12);
     }
 
     #[test]

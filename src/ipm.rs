@@ -1632,9 +1632,9 @@ fn try_slow_optimal_slack_fallback<P: NlpProblem>(
 }
 
 /// Auxiliary preprocessing attempt: solve block-triangular equality
-/// subsystems first, use the solved full-space point as the initial point,
-/// then run a non-preprocessing recursive solve. The caller decides whether
-/// the seeded result improves on the normal solve.
+/// subsystems first, remove the solved auxiliary variables and equality rows,
+/// then run a non-preprocessing recursive solve on the reduced problem. The
+/// caller decides whether the unmapped result improves on the normal solve.
 fn try_auxiliary_preprocessed_solve<P: NlpProblem>(
     problem: &P,
     options: &SolverOptions,
@@ -1663,34 +1663,67 @@ fn try_auxiliary_preprocessed_solve<P: NlpProblem>(
                 return None;
             }
         };
+    let blocks_solved = outcome.blocks_solved;
+    let max_residual = outcome.max_residual;
 
     if options.print_level >= 5 {
         rip_log!(
             "ripopt: Auxiliary preprocessing solved {} block(s), max residual {:.2e}",
-            outcome.blocks_solved,
-            outcome.max_residual,
+            blocks_solved,
+            max_residual,
         );
     }
 
-    let seeded = crate::auxiliary_preprocessing::SeededInitialPointProblem::new(problem_dyn, outcome.x);
-    let mut seeded_opts = options.clone();
-    seeded_opts.enable_preprocessing = false;
+    let reduced =
+        match crate::auxiliary_preprocessing::AuxiliaryReducedProblem::new(problem_dyn, &candidates, outcome.x)
+        {
+            Ok(reduced) if reduced.did_reduce() => reduced,
+            Ok(_) => return None,
+            Err(err) => {
+                if options.print_level >= 5 {
+                    rip_log!("ripopt: Auxiliary preprocessing skipped after reduction failure: {:?}", err);
+                }
+                return None;
+            }
+        };
+
+    if options.print_level >= 5 {
+        rip_log!(
+            "ripopt: Auxiliary preprocessing reduced problem: {} fixed vars, {} removed constraints ({}x{} -> {}x{})",
+            reduced.num_fixed(),
+            reduced.num_removed_constraints(),
+            problem.num_variables(),
+            problem.num_constraints(),
+            reduced.num_variables(),
+            reduced.num_constraints(),
+        );
+    }
+
+    let mut reduced_opts = options.clone();
+    reduced_opts.enable_preprocessing = false;
+    reduced_opts.warm_start = false;
+    reduced_opts.warm_start_y = None;
+    reduced_opts.warm_start_z_l = None;
+    reduced_opts.warm_start_z_u = None;
+    reduced_opts.user_x_scaling = None;
+    reduced_opts.user_g_scaling = None;
     if options.max_wall_time > 0.0 {
         let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
         if remaining <= 0.1 {
             return None;
         }
-        seeded_opts.max_wall_time = remaining * 0.5;
+        reduced_opts.max_wall_time = remaining * 0.5;
     }
 
-    let result = solve(&seeded, &seeded_opts);
+    let reduced_result = solve(&reduced, &reduced_opts);
+    let result = reduced.unmap_solution(&reduced_result);
     if matches!(result.status, SolveStatus::Optimal) {
         return Some(result);
     }
 
     if options.print_level >= 5 {
         rip_log!(
-            "ripopt: Auxiliary-seeded solve failed ({:?}), retrying without auxiliary preprocessing",
+            "ripopt: Auxiliary-reduced solve failed ({:?}), retrying without auxiliary preprocessing",
             result.status,
         );
     }
