@@ -50,6 +50,11 @@ pub(crate) enum AuxiliarySolveError {
         status: SolveStatus,
         residual: f64,
     },
+    RankDeficientBlock {
+        block: EqualityBlock,
+        rank: usize,
+        expected: usize,
+    },
 }
 
 #[allow(dead_code)]
@@ -342,6 +347,15 @@ impl<'a> AuxiliaryReducedProblem<'a> {
         for candidate in candidates {
             for block in &candidate.blocks {
                 validate_auxiliary_block(block, &fixed_x, n_orig, m_orig)?;
+                let rank = auxiliary_block_jacobian_rank(inner, block, &fixed_x)?;
+                let expected = block.vars.len();
+                if rank < expected {
+                    return Err(AuxiliarySolveError::RankDeficientBlock {
+                        block: block.clone(),
+                        rank,
+                        expected,
+                    });
+                }
                 for &var in &block.vars {
                     fixed_vars[var] = true;
                 }
@@ -436,6 +450,20 @@ impl<'a> AuxiliaryReducedProblem<'a> {
 
     pub(crate) fn num_removed_constraints(&self) -> usize {
         self.m_orig - self.constr_map.len()
+    }
+
+    pub(crate) fn reduced_x_scaling(&self, scaling: &[f64]) -> Option<Vec<f64>> {
+        if scaling.len() != self.n_orig {
+            return None;
+        }
+        Some(self.var_map.iter().map(|&orig| scaling[orig]).collect())
+    }
+
+    pub(crate) fn reduced_g_scaling(&self, scaling: &[f64]) -> Option<Vec<f64>> {
+        if scaling.len() != self.m_orig {
+            return None;
+        }
+        Some(self.constr_map.iter().map(|&orig| scaling[orig]).collect())
     }
 
     fn expand_x(&self, x_reduced: &[f64]) -> Vec<f64> {
@@ -628,6 +656,88 @@ impl NlpProblem for AuxiliaryReducedProblem<'_> {
         }
         true
     }
+}
+
+fn auxiliary_block_jacobian_rank(
+    inner: &dyn NlpProblem,
+    block: &EqualityBlock,
+    fixed_x: &[f64],
+) -> Result<usize, AuxiliarySolveError> {
+    let block_problem = AuxiliaryBlockProblem::new(inner, block, fixed_x)?;
+    let rows = block_problem.rows.len();
+    let cols = block_problem.vars.len();
+    if rows == 0 || cols == 0 {
+        return Ok(0);
+    }
+
+    let x_block: Vec<_> = block_problem
+        .vars
+        .iter()
+        .map(|&var| fixed_x[var])
+        .collect();
+    let mut jac_vals = vec![0.0; block_problem.jac_rows.len()];
+    if !block_problem.jacobian_values(&x_block, true, &mut jac_vals) {
+        return Err(AuxiliarySolveError::EvaluationFailed {
+            block: block.clone(),
+        });
+    }
+
+    let mut dense = vec![0.0; rows * cols];
+    for (idx, (&row, &col)) in block_problem
+        .jac_rows
+        .iter()
+        .zip(block_problem.jac_cols.iter())
+        .enumerate()
+    {
+        dense[row * cols + col] += jac_vals[idx];
+    }
+    Ok(dense_numeric_rank(&mut dense, rows, cols))
+}
+
+fn dense_numeric_rank(matrix: &mut [f64], rows: usize, cols: usize) -> usize {
+    let max_abs = matrix
+        .iter()
+        .fold(0.0_f64, |acc, &value| acc.max(value.abs()));
+    if max_abs == 0.0 || !max_abs.is_finite() {
+        return 0;
+    }
+
+    let tol = (rows.max(cols) as f64) * max_abs * 1e-10;
+    let mut rank = 0usize;
+    for col in 0..cols {
+        let pivot_row = (rank..rows).max_by(|&a, &b| {
+            matrix[a * cols + col]
+                .abs()
+                .partial_cmp(&matrix[b * cols + col].abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let Some(pivot_row) = pivot_row else {
+            break;
+        };
+        if matrix[pivot_row * cols + col].abs() <= tol {
+            continue;
+        }
+
+        if pivot_row != rank {
+            for j in 0..cols {
+                matrix.swap(rank * cols + j, pivot_row * cols + j);
+            }
+        }
+
+        let pivot = matrix[rank * cols + col];
+        for row in (rank + 1)..rows {
+            let factor = matrix[row * cols + col] / pivot;
+            matrix[row * cols + col] = 0.0;
+            for j in (col + 1)..cols {
+                matrix[row * cols + j] -= factor * matrix[rank * cols + j];
+            }
+        }
+        rank += 1;
+        if rank == rows {
+            break;
+        }
+    }
+    rank
 }
 
 pub(crate) fn solve_auxiliary_blocks(
@@ -1965,6 +2075,79 @@ mod tests {
         }
     }
 
+    struct RankDeficientAuxProblem;
+
+    impl NlpProblem for RankDeficientAuxProblem {
+        fn num_variables(&self) -> usize {
+            2
+        }
+
+        fn num_constraints(&self) -> usize {
+            2
+        }
+
+        fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+            x_l.fill(f64::NEG_INFINITY);
+            x_u.fill(f64::INFINITY);
+        }
+
+        fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+            g_l[0] = 0.0;
+            g_u[0] = 0.0;
+            g_l[1] = f64::NEG_INFINITY;
+            g_u[1] = 10.0;
+        }
+
+        fn initial_point(&self, x0: &mut [f64]) {
+            x0[0] = 0.0;
+            x0[1] = 1.0;
+        }
+
+        fn objective(&self, x: &[f64], _new_x: bool, obj: &mut f64) -> bool {
+            *obj = x[1] * x[1];
+            true
+        }
+
+        fn gradient(&self, x: &[f64], _new_x: bool, grad: &mut [f64]) -> bool {
+            grad[0] = 0.0;
+            grad[1] = 2.0 * x[1];
+            true
+        }
+
+        fn constraints(&self, x: &[f64], _new_x: bool, g: &mut [f64]) -> bool {
+            g[0] = x[0] * x[0];
+            g[1] = x[1];
+            true
+        }
+
+        fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+            (vec![0, 1], vec![0, 1])
+        }
+
+        fn jacobian_values(&self, x: &[f64], _new_x: bool, vals: &mut [f64]) -> bool {
+            vals[0] = 2.0 * x[0];
+            vals[1] = 1.0;
+            true
+        }
+
+        fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+            (vec![0, 1], vec![0, 1])
+        }
+
+        fn hessian_values(
+            &self,
+            _x: &[f64],
+            _new_x: bool,
+            obj_factor: f64,
+            lambda: &[f64],
+            vals: &mut [f64],
+        ) -> bool {
+            vals[0] = 2.0 * lambda[0];
+            vals[1] = 2.0 * obj_factor;
+            true
+        }
+    }
+
     fn reduced_mapping_problem<'a>(problem: &'a dyn NlpProblem) -> AuxiliaryReducedProblem<'a> {
         let candidates = vec![PresolveCandidate {
             blocks: vec![
@@ -1993,6 +2176,14 @@ mod tests {
         assert_eq!(reduced.num_constraints(), 2);
         assert_eq!(reduced.var_map, vec![0, 2]);
         assert_eq!(reduced.constr_map, vec![1, 3]);
+        assert_eq!(
+            reduced.reduced_x_scaling(&[1.0, 2.0, 3.0, 4.0]),
+            Some(vec![1.0, 3.0])
+        );
+        assert_eq!(
+            reduced.reduced_g_scaling(&[10.0, 20.0, 30.0, 40.0]),
+            Some(vec![20.0, 40.0])
+        );
 
         let mut x0 = vec![0.0; 2];
         reduced.initial_point(&mut x0);
@@ -2078,6 +2269,36 @@ mod tests {
         assert_eq!(full.bound_multipliers_upper, vec![0.3, 0.0, 0.4, 0.0]);
         assert_eq!(full.status, SolveStatus::Optimal);
         assert_eq!(full.iterations, 12);
+    }
+
+    #[test]
+    fn auxiliary_reduced_problem_rejects_rank_deficient_auxiliary_block() {
+        let problem = RankDeficientAuxProblem;
+        let candidates = vec![PresolveCandidate {
+            blocks: vec![EqualityBlock {
+                rows: vec![0],
+                vars: vec![0],
+            }],
+        }];
+
+        let err = match AuxiliaryReducedProblem::new(&problem, &candidates, vec![0.0, 1.0]) {
+            Ok(_) => panic!("rank-deficient auxiliary block should not reduce"),
+            Err(err) => err,
+        };
+
+        match err {
+            AuxiliarySolveError::RankDeficientBlock {
+                block,
+                rank,
+                expected,
+            } => {
+                assert_eq!(block.rows, vec![0]);
+                assert_eq!(block.vars, vec![0]);
+                assert_eq!(rank, 0);
+                assert_eq!(expected, 1);
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
     }
 
     #[test]

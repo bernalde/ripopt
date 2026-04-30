@@ -1705,8 +1705,14 @@ fn try_auxiliary_preprocessed_solve<P: NlpProblem>(
     reduced_opts.warm_start_y = None;
     reduced_opts.warm_start_z_l = None;
     reduced_opts.warm_start_z_u = None;
-    reduced_opts.user_x_scaling = None;
-    reduced_opts.user_g_scaling = None;
+    reduced_opts.user_x_scaling = options
+        .user_x_scaling
+        .as_ref()
+        .and_then(|scaling| reduced.reduced_x_scaling(scaling));
+    reduced_opts.user_g_scaling = options
+        .user_g_scaling
+        .as_ref()
+        .and_then(|scaling| reduced.reduced_g_scaling(scaling));
     if options.max_wall_time > 0.0 {
         let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
         if remaining <= 0.1 {
