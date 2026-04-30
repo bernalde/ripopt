@@ -461,6 +461,7 @@ Key options (all have Ipopt-matching defaults):
 | `constr_viol_tol`               | 1e-4    | Constraint violation tolerance                             |
 | `dual_inf_tol`                  | 1.0     | Dual infeasibility tolerance                               |
 | `enable_preprocessing`          | true    | Eliminate fixed variables and redundant constraints        |
+| `auxiliary_tol`                 | 1e-8    | Accepted residual for auxiliary preprocessing block solves |
 | `detect_linear_constraints`     | true    | Skip Hessian for linear constraints                        |
 | `enable_sqp_fallback`           | true    | SQP fallback for constrained problems                      |
 | `hessian_approximation_lbfgs`   | false   | Use L-BFGS Hessian approximation (no exact Hessian needed) |
@@ -621,6 +622,7 @@ Option-setting functions return `1` on success, `0` if the keyword is unknown. A
 | `constr_viol_tol`            | 1e-4    | Constraint violation tolerance                  |
 | `dual_inf_tol`               | 1.0     | Dual infeasibility tolerance                    |
 | `compl_inf_tol`              | 1e-4    | Complementarity tolerance                       |
+| `auxiliary_tol`              | 1e-8    | Auxiliary preprocessing residual tolerance      |
 | `max_wall_time`              | 0.0     | Wall-clock time limit in seconds (0 = no limit) |
 | `warm_start_bound_push`      | 1e-3    | Warm-start bound push                           |
 | `warm_start_bound_frac`      | 1e-3    | Warm-start bound fraction                       |

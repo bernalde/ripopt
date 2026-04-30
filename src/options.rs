@@ -120,6 +120,9 @@ pub struct SolverOptions {
     /// Enable preprocessing to eliminate fixed variables and redundant constraints.
     /// Default: true.
     pub enable_preprocessing: bool,
+    /// Maximum accepted residual for auxiliary equality-block solves during
+    /// preprocessing. Default: 1e-8.
+    pub auxiliary_tol: f64,
     /// Detect linear constraints and skip their Hessian contribution.
     /// Default: true.
     pub detect_linear_constraints: bool,
@@ -275,6 +278,7 @@ impl Default for SolverOptions {
             enable_lbfgs_fallback: true,
             enable_al_fallback: true,
             enable_preprocessing: true,
+            auxiliary_tol: 1e-8,
             detect_linear_constraints: true,
             enable_sqp_fallback: true,
             hessian_approximation_lbfgs: false,

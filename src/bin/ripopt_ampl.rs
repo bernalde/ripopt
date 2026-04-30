@@ -140,6 +140,7 @@ fn print_help() {
     println!("    constr_viol_tol=<float>              Constraint violation tolerance [1e-4]");
     println!("    dual_inf_tol=<float>                 Dual infeasibility tolerance [1.0]");
     println!("    compl_inf_tol=<float>                Complementarity tolerance [1e-4]");
+    println!("    auxiliary_tol=<float>                Auxiliary preprocessing residual tolerance [1e-8]");
     println!();
     println!("  Barrier Parameter");
     println!("    mu_init=<float>                      Initial barrier parameter [0.1]");
@@ -268,6 +269,11 @@ fn apply_option(opts: &mut SolverOptions, key: &str, value: &str) {
         "compl_inf_tol" => {
             if let Ok(v) = value.parse() {
                 opts.compl_inf_tol = v;
+            }
+        }
+        "auxiliary_tol" => {
+            if let Ok(v) = value.parse() {
+                opts.auxiliary_tol = v;
             }
         }
         "kappa" => {

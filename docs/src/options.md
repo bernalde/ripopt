@@ -117,6 +117,7 @@ let opts = SolverOptions {
 | Option | Default | Description |
 |---|---|---|
 | `enable_preprocessing` | `true` | Eliminate fixed variables and redundant constraints |
+| `auxiliary_tol` | `1e-8` | Accepted residual for auxiliary preprocessing block solves |
 | `detect_linear_constraints` | `true` | Skip Hessian for constraints with zero second derivatives |
 | `proactive_infeasibility_detection` | `false` | Early infeasibility detection during iterations |
 
