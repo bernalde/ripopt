@@ -442,6 +442,87 @@ impl NlpProblem for AuxiliaryBasinGuardProblem {
     }
 }
 
+struct AuxiliaryReducedFallbackProblem;
+
+impl NlpProblem for AuxiliaryReducedFallbackProblem {
+    fn num_variables(&self) -> usize {
+        2
+    }
+
+    fn num_constraints(&self) -> usize {
+        2
+    }
+
+    fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+        x_l[0] = f64::NEG_INFINITY;
+        x_u[0] = f64::INFINITY;
+        x_l[1] = f64::NEG_INFINITY;
+        x_u[1] = f64::INFINITY;
+    }
+
+    fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+        g_l[0] = 0.0;
+        g_u[0] = 0.0;
+        g_l[1] = f64::NEG_INFINITY;
+        g_u[1] = 10.0;
+    }
+
+    fn initial_point(&self, x0: &mut [f64]) {
+        x0[0] = 0.0;
+        x0[1] = 3.0;
+    }
+
+    fn objective(&self, x: &[f64], _new_x: bool, obj: &mut f64) -> bool {
+        if (x[0] - 2.0).abs() > 1e-8 {
+            return false;
+        }
+        *obj = -10.0 + x[0] + (x[1] - 3.0) * (x[1] - 3.0);
+        true
+    }
+
+    fn gradient(&self, x: &[f64], _new_x: bool, grad: &mut [f64]) -> bool {
+        if (x[0] - 2.0).abs() > 1e-8 {
+            return false;
+        }
+        grad[0] = 1.0;
+        grad[1] = 2.0 * (x[1] - 3.0);
+        true
+    }
+
+    fn constraints(&self, x: &[f64], _new_x: bool, g: &mut [f64]) -> bool {
+        g[0] = x[0] - 2.0;
+        g[1] = x[0] + x[1];
+        true
+    }
+
+    fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+        (vec![0, 1, 1], vec![0, 0, 1])
+    }
+
+    fn jacobian_values(&self, _x: &[f64], _new_x: bool, vals: &mut [f64]) -> bool {
+        vals[0] = 1.0;
+        vals[1] = 1.0;
+        vals[2] = 1.0;
+        true
+    }
+
+    fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+        (vec![1], vec![1])
+    }
+
+    fn hessian_values(
+        &self,
+        _x: &[f64],
+        _new_x: bool,
+        obj_factor: f64,
+        _lambda: &[f64],
+        vals: &mut [f64],
+    ) -> bool {
+        vals[0] = 2.0 * obj_factor;
+        true
+    }
+}
+
 #[test]
 fn ipm_preprocessing_integration() {
     let problem = PreprocessingProblem;
@@ -481,6 +562,54 @@ fn auxiliary_preprocessing_does_not_preempt_successful_main_solve() {
         "auxiliary preprocessing should not preempt a successful main solve: {:?}",
         result.diagnostics.fallback_used
     );
+}
+
+#[test]
+fn auxiliary_reduced_fallback_adopts_full_space_solution() {
+    let problem = AuxiliaryReducedFallbackProblem;
+    let options = SolverOptions {
+        print_level: 0,
+        enable_preprocessing: true,
+        enable_al_fallback: false,
+        enable_sqp_fallback: false,
+        user_g_scaling: Some(vec![1.0, 0.5]),
+        ..SolverOptions::default()
+    };
+
+    let result = ripopt::solve(&problem, &options);
+
+    assert_eq!(
+        result.status,
+        SolveStatus::Optimal,
+        "Expected Optimal, got {:?}",
+        result.status
+    );
+    assert_eq!(
+        result.diagnostics.fallback_used.as_deref(),
+        Some("auxiliary_preprocessing")
+    );
+    assert_eq!(result.x.len(), 2);
+    assert!(
+        (result.x[0] - 2.0).abs() < 1e-8,
+        "x0={}, expected 2.0",
+        result.x[0]
+    );
+    assert!(
+        (result.x[1] - 3.0).abs() < 1e-6,
+        "x1={}, expected 3.0",
+        result.x[1]
+    );
+    assert!(
+        (result.objective + 8.0).abs() < 1e-8,
+        "obj={}, expected -8.0",
+        result.objective
+    );
+    assert_eq!(result.constraint_values.len(), 2);
+    assert!(result.constraint_values[0].abs() < 1e-8);
+    assert!((result.constraint_values[1] - 5.0).abs() < 1e-8);
+    assert_eq!(result.constraint_multipliers.len(), 2);
+    assert_eq!(result.bound_multipliers_lower.len(), 2);
+    assert_eq!(result.bound_multipliers_upper.len(), 2);
 }
 
 // ---------------------------------------------------------------------------
