@@ -430,6 +430,20 @@ impl<'a> PreprocessedProblem<'a> {
         self.m_orig - self.constr_map.len()
     }
 
+    pub(crate) fn reduced_x_scaling(&self, scaling: &[f64]) -> Option<Vec<f64>> {
+        if scaling.len() != self.n_orig {
+            return None;
+        }
+        Some(self.var_map.iter().map(|&orig| scaling[orig]).collect())
+    }
+
+    pub(crate) fn reduced_g_scaling(&self, scaling: &[f64]) -> Option<Vec<f64>> {
+        if scaling.len() != self.m_orig {
+            return None;
+        }
+        Some(self.constr_map.iter().map(|&orig| scaling[orig]).collect())
+    }
+
     /// Build a full-size x vector from a reduced x vector.
     fn expand_x(&self, x_reduced: &[f64]) -> Vec<f64> {
         let mut x_full = self.fixed_values.clone();

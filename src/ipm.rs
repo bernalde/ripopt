@@ -1631,36 +1631,117 @@ fn try_slow_optimal_slack_fallback<P: NlpProblem>(
     try_slack_fallback(result, problem, options, solve_start, diagnosis, has_inequalities)
 }
 
+enum AuxiliaryPreprocessAttempt {
+    NoCandidates,
+    Solved(SolveResult),
+    Failed,
+}
+
+struct FullSpaceValidation {
+    objective: f64,
+    constraints: Vec<f64>,
+    primal_inf: f64,
+}
+
+fn validate_full_space_result(
+    problem: &dyn NlpProblem,
+    result: &SolveResult,
+    options: &SolverOptions,
+) -> Option<FullSpaceValidation> {
+    let n = problem.num_variables();
+    let m = problem.num_constraints();
+    if result.x.len() != n
+        || result.bound_multipliers_lower.len() != n
+        || result.bound_multipliers_upper.len() != n
+        || result.constraint_multipliers.len() != m
+        || result.constraint_values.len() != m
+    {
+        return None;
+    }
+
+    let mut objective = 0.0;
+    if !problem.objective(&result.x, true, &mut objective) || !objective.is_finite() {
+        return None;
+    }
+
+    let mut constraints = vec![0.0; m];
+    if m > 0 {
+        if !problem.constraints(&result.x, true, &mut constraints) {
+            return None;
+        }
+        if constraints.iter().any(|value| !value.is_finite()) {
+            return None;
+        }
+    }
+
+    let mut g_l = vec![0.0; m];
+    let mut g_u = vec![0.0; m];
+    problem.constraint_bounds(&mut g_l, &mut g_u);
+    sentinel_bounds_to_infinity(&mut g_l, &mut g_u, options);
+    let primal_inf = convergence::primal_infeasibility_max(&constraints, &g_l, &g_u);
+    if !primal_inf.is_finite() || primal_inf > options.constr_viol_tol {
+        return None;
+    }
+
+    Some(FullSpaceValidation {
+        objective,
+        constraints,
+        primal_inf,
+    })
+}
+
+fn auxiliary_preprocessing_options(
+    options: &SolverOptions,
+    solve_start: Instant,
+) -> Option<SolverOptions> {
+    let mut attempt_opts = options.clone();
+    if options.max_wall_time > 0.0 {
+        let elapsed = solve_start.elapsed().as_secs_f64();
+        let remaining = options.max_wall_time - elapsed;
+        if remaining <= 0.1 {
+            return None;
+        }
+        attempt_opts.max_wall_time = elapsed + 0.5 * remaining;
+    }
+    Some(attempt_opts)
+}
+
 /// Auxiliary preprocessing attempt: solve block-triangular equality
 /// subsystems first, remove the solved auxiliary variables and equality rows,
-/// then run a non-preprocessing recursive solve on the reduced problem. The
-/// caller decides whether the unmapped result improves on the normal solve.
+/// then run the existing preprocessing wrapper on the auxiliary-reduced
+/// problem. The standard preprocessing result is unmapped before the auxiliary
+/// result is expanded back to the original full-space problem.
 fn try_auxiliary_preprocessed_solve<P: NlpProblem>(
     problem: &P,
     options: &SolverOptions,
     solve_start: Instant,
-) -> Option<SolveResult> {
-    if !options.enable_preprocessing {
-        return None;
-    }
-
+) -> AuxiliaryPreprocessAttempt {
     let problem_dyn = problem as &dyn NlpProblem;
     let candidates =
         crate::auxiliary_preprocessing::find_presolve_candidates(problem_dyn, options.auxiliary_tol);
     if candidates.is_empty() {
-        return None;
+        return AuxiliaryPreprocessAttempt::NoCandidates;
     }
 
+    let Some(preprocess_opts) = auxiliary_preprocessing_options(options, solve_start) else {
+        return AuxiliaryPreprocessAttempt::Failed;
+    };
+
     let outcome =
-        match crate::auxiliary_preprocessing::solve_auxiliary_blocks(problem_dyn, &candidates, options, solve_start)
+        match crate::auxiliary_preprocessing::solve_auxiliary_blocks(
+            problem_dyn,
+            &candidates,
+            &preprocess_opts,
+            solve_start,
+        )
         {
             Ok(outcome) if outcome.blocks_solved > 0 => outcome,
-            Ok(_) => return None,
+            Ok(_) => return AuxiliaryPreprocessAttempt::Failed,
             Err(err) => {
                 if options.print_level >= 5 {
                     rip_log!("ripopt: Auxiliary preprocessing skipped after failure: {:?}", err);
                 }
-                return None;
+                return AuxiliaryPreprocessAttempt::Failed;
             }
         };
     let blocks_solved = outcome.blocks_solved;
@@ -1678,12 +1759,12 @@ fn try_auxiliary_preprocessed_solve<P: NlpProblem>(
         match crate::auxiliary_preprocessing::AuxiliaryReducedProblem::new(problem_dyn, &candidates, outcome.x)
         {
             Ok(reduced) if reduced.did_reduce() => reduced,
-            Ok(_) => return None,
+            Ok(_) => return AuxiliaryPreprocessAttempt::Failed,
             Err(err) => {
                 if options.print_level >= 5 {
                     rip_log!("ripopt: Auxiliary preprocessing skipped after reduction failure: {:?}", err);
                 }
-                return None;
+                return AuxiliaryPreprocessAttempt::Failed;
             }
         };
 
@@ -1699,60 +1780,73 @@ fn try_auxiliary_preprocessed_solve<P: NlpProblem>(
         );
     }
 
-    let mut reduced_opts = options.clone();
+    let prep = crate::preprocessing::PreprocessedProblem::new(&reduced as &dyn NlpProblem, options.bound_push);
+    if options.print_level >= 5 && prep.did_reduce() {
+        rip_log!(
+            "ripopt: Auxiliary nested preprocessing reduced problem: {} fixed vars, {} redundant constraints ({}x{} -> {}x{})",
+            prep.num_fixed(), prep.num_redundant(),
+            reduced.num_variables(), reduced.num_constraints(),
+            prep.num_variables(), prep.num_constraints(),
+        );
+    }
+
+    let mut reduced_opts = preprocess_opts.clone();
     reduced_opts.enable_preprocessing = false;
     reduced_opts.warm_start = false;
     reduced_opts.warm_start_y = None;
     reduced_opts.warm_start_z_l = None;
     reduced_opts.warm_start_z_u = None;
-    reduced_opts.user_x_scaling = options
+    let aux_x_scaling = options
         .user_x_scaling
         .as_ref()
         .and_then(|scaling| reduced.reduced_x_scaling(scaling));
-    reduced_opts.user_g_scaling = options
+    reduced_opts.user_x_scaling = aux_x_scaling
+        .as_ref()
+        .and_then(|scaling| prep.reduced_x_scaling(scaling));
+    let aux_g_scaling = options
         .user_g_scaling
         .as_ref()
         .and_then(|scaling| reduced.reduced_g_scaling(scaling));
-    if options.max_wall_time > 0.0 {
-        let remaining = options.max_wall_time - solve_start.elapsed().as_secs_f64();
+    reduced_opts.user_g_scaling = aux_g_scaling
+        .as_ref()
+        .and_then(|scaling| prep.reduced_g_scaling(scaling));
+    if preprocess_opts.max_wall_time > 0.0 {
+        let remaining = preprocess_opts.max_wall_time - solve_start.elapsed().as_secs_f64();
         if remaining <= 0.1 {
-            return None;
+            return AuxiliaryPreprocessAttempt::Failed;
         }
-        reduced_opts.max_wall_time = remaining * 0.5;
+        reduced_opts.max_wall_time = remaining;
     }
 
-    let reduced_result = solve(&reduced, &reduced_opts);
-    let result = reduced.unmap_solution(&reduced_result);
+    let nested_result = solve(&prep, &reduced_opts);
+    let auxiliary_result = prep.unmap_solution(&nested_result);
+    let mut result = reduced.unmap_solution(&auxiliary_result);
     if matches!(result.status, SolveStatus::Optimal) {
-        return Some(result);
-    }
-
-    if options.print_level >= 5 {
+        if let Some(validation) = validate_full_space_result(problem_dyn, &result, options) {
+            result.objective = validation.objective;
+            result.constraint_values = validation.constraints;
+            result.diagnostics.final_primal_inf = validation.primal_inf;
+            return AuxiliaryPreprocessAttempt::Solved(result);
+        }
+        if options.print_level >= 5 {
+            rip_log!(
+                "ripopt: Auxiliary-reduced result validation failed, retrying without auxiliary preprocessing"
+            );
+        }
+    } else if options.print_level >= 5 {
         rip_log!(
             "ripopt: Auxiliary-reduced solve failed ({:?}), retrying without auxiliary preprocessing",
             result.status,
         );
     }
-    None
+    AuxiliaryPreprocessAttempt::Failed
 }
 
-/// Run preprocessing (fixed-variable and redundant-constraint elimination)
-/// and, if it reduces the problem, recursively `solve` the smaller problem
-/// then unmap the solution. Returns `Some(result)` only when the
-/// preprocessed solve reaches `Optimal`; otherwise returns `None` so the
-/// caller falls through to the unpreprocessed path.
-///
-/// The preprocessed solve is capped at 50% of the remaining wall-time budget
-/// so the unpreprocessed retry has time left when preprocessing leads the
-/// solver into a bad basin (e.g. ganges.gms).
-fn try_preprocessed_solve<P: NlpProblem>(
+fn try_standard_preprocessed_solve<P: NlpProblem>(
     problem: &P,
     options: &SolverOptions,
     solve_start: Instant,
 ) -> Option<SolveResult> {
-    if !options.enable_preprocessing {
-        return None;
-    }
     let prep = crate::preprocessing::PreprocessedProblem::new(problem as &dyn NlpProblem, options.bound_push);
     if !prep.did_reduce() {
         return None;
@@ -1784,6 +1878,34 @@ fn try_preprocessed_solve<P: NlpProblem>(
         );
     }
     None
+}
+
+/// Run preprocessing (auxiliary equality-block reduction first, otherwise
+/// fixed-variable and redundant-constraint elimination)
+/// and, if it reduces the problem, recursively `solve` the smaller problem
+/// then unmap the solution. Returns `Some(result)` only when the
+/// preprocessed solve reaches `Optimal`; otherwise returns `None` so the
+/// caller falls through to the unpreprocessed path.
+///
+/// The preprocessed solve is capped at 50% of the remaining wall-time budget
+/// so the unpreprocessed retry has time left when preprocessing leads the
+/// solver into a bad basin (e.g. ganges.gms).
+fn try_preprocessed_solve<P: NlpProblem>(
+    problem: &P,
+    options: &SolverOptions,
+    solve_start: Instant,
+) -> Option<SolveResult> {
+    if !options.enable_preprocessing {
+        return None;
+    }
+
+    match try_auxiliary_preprocessed_solve(problem, options, solve_start) {
+        AuxiliaryPreprocessAttempt::Solved(result) => Some(result),
+        AuxiliaryPreprocessAttempt::Failed => None,
+        AuxiliaryPreprocessAttempt::NoCandidates => {
+            try_standard_preprocessed_solve(problem, options, solve_start)
+        }
+    }
 }
 
 /// Compute the accepted step length and resulting θ for one Gauss–Newton
@@ -2253,18 +2375,6 @@ fn solve_inner<P: NlpProblem>(
     }
 
     try_conservative_ipm_retry(&mut result, problem, options, solve_start);
-
-    if !matches!(result.status, SolveStatus::Optimal) {
-        if let Some(candidate) = try_auxiliary_preprocessed_solve(problem, options, solve_start) {
-            adopt_candidate_if_better(
-                &mut result,
-                candidate,
-                options,
-                "Auxiliary preprocessing fallback",
-                "auxiliary_preprocessing",
-            );
-        }
-    }
 
     if !matches!(result.status, SolveStatus::Optimal) {
         if let Some(slack_result) = dispatch_failure_recovery(
@@ -10488,6 +10598,8 @@ fn make_result(state: &SolverState, status: SolveStatus) -> SolveResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::CStr;
+    use std::os::raw::{c_char, c_void};
 
     // Build a minimal SolverState for testing private mu/complementarity helpers.
     // The caller supplies only fields the test exercises; everything else is zeroed.
@@ -10528,6 +10640,331 @@ mod tests {
             diagnostics: SolverDiagnostics::default(),
             x_last_eval: vec![f64::NAN; n],
         }
+    }
+
+    struct UnusedProblem;
+
+    impl NlpProblem for UnusedProblem {
+        fn num_variables(&self) -> usize { panic!("preprocessing-disabled path should not inspect the problem") }
+        fn num_constraints(&self) -> usize { panic!("preprocessing-disabled path should not inspect the problem") }
+        fn bounds(&self, _x_l: &mut [f64], _x_u: &mut [f64]) {
+            panic!("preprocessing-disabled path should not inspect the problem")
+        }
+        fn constraint_bounds(&self, _g_l: &mut [f64], _g_u: &mut [f64]) {
+            panic!("preprocessing-disabled path should not inspect the problem")
+        }
+        fn initial_point(&self, _x0: &mut [f64]) {
+            panic!("preprocessing-disabled path should not inspect the problem")
+        }
+        fn objective(&self, _x: &[f64], _new_x: bool, _obj: &mut f64) -> bool {
+            panic!("preprocessing-disabled path should not inspect the problem")
+        }
+        fn gradient(&self, _x: &[f64], _new_x: bool, _grad: &mut [f64]) -> bool {
+            panic!("preprocessing-disabled path should not inspect the problem")
+        }
+        fn constraints(&self, _x: &[f64], _new_x: bool, _g: &mut [f64]) -> bool {
+            panic!("preprocessing-disabled path should not inspect the problem")
+        }
+        fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+            panic!("preprocessing-disabled path should not inspect the problem")
+        }
+        fn jacobian_values(&self, _x: &[f64], _new_x: bool, _vals: &mut [f64]) -> bool {
+            panic!("preprocessing-disabled path should not inspect the problem")
+        }
+        fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+            panic!("preprocessing-disabled path should not inspect the problem")
+        }
+        fn hessian_values(
+            &self,
+            _x: &[f64],
+            _new_x: bool,
+            _obj_factor: f64,
+            _lambda: &[f64],
+            _vals: &mut [f64],
+        ) -> bool {
+            panic!("preprocessing-disabled path should not inspect the problem")
+        }
+    }
+
+    struct ValidationProblem;
+
+    impl NlpProblem for ValidationProblem {
+        fn num_variables(&self) -> usize { 1 }
+        fn num_constraints(&self) -> usize { 1 }
+
+        fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+            x_l[0] = f64::NEG_INFINITY;
+            x_u[0] = f64::INFINITY;
+        }
+
+        fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+            g_l[0] = 1.0;
+            g_u[0] = 1.0;
+        }
+
+        fn initial_point(&self, x0: &mut [f64]) {
+            x0[0] = 0.0;
+        }
+
+        fn objective(&self, x: &[f64], _new_x: bool, obj: &mut f64) -> bool {
+            *obj = x[0] * x[0];
+            true
+        }
+
+        fn gradient(&self, x: &[f64], _new_x: bool, grad: &mut [f64]) -> bool {
+            grad[0] = 2.0 * x[0];
+            true
+        }
+
+        fn constraints(&self, x: &[f64], _new_x: bool, g: &mut [f64]) -> bool {
+            g[0] = x[0];
+            true
+        }
+
+        fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+            (vec![0], vec![0])
+        }
+
+        fn jacobian_values(&self, _x: &[f64], _new_x: bool, vals: &mut [f64]) -> bool {
+            vals[0] = 1.0;
+            true
+        }
+
+        fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+            (vec![0], vec![0])
+        }
+
+        fn hessian_values(
+            &self,
+            _x: &[f64],
+            _new_x: bool,
+            obj_factor: f64,
+            _lambda: &[f64],
+            vals: &mut [f64],
+        ) -> bool {
+            vals[0] = 2.0 * obj_factor;
+            true
+        }
+    }
+
+    fn validation_result(x: f64) -> SolveResult {
+        SolveResult {
+            x: vec![x],
+            objective: f64::NAN,
+            constraint_multipliers: vec![0.0],
+            bound_multipliers_lower: vec![0.0],
+            bound_multipliers_upper: vec![0.0],
+            constraint_values: vec![f64::NAN],
+            status: SolveStatus::Optimal,
+            iterations: 0,
+            diagnostics: SolverDiagnostics::default(),
+        }
+    }
+
+    struct AuxNestedPreprocessProblem;
+
+    impl NlpProblem for AuxNestedPreprocessProblem {
+        fn num_variables(&self) -> usize { 3 }
+        fn num_constraints(&self) -> usize { 1 }
+
+        fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+            x_l[0] = f64::NEG_INFINITY;
+            x_u[0] = f64::INFINITY;
+            x_l[1] = f64::NEG_INFINITY;
+            x_u[1] = f64::INFINITY;
+            x_l[2] = 4.0;
+            x_u[2] = 4.0;
+        }
+
+        fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+            g_l[0] = 0.0;
+            g_u[0] = 0.0;
+        }
+
+        fn initial_point(&self, x0: &mut [f64]) {
+            x0[0] = 0.0;
+            x0[1] = 0.0;
+            x0[2] = 4.0;
+        }
+
+        fn objective(&self, x: &[f64], _new_x: bool, obj: &mut f64) -> bool {
+            *obj = (x[1] - 3.0) * (x[1] - 3.0) + (x[2] - 4.0) * (x[2] - 4.0);
+            true
+        }
+
+        fn gradient(&self, x: &[f64], _new_x: bool, grad: &mut [f64]) -> bool {
+            grad[0] = 0.0;
+            grad[1] = 2.0 * (x[1] - 3.0);
+            grad[2] = 2.0 * (x[2] - 4.0);
+            true
+        }
+
+        fn constraints(&self, x: &[f64], _new_x: bool, g: &mut [f64]) -> bool {
+            g[0] = x[0] - 2.0;
+            true
+        }
+
+        fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+            (vec![0], vec![0])
+        }
+
+        fn jacobian_values(&self, _x: &[f64], _new_x: bool, vals: &mut [f64]) -> bool {
+            vals[0] = 1.0;
+            true
+        }
+
+        fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+            (vec![1, 2], vec![1, 2])
+        }
+
+        fn hessian_values(
+            &self,
+            _x: &[f64],
+            _new_x: bool,
+            obj_factor: f64,
+            _lambda: &[f64],
+            vals: &mut [f64],
+        ) -> bool {
+            vals[0] = 2.0 * obj_factor;
+            vals[1] = 2.0 * obj_factor;
+            true
+        }
+    }
+
+    unsafe extern "C" fn capture_log(msg: *const c_char, user_data: *mut c_void) {
+        let logs = &mut *(user_data as *mut Vec<String>);
+        logs.push(CStr::from_ptr(msg).to_string_lossy().into_owned());
+    }
+
+    fn collect_auxiliary_preprocessing_logs(print_level: u8) -> Vec<String> {
+        let problem = AuxNestedPreprocessProblem;
+        let options = SolverOptions {
+            print_level,
+            enable_preprocessing: true,
+            max_iter: 100,
+            ..SolverOptions::default()
+        };
+        let mut logs = Vec::new();
+        crate::logging::set_log_callback(Some((
+            capture_log,
+            &mut logs as *mut Vec<String> as *mut c_void,
+        )));
+        let _ = try_preprocessed_solve(&problem, &options, Instant::now());
+        crate::logging::set_log_callback(None);
+        logs
+    }
+
+    #[test]
+    fn preprocessing_disabled_bypasses_auxiliary_path() {
+        let problem = UnusedProblem;
+        let options = SolverOptions {
+            enable_preprocessing: false,
+            ..SolverOptions::default()
+        };
+
+        let result = try_preprocessed_solve(&problem, &options, Instant::now());
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn full_space_validation_rejects_recomputed_constraint_violation() {
+        let problem = ValidationProblem;
+        let options = SolverOptions {
+            constr_viol_tol: 1e-4,
+            ..SolverOptions::default()
+        };
+        let result = validation_result(1.01);
+
+        let validation = validate_full_space_result(&problem, &result, &options);
+
+        assert!(validation.is_none());
+    }
+
+    #[test]
+    fn full_space_validation_reports_recomputed_values() {
+        let problem = ValidationProblem;
+        let options = SolverOptions {
+            constr_viol_tol: 1e-4,
+            ..SolverOptions::default()
+        };
+        let result = validation_result(1.00005);
+
+        let validation = validate_full_space_result(&problem, &result, &options)
+            .expect("recomputed full-space point should satisfy constraint tolerance");
+
+        assert!((validation.objective - 1.0001000025).abs() < 1e-12);
+        assert_eq!(validation.constraints.len(), 1);
+        assert!((validation.constraints[0] - 1.00005).abs() < 1e-12);
+        assert!((validation.primal_inf - 5e-5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn auxiliary_preprocessing_attempt_uses_half_remaining_wall_time() {
+        let options = SolverOptions {
+            max_wall_time: 2.0,
+            ..SolverOptions::default()
+        };
+        let solve_start = Instant::now() - Duration::from_millis(400);
+
+        let attempt_opts = auxiliary_preprocessing_options(&options, solve_start)
+            .expect("remaining time should allow preprocessing attempt");
+        let elapsed = solve_start.elapsed().as_secs_f64();
+        let original_remaining = options.max_wall_time - elapsed;
+        let attempt_remaining = attempt_opts.max_wall_time - elapsed;
+
+        assert!((attempt_remaining - 0.5 * original_remaining).abs() < 0.02);
+    }
+
+    #[test]
+    fn auxiliary_preprocessing_attempt_stops_when_slice_cannot_leave_fallback_time() {
+        let options = SolverOptions {
+            max_wall_time: 0.05,
+            ..SolverOptions::default()
+        };
+
+        let attempt_opts = auxiliary_preprocessing_options(&options, Instant::now());
+
+        assert!(attempt_opts.is_none());
+    }
+
+    #[test]
+    fn auxiliary_preprocessing_wraps_standard_preprocessor_and_unmaps() {
+        let problem = AuxNestedPreprocessProblem;
+        let options = SolverOptions {
+            print_level: 0,
+            enable_preprocessing: true,
+            max_iter: 100,
+            ..SolverOptions::default()
+        };
+
+        let result = try_preprocessed_solve(&problem, &options, Instant::now())
+            .expect("auxiliary preprocessing should solve");
+
+        assert_eq!(result.status, SolveStatus::Optimal);
+        assert!((result.x[0] - 2.0).abs() < 1e-8, "x0={}", result.x[0]);
+        assert!((result.x[1] - 3.0).abs() < 1e-6, "x1={}", result.x[1]);
+        assert!((result.x[2] - 4.0).abs() < 1e-12, "x2={}", result.x[2]);
+        assert_eq!(result.constraint_values.len(), 1);
+        assert!(result.constraint_values[0].abs() < 1e-8);
+        assert!(result.diagnostics.final_primal_inf < 1e-8);
+    }
+
+    #[test]
+    fn auxiliary_preprocessing_logs_are_verbose_only() {
+        let quiet = collect_auxiliary_preprocessing_logs(4);
+        assert!(
+            !quiet.iter().any(|line| line.contains("Auxiliary preprocessing")),
+            "auxiliary preprocessing logs should be gated at print_level >= 5: {:?}",
+            quiet
+        );
+
+        let verbose = collect_auxiliary_preprocessing_logs(5);
+        assert!(
+            verbose.iter().any(|line| line.contains("Auxiliary preprocessing")),
+            "expected auxiliary preprocessing logs at print_level 5: {:?}",
+            verbose
+        );
     }
 
     #[test]

@@ -660,5 +660,5 @@ The key knobs for steering, grouped by what they control:
 | `mehrotra_pc` | false | Mehrotra predictor-corrector (fewer iterations) |
 | `gondzio_mcc_max` | 0 | Gondzio centrality corrections (better centering) |
 | `warm_start` | false | Reuse previous solution as starting point |
-| `enable_preprocessing` | true | Eliminate fixed vars and redundant constraints |
+| `enable_preprocessing` | true | Auxiliary equality blocks, fixed vars, and redundant constraints |
 | `detect_linear_constraints` | true | Skip Hessian for linear constraints |

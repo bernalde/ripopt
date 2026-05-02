@@ -1,4 +1,5 @@
 use ripopt::{NlpProblem, SolveStatus, SolverOptions};
+use std::cell::Cell;
 
 // ---------------------------------------------------------------------------
 // 1. NE-to-LS detection: f=0, grad=0, 3 equalities in 2 vars
@@ -523,6 +524,84 @@ impl NlpProblem for AuxiliaryReducedFallbackProblem {
     }
 }
 
+struct AuxiliaryFailureFallbackProblem {
+    fail_next_constraint: Cell<bool>,
+    failed_once: Cell<bool>,
+}
+
+impl NlpProblem for AuxiliaryFailureFallbackProblem {
+    fn num_variables(&self) -> usize {
+        2
+    }
+
+    fn num_constraints(&self) -> usize {
+        1
+    }
+
+    fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
+        x_l[0] = f64::NEG_INFINITY;
+        x_u[0] = f64::INFINITY;
+        x_l[1] = f64::NEG_INFINITY;
+        x_u[1] = f64::INFINITY;
+    }
+
+    fn constraint_bounds(&self, g_l: &mut [f64], g_u: &mut [f64]) {
+        g_l[0] = 0.0;
+        g_u[0] = 0.0;
+    }
+
+    fn initial_point(&self, x0: &mut [f64]) {
+        x0[0] = 0.0;
+        x0[1] = 0.0;
+    }
+
+    fn objective(&self, x: &[f64], _new_x: bool, obj: &mut f64) -> bool {
+        *obj = (x[0] - 2.0) * (x[0] - 2.0) + (x[1] - 3.0) * (x[1] - 3.0);
+        true
+    }
+
+    fn gradient(&self, x: &[f64], _new_x: bool, grad: &mut [f64]) -> bool {
+        grad[0] = 2.0 * (x[0] - 2.0);
+        grad[1] = 2.0 * (x[1] - 3.0);
+        true
+    }
+
+    fn constraints(&self, x: &[f64], _new_x: bool, g: &mut [f64]) -> bool {
+        if self.fail_next_constraint.replace(false) {
+            self.failed_once.set(true);
+            return false;
+        }
+        g[0] = x[0] - 2.0;
+        true
+    }
+
+    fn jacobian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+        (vec![0], vec![0])
+    }
+
+    fn jacobian_values(&self, _x: &[f64], _new_x: bool, vals: &mut [f64]) -> bool {
+        vals[0] = 1.0;
+        true
+    }
+
+    fn hessian_structure(&self) -> (Vec<usize>, Vec<usize>) {
+        (vec![0, 1], vec![0, 1])
+    }
+
+    fn hessian_values(
+        &self,
+        _x: &[f64],
+        _new_x: bool,
+        obj_factor: f64,
+        _lambda: &[f64],
+        vals: &mut [f64],
+    ) -> bool {
+        vals[0] = 2.0 * obj_factor;
+        vals[1] = 2.0 * obj_factor;
+        true
+    }
+}
+
 #[test]
 fn ipm_preprocessing_integration() {
     let problem = PreprocessingProblem;
@@ -540,7 +619,7 @@ fn ipm_preprocessing_integration() {
 }
 
 #[test]
-fn auxiliary_preprocessing_does_not_preempt_successful_main_solve() {
+fn auxiliary_preprocessing_integrates_without_fallback_tag() {
     let problem = AuxiliaryBasinGuardProblem;
     let options = SolverOptions {
         print_level: 0,
@@ -559,13 +638,13 @@ fn auxiliary_preprocessing_does_not_preempt_successful_main_solve() {
     assert!(result.x[1].abs() < 1e-4, "x1={}, expected 0.0", result.x[1]);
     assert!(
         result.diagnostics.fallback_used.as_deref() != Some("auxiliary_preprocessing"),
-        "auxiliary preprocessing should not preempt a successful main solve: {:?}",
+        "auxiliary preprocessing is part of preprocessing retry, not a failure fallback: {:?}",
         result.diagnostics.fallback_used
     );
 }
 
 #[test]
-fn auxiliary_reduced_fallback_adopts_full_space_solution() {
+fn auxiliary_reduced_preprocessing_adopts_full_space_solution() {
     let problem = AuxiliaryReducedFallbackProblem;
     let options = SolverOptions {
         print_level: 0,
@@ -586,7 +665,8 @@ fn auxiliary_reduced_fallback_adopts_full_space_solution() {
     );
     assert_eq!(
         result.diagnostics.fallback_used.as_deref(),
-        Some("auxiliary_preprocessing")
+        None,
+        "auxiliary preprocessing should not be tagged as a post-failure fallback"
     );
     assert_eq!(result.x.len(), 2);
     assert!(
@@ -610,6 +690,50 @@ fn auxiliary_reduced_fallback_adopts_full_space_solution() {
     assert_eq!(result.constraint_multipliers.len(), 2);
     assert_eq!(result.bound_multipliers_lower.len(), 2);
     assert_eq!(result.bound_multipliers_upper.len(), 2);
+}
+
+#[test]
+fn auxiliary_failure_falls_back_to_original_nlp() {
+    let problem = AuxiliaryFailureFallbackProblem {
+        fail_next_constraint: Cell::new(true),
+        failed_once: Cell::new(false),
+    };
+    let options = SolverOptions {
+        print_level: 0,
+        enable_preprocessing: true,
+        enable_al_fallback: false,
+        enable_sqp_fallback: false,
+        max_iter: 200,
+        tol: 1e-8,
+        ..SolverOptions::default()
+    };
+
+    let result = ripopt::solve(&problem, &options);
+
+    assert!(
+        problem.failed_once.get(),
+        "auxiliary preprocessing should have attempted the candidate solve"
+    );
+    assert_eq!(
+        result.status,
+        SolveStatus::Optimal,
+        "original NLP should solve after auxiliary failure, got {:?}",
+        result.status
+    );
+    assert!(
+        (result.x[0] - 2.0).abs() < 1e-6,
+        "x0={}, expected 2.0",
+        result.x[0]
+    );
+    assert!(
+        (result.x[1] - 3.0).abs() < 1e-5,
+        "x1={}, expected 3.0",
+        result.x[1]
+    );
+    assert_ne!(
+        result.diagnostics.fallback_used.as_deref(),
+        Some("auxiliary_preprocessing")
+    );
 }
 
 // ---------------------------------------------------------------------------
