@@ -688,6 +688,11 @@ fn auxiliary_reduced_preprocessing_adopts_full_space_solution() {
     assert!(result.constraint_values[0].abs() < 1e-8);
     assert!((result.constraint_values[1] - 5.0).abs() < 1e-8);
     assert_eq!(result.constraint_multipliers.len(), 2);
+    assert!(
+        (result.constraint_multipliers[0] + 1.0).abs() < 1e-6,
+        "removed auxiliary row multiplier={}, expected -1",
+        result.constraint_multipliers[0]
+    );
     assert_eq!(result.bound_multipliers_lower.len(), 2);
     assert_eq!(result.bound_multipliers_upper.len(), 2);
 }

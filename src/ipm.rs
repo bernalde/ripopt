@@ -1820,7 +1820,7 @@ fn try_auxiliary_preprocessed_solve<P: NlpProblem>(
 
     let nested_result = solve(&prep, &reduced_opts);
     let auxiliary_result = prep.unmap_solution(&nested_result);
-    let mut result = reduced.unmap_solution(&auxiliary_result);
+    let mut result = reduced.unmap_solution_with_options(&auxiliary_result, options);
     if matches!(result.status, SolveStatus::Optimal) {
         if let Some(validation) = validate_full_space_result(problem_dyn, &result, options) {
             result.objective = validation.objective;
