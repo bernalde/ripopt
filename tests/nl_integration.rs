@@ -406,6 +406,108 @@ x2
     );
 }
 
+#[test]
+fn nl_auxiliary_preprocessing_gate_fixture_matches_fallback() {
+    let solve_fixture = |enable_preprocessing: bool| {
+        let nl = include_str!("fixtures/issue_10/auxiliary_gate.nl");
+        let data = parse_nl_file(nl).expect("parse issue-10 fixture");
+        let problem = NlProblem::from_nl_data(data).expect("build issue-10 fixture");
+        let options = SolverOptions {
+            print_level: 0,
+            enable_preprocessing,
+            enable_al_fallback: false,
+            enable_sqp_fallback: false,
+            early_stall_timeout: 0.0,
+            tol: 1e-8,
+            ..SolverOptions::default()
+        };
+        let result = ripopt::solve(&problem, &options);
+        (problem, result)
+    };
+
+    let (pre_problem, preprocessed) = solve_fixture(true);
+    let (fallback_problem, fallback) = solve_fixture(false);
+
+    assert_eq!(
+        preprocessed.status,
+        SolveStatus::Optimal,
+        "preprocessed fixture solve should be Optimal, got {:?}",
+        preprocessed.status
+    );
+    assert_eq!(
+        fallback.status,
+        SolveStatus::Optimal,
+        "fallback fixture solve should be Optimal, got {:?}",
+        fallback.status
+    );
+
+    let pre_violation = max_constraint_violation(&pre_problem, &preprocessed.x);
+    let fallback_violation = max_constraint_violation(&fallback_problem, &fallback.x);
+    assert!(
+        pre_violation <= fallback_violation.max(1e-8) * 10.0 + 1e-8,
+        "preprocessed violation {pre_violation} should not be worse than fallback {fallback_violation}"
+    );
+
+    let scale = preprocessed
+        .objective
+        .abs()
+        .max(fallback.objective.abs())
+        .max(1.0);
+    assert!(
+        preprocessed.objective <= fallback.objective + 1e-6 * scale,
+        "preprocessed objective {} should not be worse than fallback {}",
+        preprocessed.objective,
+        fallback.objective
+    );
+    assert!(
+        preprocessed.iterations <= fallback.iterations + 5,
+        "preprocessed iterations {} should stay near fallback {}",
+        preprocessed.iterations,
+        fallback.iterations
+    );
+}
+
+fn max_constraint_violation<P: NlpProblem>(problem: &P, x: &[f64]) -> f64 {
+    let m = problem.num_constraints();
+    if m == 0 {
+        return 0.0;
+    }
+
+    let mut g = vec![0.0; m];
+    if !problem.constraints(x, true, &mut g) {
+        return f64::INFINITY;
+    }
+    let mut g_l = vec![0.0; m];
+    let mut g_u = vec![0.0; m];
+    problem.constraint_bounds(&mut g_l, &mut g_u);
+
+    let mut violation: f64 = 0.0;
+    for i in 0..m {
+        let row = if !g[i].is_finite() {
+            f64::INFINITY
+        } else if g_l[i].is_finite()
+            && g_u[i].is_finite()
+            && (g_u[i] - g_l[i]).abs() <= 1e-12
+        {
+            (g[i] - 0.5 * (g_l[i] + g_u[i])).abs()
+        } else {
+            let lower = if g_l[i].is_finite() {
+                (g_l[i] - g[i]).max(0.0)
+            } else {
+                0.0
+            };
+            let upper = if g_u[i].is_finite() {
+                (g[i] - g_u[i]).max(0.0)
+            } else {
+                0.0
+            };
+            lower.max(upper)
+        };
+        violation = violation.max(row);
+    }
+    violation
+}
+
 // ---------------------------------------------------------------------------
 // 8. SOL writer format check
 // ---------------------------------------------------------------------------

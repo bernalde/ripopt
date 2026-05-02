@@ -460,8 +460,8 @@ Key options (all have Ipopt-matching defaults):
 | `warm_start`                    | false   | Enable warm-start initialization                           |
 | `constr_viol_tol`               | 1e-4    | Constraint violation tolerance                             |
 | `dual_inf_tol`                  | 1.0     | Dual infeasibility tolerance                               |
-| `enable_preprocessing`          | true    | Auxiliary equality blocks, fixed variables, redundancies   |
-| `auxiliary_tol`                 | 1e-8    | Accepted residual for auxiliary preprocessing block solves |
+| `enable_preprocessing`          | true    | Internal auxiliary equality solves, fixed variables, redundancies |
+| `auxiliary_tol`                 | 1e-8    | Accepted residual for internal auxiliary equality solves   |
 | `detect_linear_constraints`     | true    | Skip Hessian for linear constraints                        |
 | `enable_sqp_fallback`           | true    | SQP fallback for constrained problems                      |
 | `hessian_approximation_lbfgs`   | false   | Use L-BFGS Hessian approximation (no exact Hessian needed) |
@@ -897,7 +897,7 @@ examples/
 
 Before solving, ripopt automatically analyzes the problem to reduce its size:
 
-1. **Auxiliary equality-block preprocessing**: Triangular equality subsystems are solved first, then removed from the reduced problem
+1. **Auxiliary equality-system preprocessing**: Internal auxiliary equalities and variables may be solved and removed from the reduced problem
 2. **Fixed variable elimination**: Variables with `x_l == x_u` are removed and set to their fixed values in all evaluations
 3. **Redundant constraint removal**: Duplicate constraints (same Jacobian structure, values, and bounds) are eliminated
 4. **Bound tightening**: Single-variable linear constraints are used to tighten variable bounds
