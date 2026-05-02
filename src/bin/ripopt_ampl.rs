@@ -199,7 +199,7 @@ fn print_help() {
     println!("    enable_lbfgs_hessian_fallback=<bool> Retry with L-BFGS Hessian [yes]");
     println!();
     println!("  Preprocessing & Diagnostics");
-    println!("    enable_preprocessing=<bool>          Eliminate fixed vars & redundant constraints [yes]");
+    println!("    enable_preprocessing=<bool>          Auxiliary blocks, fixed vars, redundancies [yes]");
     println!("    proactive_infeasibility_detection=<bool> Early infeasibility detection [no]");
     println!("    print_level=<int>                    Verbosity: 0=silent, 5=verbose [5]");
     println!("    early_stall_timeout=<float>          Max seconds for first 3 iters (0=off) [120.0]");

@@ -117,7 +117,8 @@ pub struct SolverOptions {
     /// Enable Augmented Lagrangian fallback for equality-only problems. When IPM
     /// fails, retry with AL method using L-BFGS inner solver. Default: true.
     pub enable_al_fallback: bool,
-    /// Enable preprocessing to eliminate fixed variables and redundant constraints.
+    /// Enable preprocessing to solve auxiliary equality blocks, eliminate fixed
+    /// variables, and remove redundant constraints.
     /// Default: true.
     pub enable_preprocessing: bool,
     /// Maximum accepted residual for auxiliary equality-block solves during

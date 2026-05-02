@@ -45,7 +45,7 @@ It implements a primal-dual interior point method with a barrier formulation, si
 - NLP scaling (gradient-based objective and constraint scaling)
 - Local infeasibility detection for inconsistent constraint systems
 - **Early stall detection**: bail out fast when stuck in early iterations to trigger fallbacks
-- **Preprocessing**: Automatic elimination of fixed variables, redundant constraints, and bound tightening from single-variable linear constraints
+- **Preprocessing**: Automatic auxiliary equality-block reduction, fixed-variable elimination, redundant-constraint removal, and bound tightening from single-variable linear constraints
 - **Near-linear constraint detection**: Automatically identifies linear constraints and skips their Hessian contribution
 - **Limited-memory Hessian approximation**: L-BFGS-in-IPM mode (`hessian_approximation_lbfgs`) replaces exact Hessian with L-BFGS curvature pairs, eliminating the need for second-derivative callbacks
 - **Multi-solver fallback architecture**: L-BFGS, Augmented Lagrangian, SQP, and explicit slack reformulation
@@ -460,7 +460,7 @@ Key options (all have Ipopt-matching defaults):
 | `warm_start`                    | false   | Enable warm-start initialization                           |
 | `constr_viol_tol`               | 1e-4    | Constraint violation tolerance                             |
 | `dual_inf_tol`                  | 1.0     | Dual infeasibility tolerance                               |
-| `enable_preprocessing`          | true    | Eliminate fixed variables and redundant constraints        |
+| `enable_preprocessing`          | true    | Auxiliary equality blocks, fixed variables, redundancies   |
 | `auxiliary_tol`                 | 1e-8    | Accepted residual for auxiliary preprocessing block solves |
 | `detect_linear_constraints`     | true    | Skip Hessian for linear constraints                        |
 | `enable_sqp_fallback`           | true    | SQP fallback for constrained problems                      |
@@ -654,7 +654,7 @@ Option-setting functions return `1` on success, `0` if the keyword is unknown. A
 | `enable_slack_fallback`         | `"yes"`      | `"yes"`, `"no"`               | Slack reformulation fallback                      |
 | `enable_lbfgs_fallback`         | `"yes"`      | `"yes"`, `"no"`               | L-BFGS fallback for unconstrained                 |
 | `enable_al_fallback`            | `"yes"`      | `"yes"`, `"no"`               | Augmented Lagrangian fallback                     |
-| `enable_preprocessing`          | `"yes"`      | `"yes"`, `"no"`               | Preprocessing (fixed vars, redundant constraints) |
+| `enable_preprocessing`          | `"yes"`      | `"yes"`, `"no"`               | Preprocessing (auxiliary blocks, fixed vars, redundancies) |
 | `detect_linear_constraints`     | `"yes"`      | `"yes"`, `"no"`               | Skip Hessian for linear constraints               |
 | `enable_sqp_fallback`           | `"yes"`      | `"yes"`, `"no"`               | SQP fallback for constrained problems             |
 | `hessian_approximation`         | `"exact"`    | `"exact"`, `"limited-memory"` | Use L-BFGS Hessian approximation                  |
@@ -897,9 +897,10 @@ examples/
 
 Before solving, ripopt automatically analyzes the problem to reduce its size:
 
-1. **Fixed variable elimination**: Variables with `x_l == x_u` are removed and set to their fixed values in all evaluations
-2. **Redundant constraint removal**: Duplicate constraints (same Jacobian structure, values, and bounds) are eliminated
-3. **Bound tightening**: Single-variable linear constraints are used to tighten variable bounds
+1. **Auxiliary equality-block preprocessing**: Triangular equality subsystems are solved first, then removed from the reduced problem
+2. **Fixed variable elimination**: Variables with `x_l == x_u` are removed and set to their fixed values in all evaluations
+3. **Redundant constraint removal**: Duplicate constraints (same Jacobian structure, values, and bounds) are eliminated
+4. **Bound tightening**: Single-variable linear constraints are used to tighten variable bounds
 
 The reduced problem is solved and the solution is mapped back to the original dimensions. Disable with `enable_preprocessing: false`.
 
