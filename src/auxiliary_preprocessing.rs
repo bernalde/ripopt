@@ -594,9 +594,7 @@ impl<'a> AuxiliaryReducedProblem<'a> {
         let mut system = vec![0.0; dim * dim];
         let mut rhs: Vec<f64> = removed_vars
             .iter()
-            .map(|&var| {
-                -(grad[var] - bound_multipliers_lower[var] + bound_multipliers_upper[var])
-            })
+            .map(|&var| -(grad[var] - bound_multipliers_lower[var] + bound_multipliers_upper[var]))
             .collect();
 
         for (idx, (&row, &col)) in jac_rows.iter().zip(jac_cols.iter()).enumerate() {
@@ -669,20 +667,23 @@ fn solve_dense_square_system(
     if matrix.len() != dim * dim || rhs.len() != dim {
         return Err("dense system dimensions are inconsistent");
     }
-    let max_abs = matrix
-        .iter()
-        .chain(rhs.iter())
-        .fold(0.0_f64, |acc, &value| acc.max(value.abs()));
-    if max_abs == 0.0 || !max_abs.is_finite() {
-        return Err("dense system is zero or non-finite");
+    if matrix.iter().any(|value| !value.is_finite()) {
+        return Err("dense system matrix contains a non-finite value");
     }
-    if matrix.iter().chain(rhs.iter()).any(|value| !value.is_finite()) {
-        return Err("dense system contains a non-finite value");
+    if rhs.iter().any(|value| !value.is_finite()) {
+        return Err("dense system RHS contains a non-finite value");
+    }
+
+    let matrix_norm = matrix
+        .iter()
+        .fold(0.0_f64, |acc, &value| acc.max(value.abs()));
+    if matrix_norm == 0.0 {
+        return Err("dense system matrix is zero");
     }
 
     let original_matrix = matrix.clone();
     let original_rhs = rhs.clone();
-    let pivot_tol = (dim as f64) * max_abs * 1e-10;
+    let pivot_tol = (dim as f64) * matrix_norm * 1e-10;
 
     for col in 0..dim {
         let pivot_row = (col..dim)
@@ -905,11 +906,7 @@ fn auxiliary_block_jacobian_rank(
         return Ok(0);
     }
 
-    let x_block: Vec<_> = block_problem
-        .vars
-        .iter()
-        .map(|&var| fixed_x[var])
-        .collect();
+    let x_block: Vec<_> = block_problem.vars.iter().map(|&var| fixed_x[var]).collect();
     let mut jac_vals = vec![0.0; block_problem.jac_rows.len()];
     if !block_problem.jacobian_values(&x_block, true, &mut jac_vals) {
         return Err(AuxiliarySolveError::EvaluationFailed {
@@ -2312,6 +2309,7 @@ mod tests {
 
     struct KnownAuxMultiplierProblem {
         bound_active_aux: bool,
+        objective_slope: f64,
     }
 
     impl NlpProblem for KnownAuxMultiplierProblem {
@@ -2324,8 +2322,16 @@ mod tests {
         }
 
         fn bounds(&self, x_l: &mut [f64], x_u: &mut [f64]) {
-            x_l[0] = if self.bound_active_aux { 2.0 } else { f64::NEG_INFINITY };
-            x_u[0] = if self.bound_active_aux { 2.0 } else { f64::INFINITY };
+            x_l[0] = if self.bound_active_aux {
+                2.0
+            } else {
+                f64::NEG_INFINITY
+            };
+            x_u[0] = if self.bound_active_aux {
+                2.0
+            } else {
+                f64::INFINITY
+            };
             x_l[1] = f64::NEG_INFINITY;
             x_u[1] = f64::INFINITY;
         }
@@ -2341,12 +2347,12 @@ mod tests {
         }
 
         fn objective(&self, x: &[f64], _new_x: bool, obj: &mut f64) -> bool {
-            *obj = 3.0 * x[0] + (x[1] - 5.0) * (x[1] - 5.0);
+            *obj = self.objective_slope * x[0] + (x[1] - 5.0) * (x[1] - 5.0);
             true
         }
 
         fn gradient(&self, x: &[f64], _new_x: bool, grad: &mut [f64]) -> bool {
-            grad[0] = 3.0;
+            grad[0] = self.objective_slope;
             grad[1] = 2.0 * (x[1] - 5.0);
             true
         }
@@ -2582,6 +2588,7 @@ mod tests {
     fn auxiliary_reduced_problem_reconstructs_removed_multiplier() {
         let problem = KnownAuxMultiplierProblem {
             bound_active_aux: false,
+            objective_slope: 3.0,
         };
         let candidates = vec![PresolveCandidate {
             blocks: vec![EqualityBlock {
@@ -2615,9 +2622,46 @@ mod tests {
     }
 
     #[test]
+    fn auxiliary_reduced_problem_reconstructs_large_removed_multiplier() {
+        let problem = KnownAuxMultiplierProblem {
+            bound_active_aux: false,
+            objective_slope: 1.0e12,
+        };
+        let candidates = vec![PresolveCandidate {
+            blocks: vec![EqualityBlock {
+                rows: vec![0],
+                vars: vec![0],
+            }],
+        }];
+        let reduced = AuxiliaryReducedProblem::new(&problem, &candidates, vec![2.0, 5.0])
+            .expect("auxiliary reduction");
+        let reduced_result = SolveResult {
+            x: vec![5.0],
+            objective: 0.0,
+            constraint_multipliers: vec![],
+            bound_multipliers_lower: vec![0.0],
+            bound_multipliers_upper: vec![0.0],
+            constraint_values: vec![],
+            status: SolveStatus::Optimal,
+            iterations: 1,
+            diagnostics: Default::default(),
+        };
+
+        let full = reduced.unmap_solution(&reduced_result);
+
+        let expected = -1.0e12;
+        assert!(
+            (full.constraint_multipliers[0] - expected).abs() <= expected.abs() * 1e-12,
+            "lambda_aux={}, expected {expected}",
+            full.constraint_multipliers[0]
+        );
+    }
+
+    #[test]
     fn auxiliary_reduced_problem_skips_multiplier_reconstruction_for_bound_active_auxiliary() {
         let problem = KnownAuxMultiplierProblem {
             bound_active_aux: true,
+            objective_slope: 3.0,
         };
         let candidates = vec![PresolveCandidate {
             blocks: vec![EqualityBlock {
