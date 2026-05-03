@@ -1265,7 +1265,11 @@ fn assert_auxiliary_gate_iteration_budget(
     }
 }
 
-fn compare_auxiliary_gate_case<P: NlpProblem>(name: &str, pre_problem: &P, fallback_problem: &P) {
+fn compare_auxiliary_gate_case<P: NlpProblem>(
+    name: &str,
+    pre_problem: &P,
+    fallback_problem: &P,
+) -> (AuxiliaryGateMetrics, AuxiliaryGateMetrics) {
     let preprocessed_result = solve_auxiliary_gate_case(pre_problem, true);
     let fallback_result = solve_auxiliary_gate_case(fallback_problem, false);
     let preprocessed = auxiliary_gate_metrics(pre_problem, &preprocessed_result);
@@ -1275,6 +1279,7 @@ fn compare_auxiliary_gate_case<P: NlpProblem>(name: &str, pre_problem: &P, fallb
 
     assert_auxiliary_gate_not_worse(name, &preprocessed, &fallback);
     assert_auxiliary_gate_iteration_budget(name, &preprocessed, &fallback, 5);
+    (preprocessed, fallback)
 }
 
 #[test]
@@ -1298,10 +1303,20 @@ fn auxiliary_preprocessing_regression_gate_compares_reduced_and_fallback_paths()
 
 #[test]
 fn auxiliary_preprocessing_regression_gate_accepts_reduced_path_when_fallback_fails() {
-    compare_auxiliary_gate_case(
+    let (preprocessed, fallback) = compare_auxiliary_gate_case(
         "objective needs auxiliary solve",
         &AuxiliaryReducedFallbackProblem,
         &AuxiliaryReducedFallbackProblem,
+    );
+    assert!(
+        is_solved(preprocessed.status),
+        "objective needs auxiliary solve: preprocessing should solve, got {:?}",
+        preprocessed.status
+    );
+    assert!(
+        !is_solved(fallback.status),
+        "objective needs auxiliary solve: no-preprocessing path should fail, got {:?}",
+        fallback.status
     );
 }
 

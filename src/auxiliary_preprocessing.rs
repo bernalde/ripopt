@@ -2063,6 +2063,12 @@ mod tests {
         vec![(0.0, 0.0); n_rows]
     }
 
+    fn sorted_values(mut values: Vec<usize>) -> Vec<usize> {
+        values.sort_unstable();
+        values.dedup();
+        values
+    }
+
     fn quiet_aux_options() -> SolverOptions {
         let mut options = SolverOptions::default();
         options.print_level = 0;
@@ -3115,6 +3121,164 @@ mod tests {
         under_or_unmatched_vars.sort_unstable();
         under_or_unmatched_vars.dedup();
         assert_eq!(under_or_unmatched_vars, vec![0, 1]);
+    }
+
+    #[test]
+    fn dm_matches_pyomo_tutorial_singular_chemical_looping_example() {
+        // Mirrors Pyomo's incidence tutorial.dm chemical-looping singular model.
+        // Rows: sum_eqn, holdup_eqn[1..3], density_eqn, flow_eqn[1..3].
+        // Vars: x[1..3], flow_comp[1..3], flow, density.
+        let bounds = equality_bounds(8);
+        let problem = graph_problem(
+            8,
+            &bounds,
+            &[
+                (0, 0),
+                (0, 1),
+                (0, 2),
+                (1, 0),
+                (1, 7),
+                (2, 1),
+                (2, 7),
+                (3, 2),
+                (3, 7),
+                (4, 0),
+                (4, 1),
+                (4, 2),
+                (4, 7),
+                (5, 0),
+                (5, 3),
+                (5, 6),
+                (6, 1),
+                (6, 4),
+                (6, 6),
+                (7, 2),
+                (7, 5),
+                (7, 6),
+            ],
+        );
+        let inc = EqualityIncidence::from_problem(&problem, TOL);
+
+        let dm = inc.dulmage_mendelsohn_partition();
+
+        assert_eq!(dm.underconstrained_rows, vec![5, 6, 7]);
+        assert_eq!(sorted_values(dm.underconstrained_vars), vec![3, 4, 5, 6]);
+        assert_eq!(dm.overconstrained_rows, vec![0, 1, 2, 3, 4]);
+        assert_eq!(sorted_values(dm.overconstrained_vars), vec![0, 1, 2, 7]);
+        assert!(dm.square_rows.is_empty());
+        assert!(dm.square_vars.is_empty());
+    }
+
+    #[test]
+    fn pyomo_tutorial_fixed_chemical_looping_example_is_square() {
+        // Mirrors the structurally nonsingular fixed model in Pyomo's incidence tutorial.dm.
+        // Rows: sum_eqn, holdup_eqn[1..3], dens_skel_eqn, dens_bulk_eqn,
+        // flow_eqn[1..3], flow_dens_eqn.
+        // Vars: x[1..3], flow_comp[1..3], flow, dens_bulk, dens_skel, porosity.
+        let bounds = equality_bounds(10);
+        let problem = graph_problem(
+            10,
+            &bounds,
+            &[
+                (0, 0),
+                (0, 1),
+                (0, 2),
+                (1, 0),
+                (1, 7),
+                (2, 1),
+                (2, 7),
+                (3, 2),
+                (3, 7),
+                (4, 0),
+                (4, 1),
+                (4, 2),
+                (4, 8),
+                (5, 7),
+                (5, 8),
+                (5, 9),
+                (6, 0),
+                (6, 3),
+                (6, 6),
+                (7, 1),
+                (7, 4),
+                (7, 6),
+                (8, 2),
+                (8, 5),
+                (8, 6),
+                (9, 6),
+                (9, 7),
+            ],
+        );
+        let inc = EqualityIncidence::from_problem(&problem, TOL);
+        let selected: Vec<_> = (0..10).collect();
+
+        let matching = inc.maximum_matching();
+        assert!(matching.unmatched_rows.is_empty());
+        assert!(matching.unmatched_vars.is_empty());
+
+        let dm = inc.dulmage_mendelsohn_partition();
+        assert!(dm.unmatched_rows.is_empty());
+        assert!(dm.unmatched_vars.is_empty());
+        assert!(dm.overconstrained_rows.is_empty());
+        assert!(dm.overconstrained_vars.is_empty());
+        assert!(dm.underconstrained_rows.is_empty());
+        assert!(dm.underconstrained_vars.is_empty());
+        assert_eq!(dm.square_rows, selected);
+        assert_eq!(dm.square_vars, selected);
+
+        let blocks = inc
+            .block_triangular_decomposition(&selected, &selected)
+            .unwrap();
+        assert_eq!(
+            sorted_values(blocks.iter().flat_map(|block| block.rows.clone()).collect()),
+            selected
+        );
+        assert_eq!(
+            sorted_values(blocks.iter().flat_map(|block| block.vars.clone()).collect()),
+            selected
+        );
+        assert!(blocks
+            .iter()
+            .all(|block| block.rows.len() == block.vars.len()));
+    }
+
+    #[test]
+    fn matching_matches_incidence_examples_rectangular_gallery_cases() {
+        // Mirrors the unmatched-variable and unmatched-constraint gallery cases
+        // in Robbybp/incidence_examples/incidence_examples/images/generate_matching_images.py.
+        let bounds = equality_bounds(2);
+        let under_problem = graph_problem(3, &bounds, &[(0, 0), (0, 1), (0, 2), (1, 0), (1, 1)]);
+        let under_inc = EqualityIncidence::from_problem(&under_problem, TOL);
+        let under_matching = under_inc.maximum_matching();
+        assert!(under_matching.unmatched_rows.is_empty());
+        assert_eq!(under_matching.unmatched_vars.len(), 1);
+
+        let under_dm = under_inc.dulmage_mendelsohn_partition();
+        assert_eq!(under_dm.underconstrained_rows, vec![0, 1]);
+        assert_eq!(sorted_values(under_dm.underconstrained_vars), vec![0, 1, 2]);
+        assert!(under_dm.overconstrained_rows.is_empty());
+        assert!(under_dm.overconstrained_vars.is_empty());
+        assert!(under_dm.square_rows.is_empty());
+        assert!(under_dm.square_vars.is_empty());
+
+        let bounds = equality_bounds(3);
+        let over_problem = graph_problem(
+            2,
+            &bounds,
+            &[(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1)],
+        );
+        let over_inc = EqualityIncidence::from_problem(&over_problem, TOL);
+        let over_matching = over_inc.maximum_matching();
+        assert_eq!(over_matching.unmatched_rows.len(), 1);
+        assert!(over_matching.unmatched_vars.is_empty());
+
+        let over_dm = over_inc.dulmage_mendelsohn_partition();
+        assert_eq!(over_dm.overconstrained_rows, vec![0, 1, 2]);
+        assert_eq!(over_dm.overconstrained_vars, vec![0, 1]);
+        assert!(over_dm.underconstrained_rows.is_empty());
+        assert!(over_dm.underconstrained_vars.is_empty());
+        assert!(over_dm.square_rows.is_empty());
+        assert!(over_dm.square_vars.is_empty());
     }
 
     #[test]

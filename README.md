@@ -622,7 +622,7 @@ Option-setting functions return `1` on success, `0` if the keyword is unknown. A
 | `constr_viol_tol`            | 1e-4    | Constraint violation tolerance                  |
 | `dual_inf_tol`               | 1.0     | Dual infeasibility tolerance                    |
 | `compl_inf_tol`              | 1e-4    | Complementarity tolerance                       |
-| `auxiliary_tol`              | 1e-8    | Auxiliary preprocessing residual tolerance      |
+| `auxiliary_tol`              | 1e-8    | Residual tolerance for internal auxiliary equality solves |
 | `max_wall_time`              | 0.0     | Wall-clock time limit in seconds (0 = no limit) |
 | `warm_start_bound_push`      | 1e-3    | Warm-start bound push                           |
 | `warm_start_bound_frac`      | 1e-3    | Warm-start bound fraction                       |
@@ -654,7 +654,7 @@ Option-setting functions return `1` on success, `0` if the keyword is unknown. A
 | `enable_slack_fallback`         | `"yes"`      | `"yes"`, `"no"`               | Slack reformulation fallback                      |
 | `enable_lbfgs_fallback`         | `"yes"`      | `"yes"`, `"no"`               | L-BFGS fallback for unconstrained                 |
 | `enable_al_fallback`            | `"yes"`      | `"yes"`, `"no"`               | Augmented Lagrangian fallback                     |
-| `enable_preprocessing`          | `"yes"`      | `"yes"`, `"no"`               | Preprocessing (auxiliary blocks, fixed vars, redundancies) |
+| `enable_preprocessing`          | `"yes"`      | `"yes"`, `"no"`               | Internal auxiliary equality solves, fixed vars, redundancies |
 | `detect_linear_constraints`     | `"yes"`      | `"yes"`, `"no"`               | Skip Hessian for linear constraints               |
 | `enable_sqp_fallback`           | `"yes"`      | `"yes"`, `"no"`               | SQP fallback for constrained problems             |
 | `hessian_approximation`         | `"exact"`    | `"exact"`, `"limited-memory"` | Use L-BFGS Hessian approximation                  |
@@ -768,12 +768,12 @@ See [Compile and run the examples](#compile-and-run-the-examples) above for buil
 cargo test
 ```
 
-230 tests total:
-- **131 unit tests**: Dense LDL factorization, convergence checking, filter line search, fraction-to-boundary, KKT assembly, restoration, preprocessing, linearity detection, SQP, linear solver, autodiff, L-BFGS, sensitivity analysis
-- **12 C API tests**: FFI integration tests
-- **29 integration tests**: Rosenbrock, SimpleQP, HS071, HS035, PureBoundConstrained, MultipleEqualityConstraints, NE-to-LS reformulation, augmented Lagrangian, NL file parsing, IPM code paths, parametric sensitivity, and more
-- **15 HS regression tests**: Selected Hock-Schittkowski problems for regression checking
-- **14 coverage tests**: Augmented Lagrangian convergence paths, NL parser/solver pipeline, autodiff tape operations, IPM preprocessing/condensed KKT/unbounded detection
+The test suite covers:
+- **Unit tests**: Dense LDL factorization, convergence checking, filter line search, fraction-to-boundary, KKT assembly, restoration, preprocessing, linearity detection, SQP, linear solver, autodiff, L-BFGS, sensitivity analysis
+- **C API tests**: FFI integration tests
+- **Integration tests**: Rosenbrock, SimpleQP, HS071, HS035, PureBoundConstrained, MultipleEqualityConstraints, NE-to-LS reformulation, augmented Lagrangian, NL file parsing, IPM code paths, parametric sensitivity, and more
+- **HS regression tests**: Selected Hock-Schittkowski problems for regression checking
+- **Coverage tests**: Augmented Lagrangian convergence paths, NL parser/solver pipeline, autodiff tape operations, IPM preprocessing/condensed KKT/unbounded detection
 
 ## Code Coverage
 
@@ -823,7 +823,7 @@ Current coverage by module:
 | hybrid.rs                | 0%            |
 | iterative.rs             | 0%            |
 
-**Overall: 62% line coverage** (248 tests)
+**Overall: 62% line coverage** in the last recorded coverage run.
 
 The `hybrid.rs` and `iterative.rs` modules implement opt-in linear
 solvers (`LinearSolverChoice::Hybrid`, `::Iterative`) that no test
