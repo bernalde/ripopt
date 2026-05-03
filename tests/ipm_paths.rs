@@ -1,4 +1,4 @@
-use ripopt::{NlpProblem, SolveStatus, SolverOptions};
+use ripopt::{NlpProblem, SolveResult, SolveStatus, SolverOptions};
 use std::cell::Cell;
 
 // ---------------------------------------------------------------------------
@@ -1105,6 +1105,219 @@ fn preprocessing_disabled_bypasses_auxiliary_preprocessing_in_solve() {
     );
     assert!((result.x[0] - 3.0).abs() < 1e-5, "x={:?}", result.x);
     assert!((result.x[1] - 2.0).abs() < 1e-5, "x={:?}", result.x);
+}
+
+#[derive(Debug)]
+struct AuxiliaryGateMetrics {
+    status: SolveStatus,
+    objective: Option<f64>,
+    constraint_violation: f64,
+    iterations: usize,
+}
+
+fn auxiliary_gate_options(enable_preprocessing: bool) -> SolverOptions {
+    SolverOptions {
+        print_level: 0,
+        enable_preprocessing,
+        enable_al_fallback: false,
+        enable_sqp_fallback: false,
+        max_iter: 300,
+        tol: 1e-8,
+        early_stall_timeout: 0.0,
+        ..SolverOptions::default()
+    }
+}
+
+fn solve_auxiliary_gate_case<P: NlpProblem>(
+    problem: &P,
+    enable_preprocessing: bool,
+) -> SolveResult {
+    ripopt::solve(problem, &auxiliary_gate_options(enable_preprocessing))
+}
+
+fn auxiliary_gate_metrics<P: NlpProblem>(
+    problem: &P,
+    result: &SolveResult,
+) -> AuxiliaryGateMetrics {
+    let mut objective = 0.0;
+    let objective = if problem.objective(&result.x, true, &mut objective) {
+        Some(objective)
+    } else {
+        None
+    };
+
+    AuxiliaryGateMetrics {
+        status: result.status,
+        objective,
+        constraint_violation: full_constraint_violation(problem, &result.x),
+        iterations: result.iterations,
+    }
+}
+
+fn full_constraint_violation<P: NlpProblem>(problem: &P, x: &[f64]) -> f64 {
+    let m = problem.num_constraints();
+    if m == 0 {
+        return 0.0;
+    }
+
+    let mut g = vec![0.0; m];
+    if !problem.constraints(x, true, &mut g) {
+        return f64::INFINITY;
+    }
+
+    let mut g_l = vec![0.0; m];
+    let mut g_u = vec![0.0; m];
+    problem.constraint_bounds(&mut g_l, &mut g_u);
+
+    let mut violation: f64 = 0.0;
+    for i in 0..m {
+        let row_violation = if !g[i].is_finite() {
+            f64::INFINITY
+        } else if g_l[i].is_finite()
+            && g_u[i].is_finite()
+            && (g_u[i] - g_l[i]).abs() <= 1e-12
+        {
+            (g[i] - 0.5 * (g_l[i] + g_u[i])).abs()
+        } else {
+            let lower = if g_l[i].is_finite() {
+                (g_l[i] - g[i]).max(0.0)
+            } else {
+                0.0
+            };
+            let upper = if g_u[i].is_finite() {
+                (g[i] - g_u[i]).max(0.0)
+            } else {
+                0.0
+            };
+            lower.max(upper)
+        };
+        violation = violation.max(row_violation);
+    }
+    violation
+}
+
+fn status_rank(status: SolveStatus) -> u8 {
+    match status {
+        SolveStatus::Optimal => 0,
+        SolveStatus::Acceptable => 1,
+        SolveStatus::LocalInfeasibility | SolveStatus::Infeasible | SolveStatus::Unbounded => 2,
+        SolveStatus::MaxIterations => 3,
+        SolveStatus::NumericalError
+        | SolveStatus::RestorationFailed
+        | SolveStatus::EvaluationError
+        | SolveStatus::UserRequestedStop => 4,
+        SolveStatus::InternalError => 5,
+    }
+}
+
+fn is_solved(status: SolveStatus) -> bool {
+    matches!(status, SolveStatus::Optimal | SolveStatus::Acceptable)
+}
+
+fn assert_auxiliary_gate_not_worse(
+    name: &str,
+    preprocessed: &AuxiliaryGateMetrics,
+    fallback: &AuxiliaryGateMetrics,
+) {
+    assert!(
+        status_rank(preprocessed.status) <= status_rank(fallback.status),
+        "{name}: preprocessing status {:?} is worse than no-preprocessing status {:?}",
+        preprocessed.status,
+        fallback.status
+    );
+
+    if is_solved(preprocessed.status) && is_solved(fallback.status) {
+        assert!(
+            preprocessed.constraint_violation
+                <= fallback.constraint_violation.max(1e-8) * 10.0 + 1e-8,
+            "{name}: preprocessing full-space violation {} is worse than no-preprocessing {}",
+            preprocessed.constraint_violation,
+            fallback.constraint_violation
+        );
+
+        let pre_obj = preprocessed
+            .objective
+            .expect("solved preprocessed result should evaluate objective");
+        let fallback_obj = fallback
+            .objective
+            .expect("solved fallback result should evaluate objective");
+        let scale = pre_obj.abs().max(fallback_obj.abs()).max(1.0);
+        assert!(
+            pre_obj <= fallback_obj + 1e-6 * scale,
+            "{name}: preprocessing objective {pre_obj} is worse than no-preprocessing {fallback_obj}"
+        );
+    }
+}
+
+fn assert_auxiliary_gate_iteration_budget(
+    name: &str,
+    preprocessed: &AuxiliaryGateMetrics,
+    fallback: &AuxiliaryGateMetrics,
+    allowed_extra: usize,
+) {
+    if is_solved(preprocessed.status) && is_solved(fallback.status) {
+        assert!(
+            preprocessed.iterations <= fallback.iterations + allowed_extra,
+            "{name}: preprocessing iterations {} exceed no-preprocessing {} by more than {allowed_extra}",
+            preprocessed.iterations,
+            fallback.iterations
+        );
+    }
+}
+
+fn compare_auxiliary_gate_case<P: NlpProblem>(
+    name: &str,
+    pre_problem: &P,
+    fallback_problem: &P,
+) -> (AuxiliaryGateMetrics, AuxiliaryGateMetrics) {
+    let preprocessed_result = solve_auxiliary_gate_case(pre_problem, true);
+    let fallback_result = solve_auxiliary_gate_case(fallback_problem, false);
+    let preprocessed = auxiliary_gate_metrics(pre_problem, &preprocessed_result);
+    let fallback = auxiliary_gate_metrics(fallback_problem, &fallback_result);
+
+    eprintln!("{name}: preprocessing={preprocessed:?}, no_preprocessing={fallback:?}");
+
+    assert_auxiliary_gate_not_worse(name, &preprocessed, &fallback);
+    assert_auxiliary_gate_iteration_budget(name, &preprocessed, &fallback, 5);
+    (preprocessed, fallback)
+}
+
+#[test]
+fn auxiliary_preprocessing_regression_gate_compares_reduced_and_fallback_paths() {
+    compare_auxiliary_gate_case(
+        "branch objective",
+        &AuxiliaryBranchObjectiveProblem,
+        &AuxiliaryBranchObjectiveProblem,
+    );
+    compare_auxiliary_gate_case(
+        "triangular equality system",
+        &AuxiliaryTriangularEndToEndProblem,
+        &AuxiliaryTriangularEndToEndProblem,
+    );
+    compare_auxiliary_gate_case(
+        "basin guard",
+        &AuxiliaryBasinGuardProblem,
+        &AuxiliaryBasinGuardProblem,
+    );
+}
+
+#[test]
+fn auxiliary_preprocessing_regression_gate_accepts_reduced_path_when_fallback_fails() {
+    let (preprocessed, fallback) = compare_auxiliary_gate_case(
+        "objective needs auxiliary solve",
+        &AuxiliaryReducedFallbackProblem,
+        &AuxiliaryReducedFallbackProblem,
+    );
+    assert!(
+        is_solved(preprocessed.status),
+        "objective needs auxiliary solve: preprocessing should solve, got {:?}",
+        preprocessed.status
+    );
+    assert!(
+        !is_solved(fallback.status),
+        "objective needs auxiliary solve: no-preprocessing path should fail, got {:?}",
+        fallback.status
+    );
 }
 
 // ---------------------------------------------------------------------------

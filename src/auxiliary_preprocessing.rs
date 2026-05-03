@@ -2063,6 +2063,148 @@ mod tests {
         vec![(0.0, 0.0); n_rows]
     }
 
+    fn equality_incidence(
+        n_vars: usize,
+        n_rows: usize,
+        edges: &[(usize, usize)],
+    ) -> EqualityIncidence {
+        let bounds = equality_bounds(n_rows);
+        let problem = graph_problem(n_vars, &bounds, edges);
+        EqualityIncidence::from_problem(&problem, TOL)
+    }
+
+    fn all_indices(n: usize) -> Vec<usize> {
+        (0..n).collect()
+    }
+
+    fn sorted_values(mut values: Vec<usize>) -> Vec<usize> {
+        values.sort_unstable();
+        values.dedup();
+        values
+    }
+
+    fn matching_cardinality(matching: &BipartiteMatching) -> usize {
+        matching
+            .row_to_var
+            .iter()
+            .filter(|var| var.is_some())
+            .count()
+    }
+
+    fn assert_perfect_matching(incidence: &EqualityIncidence) {
+        let matching = incidence.maximum_matching();
+        assert!(matching.unmatched_rows.is_empty());
+        assert!(matching.unmatched_vars.is_empty());
+        assert_eq!(
+            matching_cardinality(&matching),
+            incidence.row_adj_vars.len()
+        );
+    }
+
+    fn sorted_block_pairs(blocks: &[EqualityBlock]) -> Vec<(Vec<usize>, Vec<usize>)> {
+        let mut pairs: Vec<_> = blocks
+            .iter()
+            .map(|block| {
+                let mut rows = block.rows.clone();
+                let mut vars = block.vars.clone();
+                rows.sort_unstable();
+                vars.sort_unstable();
+                (rows, vars)
+            })
+            .collect();
+        pairs.sort();
+        pairs
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum PyomoGasVar {
+        Rho,
+        Pressure,
+        Flow,
+        Temperature,
+    }
+
+    impl PyomoGasVar {
+        fn component_index(self) -> usize {
+            match self {
+                PyomoGasVar::Rho => 0,
+                PyomoGasVar::Pressure => 1,
+                PyomoGasVar::Flow => 2,
+                PyomoGasVar::Temperature => 3,
+            }
+        }
+    }
+
+    fn pyomo_gas_expansion_incidence(
+        n_model: usize,
+        fixed_vars: &[(PyomoGasVar, usize)],
+    ) -> EqualityIncidence {
+        // Mirrors pyomo/contrib/incidence_analysis/tests/models_for_testing.py
+        // make_gas_expansion_model. Variable order follows Pyomo component
+        // declaration order: rho, P, F, T, each indexed by stream.
+        let streams = n_model + 1;
+        let mut var_index = vec![vec![None; streams]; 4];
+        let mut n_vars = 0;
+        for kind in [
+            PyomoGasVar::Rho,
+            PyomoGasVar::Pressure,
+            PyomoGasVar::Flow,
+            PyomoGasVar::Temperature,
+        ] {
+            for stream in 0..streams {
+                if fixed_vars.contains(&(kind, stream)) {
+                    continue;
+                }
+                var_index[kind.component_index()][stream] = Some(n_vars);
+                n_vars += 1;
+            }
+        }
+
+        let mut edges = Vec::new();
+        let mut push_var = |row: usize, kind: PyomoGasVar, stream: usize| {
+            if let Some(var) = var_index[kind.component_index()][stream] {
+                edges.push((row, var));
+            }
+        };
+
+        let mut row = 0;
+        for stream in 1..=n_model {
+            // mbal[i]: rho[i-1] * F[i-1] - rho[i] * F[i] == 0
+            push_var(row, PyomoGasVar::Rho, stream - 1);
+            push_var(row, PyomoGasVar::Flow, stream - 1);
+            push_var(row, PyomoGasVar::Rho, stream);
+            push_var(row, PyomoGasVar::Flow, stream);
+            row += 1;
+        }
+        for stream in 1..=n_model {
+            // ebal[i]: rho[i-1] * F[i-1] * T[i-1] - rho[i] * F[i] * T[i] + Q == 0
+            push_var(row, PyomoGasVar::Rho, stream - 1);
+            push_var(row, PyomoGasVar::Flow, stream - 1);
+            push_var(row, PyomoGasVar::Temperature, stream - 1);
+            push_var(row, PyomoGasVar::Rho, stream);
+            push_var(row, PyomoGasVar::Flow, stream);
+            push_var(row, PyomoGasVar::Temperature, stream);
+            row += 1;
+        }
+        for stream in 1..=n_model {
+            // expansion[i]: P[i] / P[i-1] - (rho[i] / rho[i-1])**gamma == 0
+            push_var(row, PyomoGasVar::Pressure, stream);
+            push_var(row, PyomoGasVar::Pressure, stream - 1);
+            push_var(row, PyomoGasVar::Rho, stream);
+            push_var(row, PyomoGasVar::Rho, stream - 1);
+            row += 1;
+        }
+        for stream in 0..=n_model {
+            // ideal_gas[i]: P[i] - rho[i] * R * T[i] == 0
+            push_var(row, PyomoGasVar::Pressure, stream);
+            push_var(row, PyomoGasVar::Rho, stream);
+            push_var(row, PyomoGasVar::Temperature, stream);
+            row += 1;
+        }
+
+        equality_incidence(n_vars, row, &edges)
+    }
+
     fn quiet_aux_options() -> SolverOptions {
         let mut options = SolverOptions::default();
         options.print_level = 0;
@@ -2899,6 +3041,22 @@ mod tests {
     }
 
     #[test]
+    fn incidence_matches_mathprogincidence_matrix_and_graph_order_examples() {
+        // Mirrors MathProgIncidence.jl/test/incidence_matrix.jl and
+        // test/incidence_graph.jl construction-from-constraints cases.
+        let inc = equality_incidence(3, 2, &[(0, 0), (0, 1), (1, 1), (1, 2)]);
+        assert_eq!(inc.row_adj_vars, vec![vec![0, 1], vec![1, 2]]);
+        assert_eq!(inc.var_adj_rows, vec![vec![0], vec![0, 1], vec![1]]);
+
+        // Same two constraints with the variable order reversed. MathProg's
+        // expected sparse matrix columns are [3, 2] for eq1 and [2, 1] for eq2
+        // in 1-based indexing; here that is [2, 1] and [1, 0].
+        let inc = equality_incidence(3, 2, &[(0, 2), (0, 1), (1, 1), (1, 0)]);
+        assert_eq!(inc.row_adj_vars, vec![vec![1, 2], vec![0, 1]]);
+        assert_eq!(inc.var_adj_rows, vec![vec![1], vec![0, 1], vec![0]]);
+    }
+
+    #[test]
     fn incidence_keeps_empty_equality_rows() {
         let problem = graph_problem(2, &[(3.0, 3.0), (0.0, 1.0)], &[(1, 0)]);
         let inc = EqualityIncidence::from_problem(&problem, TOL);
@@ -2974,6 +3132,98 @@ mod tests {
         assert_eq!(matching.var_to_row, vec![Some(1), Some(0)]);
         assert!(matching.unmatched_rows.is_empty());
         assert!(matching.unmatched_vars.is_empty());
+    }
+
+    #[test]
+    fn matching_matches_mathprogincidence_matrix_example() {
+        // Mirrors MathProgIncidence.jl/test/interface.jl::test_maximum_matching_matrix.
+        // Julia uses 1-based matrix indices; these assertions use 0-based row/var indices.
+        let bounds = equality_bounds(3);
+        let problem = graph_problem(3, &bounds, &[(0, 1), (1, 2), (2, 0)]);
+        let inc = EqualityIncidence::from_problem(&problem, TOL);
+
+        let matching = inc.maximum_matching();
+
+        assert_eq!(matching.row_to_var, vec![Some(1), Some(2), Some(0)]);
+        assert_eq!(matching.var_to_row, vec![Some(2), Some(0), Some(1)]);
+        assert!(matching.unmatched_rows.is_empty());
+        assert!(matching.unmatched_vars.is_empty());
+    }
+
+    #[test]
+    fn matching_matches_pyomo_matrix_gallery_cases() {
+        // Mirrors pyomo/contrib/incidence_analysis/tests/test_matching.py.
+        let n = 5;
+
+        let identity_edges: Vec<_> = (0..n).map(|i| (i, i)).collect();
+        let inc = equality_incidence(n, n, &identity_edges);
+        let matching = inc.maximum_matching();
+        assert_eq!(matching.row_to_var, (0..n).map(Some).collect::<Vec<_>>());
+        assert_eq!(matching.var_to_row, (0..n).map(Some).collect::<Vec<_>>());
+
+        let omit = n / 2;
+        let low_rank_diagonal: Vec<_> = (0..n).filter(|&i| i != omit).map(|i| (i, i)).collect();
+        let inc = equality_incidence(n, n, &low_rank_diagonal);
+        let matching = inc.maximum_matching();
+        assert_eq!(matching_cardinality(&matching), n - 1);
+        assert_eq!(matching.unmatched_rows, vec![omit]);
+        assert_eq!(matching.unmatched_vars, vec![omit]);
+
+        let mut bordered = Vec::new();
+        for i in 0..n - 1 {
+            bordered.push((n - 1, i));
+            bordered.push((i, n - 1));
+            bordered.push((i, i));
+        }
+        assert_perfect_matching(&equality_incidence(n, n, &bordered));
+
+        let mut hessenberg = Vec::new();
+        for i in 0..n {
+            hessenberg.push((n - 1, i));
+            if i == 0 {
+                hessenberg.push((0, i));
+            } else {
+                hessenberg.push((i - 1, i));
+            }
+        }
+        assert_perfect_matching(&equality_incidence(n, n, &hessenberg));
+
+        let mut low_rank_hessenberg = Vec::new();
+        for i in 0..n {
+            low_rank_hessenberg.push((n - 1, i));
+            if i == 0 {
+                low_rank_hessenberg.push((0, i));
+            } else if i != omit {
+                low_rank_hessenberg.push((i - 1, i));
+            }
+        }
+        let matching = equality_incidence(n, n, &low_rank_hessenberg).maximum_matching();
+        assert_eq!(matching_cardinality(&matching), n - 1);
+        assert!(matching.row_to_var[0].is_some());
+        assert!(matching.row_to_var[n - 1].is_some());
+        assert!(matching.var_to_row[0].is_some());
+        assert!(matching.var_to_row[n - 1].is_some());
+
+        let mut nondecomposable_hessenberg = Vec::new();
+        for i in 0..n {
+            nondecomposable_hessenberg.push((n - 1, i));
+            nondecomposable_hessenberg.push((i, i));
+            if i != 0 {
+                nondecomposable_hessenberg.push((i - 1, i));
+            }
+        }
+        assert_perfect_matching(&equality_incidence(n, n, &nondecomposable_hessenberg));
+
+        let mut low_rank_nondecomposable_hessenberg = Vec::new();
+        for i in 0..n - 1 {
+            low_rank_nondecomposable_hessenberg.push((i + 1, i));
+            low_rank_nondecomposable_hessenberg.push((i, i + 1));
+        }
+        let matching =
+            equality_incidence(n, n, &low_rank_nondecomposable_hessenberg).maximum_matching();
+        assert_eq!(matching_cardinality(&matching), n - 1);
+        assert_eq!(matching.unmatched_rows.len(), 1);
+        assert_eq!(matching.unmatched_vars.len(), 1);
     }
 
     #[test]
@@ -3067,6 +3317,706 @@ mod tests {
         assert_eq!(dm.square_vars, vec![0, 1]);
         assert_eq!(dm.underconstrained_rows, vec![4]);
         assert_eq!(dm.underconstrained_vars, vec![3, 4]);
+    }
+
+    #[test]
+    fn dm_matches_mathprogincidence_matrix_example() {
+        // Mirrors MathProgIncidence.jl/test/interface.jl::test_dulmage_mendelsohn_matrix.
+        // Julia uses 1-based matrix indices; these assertions use 0-based row/var indices.
+        let bounds = equality_bounds(4);
+        let problem = graph_problem(
+            4,
+            &bounds,
+            &[(0, 0), (0, 1), (0, 3), (1, 2), (2, 3), (3, 3)],
+        );
+        let inc = EqualityIncidence::from_problem(&problem, TOL);
+
+        let dm = inc.dulmage_mendelsohn_partition();
+
+        assert_eq!(dm.underconstrained_rows, vec![0]);
+        assert_eq!(dm.square_rows, vec![1]);
+        assert_eq!(dm.square_vars, vec![2]);
+        assert_eq!(dm.overconstrained_vars, vec![3]);
+
+        let mut over_or_unmatched_rows = dm.overconstrained_rows.clone();
+        over_or_unmatched_rows.extend_from_slice(&dm.unmatched_rows);
+        over_or_unmatched_rows.sort_unstable();
+        over_or_unmatched_rows.dedup();
+        assert_eq!(over_or_unmatched_rows, vec![2, 3]);
+
+        let mut under_or_unmatched_vars = dm.underconstrained_vars.clone();
+        under_or_unmatched_vars.extend_from_slice(&dm.unmatched_vars);
+        under_or_unmatched_vars.sort_unstable();
+        under_or_unmatched_vars.dedup();
+        assert_eq!(under_or_unmatched_vars, vec![0, 1]);
+    }
+
+    #[test]
+    fn dm_matches_pyomo_gas_expansion_matrix_cases() {
+        // Mirrors pyomo/contrib/incidence_analysis/tests/test_dulmage_mendelsohn.py
+        // gas-expansion structural matrix cases.
+        use PyomoGasVar::*;
+
+        let inc = pyomo_gas_expansion_incidence(4, &[(Flow, 0), (Rho, 0), (Temperature, 0)]);
+        assert_eq!(inc.row_adj_vars.len(), 17);
+        assert_eq!(inc.n_vars, 17);
+        assert_perfect_matching(&inc);
+
+        let dm = inc.dulmage_mendelsohn_partition();
+        assert!(dm.unmatched_rows.is_empty());
+        assert!(dm.unmatched_vars.is_empty());
+        assert!(dm.overconstrained_rows.is_empty());
+        assert!(dm.overconstrained_vars.is_empty());
+        assert!(dm.underconstrained_rows.is_empty());
+        assert!(dm.underconstrained_vars.is_empty());
+        assert_eq!(dm.square_rows, all_indices(17));
+        assert_eq!(dm.square_vars, all_indices(17));
+
+        let inc = pyomo_gas_expansion_incidence(1, &[(Pressure, 0), (Rho, 0), (Temperature, 0)]);
+        assert_eq!(inc.row_adj_vars.len(), 5);
+        assert_eq!(inc.n_vars, 5);
+
+        let dm = inc.dulmage_mendelsohn_partition();
+        // Row 3 is ideal_gas[0], whose incident variables are all fixed.
+        assert_eq!(dm.unmatched_rows, vec![3]);
+        assert_eq!(dm.overconstrained_rows, vec![3]);
+        assert_eq!(dm.underconstrained_rows, vec![0, 1, 2, 4]);
+        assert_eq!(
+            sorted_values(dm.underconstrained_vars.clone()),
+            all_indices(5)
+        );
+        assert!(dm.square_rows.is_empty());
+        assert!(dm.square_vars.is_empty());
+
+        let inc = pyomo_gas_expansion_incidence(2, &[]);
+        assert_eq!(inc.row_adj_vars.len(), 9);
+        assert_eq!(inc.n_vars, 12);
+
+        let dm = inc.dulmage_mendelsohn_partition();
+        assert!(dm.unmatched_rows.is_empty());
+        assert_eq!(dm.unmatched_vars.len(), 3);
+        assert!(dm.overconstrained_rows.is_empty());
+        assert!(dm.overconstrained_vars.is_empty());
+        assert_eq!(dm.underconstrained_rows, all_indices(9));
+        assert_eq!(
+            sorted_values(dm.underconstrained_vars.clone()),
+            all_indices(12)
+        );
+        assert!(dm.square_rows.is_empty());
+        assert!(dm.square_vars.is_empty());
+    }
+
+    #[test]
+    fn mathprogincidence_degenerate_flow_model_partition_and_components() {
+        // Mirrors MathProgIncidence.jl/docs/src/example.md and
+        // test/interface.jl::test_dulmage_mendelsohn/test_one_connected_component_cons_vars.
+        // Rows: sum_comp_eqn, comp_dens_eqn[1..3], bulk_dens_eqn, comp_flow_eqn[1..3].
+        // Vars: x[1..3], flow_comp[1..3], flow, rho.
+        let inc = equality_incidence(
+            8,
+            8,
+            &[
+                (0, 0),
+                (0, 1),
+                (0, 2),
+                (1, 0),
+                (1, 7),
+                (2, 1),
+                (2, 7),
+                (3, 2),
+                (3, 7),
+                (4, 0),
+                (4, 1),
+                (4, 2),
+                (4, 7),
+                (5, 0),
+                (5, 3),
+                (5, 6),
+                (6, 1),
+                (6, 4),
+                (6, 6),
+                (7, 2),
+                (7, 5),
+                (7, 6),
+            ],
+        );
+
+        let matching = inc.maximum_matching();
+        assert_eq!(matching_cardinality(&matching), 7);
+
+        let dm = inc.dulmage_mendelsohn_partition();
+        assert_eq!(dm.underconstrained_rows, vec![5, 6, 7]);
+        assert_eq!(
+            sorted_values(dm.underconstrained_vars.clone()),
+            vec![3, 4, 5, 6]
+        );
+        assert_eq!(dm.overconstrained_rows, vec![0, 1, 2, 3, 4]);
+        assert_eq!(
+            sorted_values(dm.overconstrained_vars.clone()),
+            vec![0, 1, 2, 7]
+        );
+        assert!(dm.square_rows.is_empty());
+        assert!(dm.square_vars.is_empty());
+
+        let uc_blocks =
+            inc.connected_components(&dm.underconstrained_rows, &dm.underconstrained_vars);
+        assert_eq!(
+            sorted_block_pairs(&uc_blocks),
+            vec![(vec![5, 6, 7], vec![3, 4, 5, 6])]
+        );
+        let oc_blocks =
+            inc.connected_components(&dm.overconstrained_rows, &dm.overconstrained_vars);
+        assert_eq!(
+            sorted_block_pairs(&oc_blocks),
+            vec![(vec![0, 1, 2, 3, 4], vec![0, 1, 2, 7])]
+        );
+    }
+
+    #[test]
+    fn dm_matches_pyomo_tutorial_singular_chemical_looping_example() {
+        // Mirrors Pyomo's incidence tutorial.dm chemical-looping singular model.
+        // Rows: sum_eqn, holdup_eqn[1..3], density_eqn, flow_eqn[1..3].
+        // Vars: x[1..3], flow_comp[1..3], flow, density.
+        let bounds = equality_bounds(8);
+        let problem = graph_problem(
+            8,
+            &bounds,
+            &[
+                (0, 0),
+                (0, 1),
+                (0, 2),
+                (1, 0),
+                (1, 7),
+                (2, 1),
+                (2, 7),
+                (3, 2),
+                (3, 7),
+                (4, 0),
+                (4, 1),
+                (4, 2),
+                (4, 7),
+                (5, 0),
+                (5, 3),
+                (5, 6),
+                (6, 1),
+                (6, 4),
+                (6, 6),
+                (7, 2),
+                (7, 5),
+                (7, 6),
+            ],
+        );
+        let inc = EqualityIncidence::from_problem(&problem, TOL);
+
+        let dm = inc.dulmage_mendelsohn_partition();
+
+        assert_eq!(dm.underconstrained_rows, vec![5, 6, 7]);
+        assert_eq!(sorted_values(dm.underconstrained_vars), vec![3, 4, 5, 6]);
+        assert_eq!(dm.overconstrained_rows, vec![0, 1, 2, 3, 4]);
+        assert_eq!(sorted_values(dm.overconstrained_vars), vec![0, 1, 2, 7]);
+        assert!(dm.square_rows.is_empty());
+        assert!(dm.square_vars.is_empty());
+    }
+
+    #[test]
+    fn pyomo_bt_tutorial_sum_flow_variant_is_structurally_square() {
+        // Mirrors Pyomo's incidence tutorial.bt numeric-singularity model.
+        // The sum mass-fraction equation is replaced by sum_flow_eqn, giving
+        // a perfect structural matching before numeric conditioning is checked.
+        // Rows: sum_flow_eqn, holdup_eqn[1..3], density_eqn, flow_eqn[1..3].
+        // Vars: x[1..3], flow_comp[1..3], flow, density.
+        let inc = equality_incidence(
+            8,
+            8,
+            &[
+                (0, 3),
+                (0, 4),
+                (0, 5),
+                (0, 6),
+                (1, 0),
+                (1, 7),
+                (2, 1),
+                (2, 7),
+                (3, 2),
+                (3, 7),
+                (4, 0),
+                (4, 1),
+                (4, 2),
+                (4, 7),
+                (5, 0),
+                (5, 3),
+                (5, 6),
+                (6, 1),
+                (6, 4),
+                (6, 6),
+                (7, 2),
+                (7, 5),
+                (7, 6),
+            ],
+        );
+
+        assert_perfect_matching(&inc);
+        let dm = inc.dulmage_mendelsohn_partition();
+        assert!(dm.unmatched_rows.is_empty());
+        assert!(dm.unmatched_vars.is_empty());
+        assert!(dm.overconstrained_rows.is_empty());
+        assert!(dm.overconstrained_vars.is_empty());
+        assert!(dm.underconstrained_rows.is_empty());
+        assert!(dm.underconstrained_vars.is_empty());
+        assert_eq!(dm.square_rows, all_indices(8));
+        assert_eq!(dm.square_vars, all_indices(8));
+
+        let blocks = inc
+            .block_triangular_decomposition(&all_indices(8), &all_indices(8))
+            .unwrap();
+        assert_eq!(
+            sorted_values(blocks.iter().flat_map(|block| block.rows.clone()).collect()),
+            all_indices(8)
+        );
+        assert_eq!(
+            sorted_values(blocks.iter().flat_map(|block| block.vars.clone()).collect()),
+            all_indices(8)
+        );
+        assert!(blocks
+            .iter()
+            .all(|block| block.rows.len() == block.vars.len()));
+    }
+
+    #[test]
+    fn pyomo_tutorial_fixed_chemical_looping_example_is_square() {
+        // Mirrors the structurally nonsingular fixed model in Pyomo's
+        // incidence tutorial.dm and tutorial.btsolve.
+        // Rows: sum_eqn, holdup_eqn[1..3], dens_skel_eqn, dens_bulk_eqn,
+        // flow_eqn[1..3], flow_dens_eqn.
+        // Vars: x[1..3], flow_comp[1..3], flow, dens_bulk, dens_skel, porosity.
+        let bounds = equality_bounds(10);
+        let problem = graph_problem(
+            10,
+            &bounds,
+            &[
+                (0, 0),
+                (0, 1),
+                (0, 2),
+                (1, 0),
+                (1, 7),
+                (2, 1),
+                (2, 7),
+                (3, 2),
+                (3, 7),
+                (4, 0),
+                (4, 1),
+                (4, 2),
+                (4, 8),
+                (5, 7),
+                (5, 8),
+                (5, 9),
+                (6, 0),
+                (6, 3),
+                (6, 6),
+                (7, 1),
+                (7, 4),
+                (7, 6),
+                (8, 2),
+                (8, 5),
+                (8, 6),
+                (9, 6),
+                (9, 7),
+            ],
+        );
+        let inc = EqualityIncidence::from_problem(&problem, TOL);
+        let selected: Vec<_> = (0..10).collect();
+
+        let matching = inc.maximum_matching();
+        assert!(matching.unmatched_rows.is_empty());
+        assert!(matching.unmatched_vars.is_empty());
+
+        let dm = inc.dulmage_mendelsohn_partition();
+        assert!(dm.unmatched_rows.is_empty());
+        assert!(dm.unmatched_vars.is_empty());
+        assert!(dm.overconstrained_rows.is_empty());
+        assert!(dm.overconstrained_vars.is_empty());
+        assert!(dm.underconstrained_rows.is_empty());
+        assert!(dm.underconstrained_vars.is_empty());
+        assert_eq!(dm.square_rows, selected);
+        assert_eq!(dm.square_vars, selected);
+
+        let blocks = inc
+            .block_triangular_decomposition(&selected, &selected)
+            .unwrap();
+        assert_eq!(
+            sorted_values(blocks.iter().flat_map(|block| block.rows.clone()).collect()),
+            selected
+        );
+        assert_eq!(
+            sorted_values(blocks.iter().flat_map(|block| block.vars.clone()).collect()),
+            selected
+        );
+        assert!(blocks
+            .iter()
+            .all(|block| block.rows.len() == block.vars.len()));
+    }
+
+    #[test]
+    fn incidence_examples_tutorial_singular_solid_workflow() {
+        // Mirrors ~/repos/incidence_examples/incidence_examples/tutorial/run_tutorial.py.
+        // Variable order:
+        // material_accumulation[A..C], energy_accumulation, flow_mass_comp[A..C],
+        // enth_mass, enth_mol_comp[A..C], flow_mass, mass_frac_comp[A..C],
+        // temperature, dens_mass_particle, dens_mass_skeletal, particle_porosity.
+        let base_edges = vec![
+            (0, 16),
+            (0, 12),
+            (1, 16),
+            (1, 13),
+            (2, 16),
+            (2, 14),
+            (3, 0),
+            (3, 11),
+            (3, 12),
+            (4, 1),
+            (4, 11),
+            (4, 13),
+            (5, 2),
+            (5, 11),
+            (5, 14),
+            (6, 16),
+            (6, 7),
+            (7, 3),
+            (7, 11),
+            (7, 7),
+            (8, 4),
+            (8, 11),
+            (8, 12),
+            (9, 5),
+            (9, 11),
+            (9, 13),
+            (10, 6),
+            (10, 11),
+            (10, 14),
+            (11, 8),
+            (11, 15),
+            (12, 9),
+            (12, 15),
+            (13, 10),
+            (13, 15),
+            (14, 7),
+            (14, 8),
+            (14, 9),
+            (14, 10),
+            (14, 12),
+            (14, 13),
+            (14, 14),
+            (15, 12),
+            (15, 13),
+            (15, 14),
+            (16, 16),
+            (16, 17),
+            (17, 17),
+            (17, 12),
+            (17, 13),
+            (17, 14),
+        ];
+
+        let inc = equality_incidence(18, 18, &base_edges);
+        let matching = inc.maximum_matching();
+        assert_eq!(matching_cardinality(&matching), 17);
+        assert_eq!(matching.unmatched_vars, vec![11]);
+
+        let dm = inc.dulmage_mendelsohn_partition();
+        assert_eq!(dm.unmatched_rows.len(), 1);
+        assert!(matches!(dm.unmatched_rows[0], 15 | 17));
+        assert_eq!(dm.unmatched_vars, vec![11]);
+        assert_eq!(dm.underconstrained_rows, vec![3, 4, 5, 7, 8, 9, 10]);
+        assert_eq!(
+            sorted_values(dm.underconstrained_vars.clone()),
+            vec![0, 1, 2, 3, 4, 5, 6, 11]
+        );
+        assert_eq!(dm.overconstrained_rows, vec![0, 1, 2, 15, 16, 17]);
+        assert_eq!(
+            sorted_values(dm.overconstrained_vars.clone()),
+            vec![12, 13, 14, 16, 17]
+        );
+        assert_eq!(dm.square_rows, vec![6, 11, 12, 13, 14]);
+        assert_eq!(dm.square_vars, vec![7, 8, 9, 10, 15]);
+
+        // The tutorial's first structural fix replaces sum_component_eqn with
+        // sum_flow_eqn. This is square and structurally nonsingular, but its
+        // BTD exposes a numerically singular 4x4 flow block.
+        let sum_flow_edges: Vec<_> = base_edges
+            .iter()
+            .copied()
+            .filter(|&(row, _)| row != 15)
+            .map(|(row, var)| {
+                if row == 16 {
+                    (15, var)
+                } else if row == 17 {
+                    (16, var)
+                } else {
+                    (row, var)
+                }
+            })
+            .chain([(17, 4), (17, 5), (17, 6), (17, 11)])
+            .collect();
+        let inc = equality_incidence(18, 18, &sum_flow_edges);
+        assert_perfect_matching(&inc);
+        let blocks = inc
+            .block_triangular_decomposition(&all_indices(18), &all_indices(18))
+            .unwrap();
+        assert_eq!(
+            sorted_block_pairs(&blocks),
+            vec![
+                (vec![0, 1, 2, 15, 16], vec![12, 13, 14, 16, 17]),
+                (vec![3], vec![0]),
+                (vec![4], vec![1]),
+                (vec![5], vec![2]),
+                (vec![6], vec![7]),
+                (vec![7], vec![3]),
+                (vec![8, 9, 10, 17], vec![4, 5, 6, 11]),
+                (vec![11, 12, 13, 14], vec![8, 9, 10, 15]),
+            ]
+        );
+
+        // The final tutorial fix restores sum_component_eqn, unfixes
+        // particle_porosity, and adds flow_density_eqn. This is both
+        // structurally nonsingular and block triangular.
+        let final_edges = base_edges
+            .iter()
+            .copied()
+            .chain([(16, 18), (18, 11), (18, 16)])
+            .collect::<Vec<_>>();
+        let inc = equality_incidence(19, 19, &final_edges);
+        assert_perfect_matching(&inc);
+        let blocks = inc
+            .block_triangular_decomposition(&all_indices(19), &all_indices(19))
+            .unwrap();
+        assert_eq!(
+            sorted_block_pairs(&blocks),
+            vec![
+                (vec![0, 1, 2, 15], vec![12, 13, 14, 16]),
+                (vec![3], vec![0]),
+                (vec![4], vec![1]),
+                (vec![5], vec![2]),
+                (vec![6], vec![7]),
+                (vec![7], vec![3]),
+                (vec![8], vec![4]),
+                (vec![9], vec![5]),
+                (vec![10], vec![6]),
+                (vec![11, 12, 13, 14], vec![8, 9, 10, 15]),
+                (vec![16], vec![18]),
+                (vec![17], vec![17]),
+                (vec![18], vec![11]),
+            ]
+        );
+    }
+
+    #[test]
+    fn incidence_examples_clc_dm_boundary_conditions_detect_wrong_endpoint_unfix() {
+        // Mirrors the structural lesson in
+        // incidence_examples/example1/run_clc_dm_example.py: zero degrees of
+        // freedom is not enough if initial conditions are unfixed at the wrong
+        // end of a counter-current dynamic reactor.
+        let correct = equality_incidence(
+            8,
+            8,
+            &[
+                (0, 0),
+                (1, 1),
+                (2, 2),
+                (3, 3),
+                (4, 0),
+                (4, 4),
+                (5, 1),
+                (5, 5),
+                (6, 2),
+                (6, 6),
+                (7, 3),
+                (7, 7),
+            ],
+        );
+        assert_perfect_matching(&correct);
+
+        let wrong_endpoint = equality_incidence(
+            8,
+            8,
+            &[
+                (0, 0),
+                (1, 1),
+                // Rows 2 and 3 are solid inlet boundary equations at xf. In
+                // the wrong specification, the xf initial-condition variables
+                // remain fixed, so these rows have no unfixed incident vars.
+                (4, 0),
+                (4, 4),
+                (5, 1),
+                (5, 5),
+                (6, 2),
+                (6, 6),
+                (7, 3),
+                (7, 7),
+            ],
+        );
+        let matching = wrong_endpoint.maximum_matching();
+        assert_eq!(matching_cardinality(&matching), 6);
+        assert_eq!(matching.unmatched_rows, vec![2, 3]);
+        assert_eq!(matching.unmatched_vars.len(), 2);
+
+        let dm = wrong_endpoint.dulmage_mendelsohn_partition();
+        assert_eq!(dm.overconstrained_rows, vec![2, 3]);
+        assert!(dm.overconstrained_vars.is_empty());
+        assert_eq!(dm.underconstrained_rows, vec![6, 7]);
+        assert_eq!(dm.underconstrained_vars, vec![2, 3, 6, 7]);
+        assert_eq!(dm.square_rows, vec![0, 1, 4, 5]);
+        assert_eq!(dm.square_vars, vec![0, 1, 4, 5]);
+    }
+
+    #[test]
+    fn incidence_examples_clc_scc_initialization_chain_blocks_are_ordered() {
+        // Mirrors incidence_examples/example2/run_scc_example.py at the graph
+        // level. The IDAES example solves a square moving-bed subsystem by
+        // strongly connected components; this fixture checks that repeated
+        // local SCCs with upstream dependencies are recovered in topological
+        // order.
+        let n_cells = 6;
+        let mut edges = Vec::new();
+        for cell in 0..n_cells {
+            let row = 2 * cell;
+            let var = 2 * cell;
+            edges.push((row, var));
+            edges.push((row, var + 1));
+            edges.push((row + 1, var));
+            edges.push((row + 1, var + 1));
+            if cell > 0 {
+                edges.push((row, var - 1));
+            }
+        }
+
+        let inc = equality_incidence(2 * n_cells, 2 * n_cells, &edges);
+        assert_perfect_matching(&inc);
+        let blocks = inc
+            .block_triangular_decomposition(&all_indices(2 * n_cells), &all_indices(2 * n_cells))
+            .unwrap();
+        assert_eq!(
+            blocks,
+            (0..n_cells)
+                .map(|cell| EqualityBlock {
+                    rows: vec![2 * cell, 2 * cell + 1],
+                    vars: vec![2 * cell, 2 * cell + 1],
+                })
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn matching_matches_incidence_examples_rectangular_gallery_cases() {
+        // Mirrors the unmatched-variable and unmatched-constraint gallery cases
+        // in Robbybp/incidence_examples/incidence_examples/images/generate_matching_images.py.
+        let bounds = equality_bounds(2);
+        let under_problem = graph_problem(3, &bounds, &[(0, 0), (0, 1), (0, 2), (1, 0), (1, 1)]);
+        let under_inc = EqualityIncidence::from_problem(&under_problem, TOL);
+        let under_matching = under_inc.maximum_matching();
+        assert!(under_matching.unmatched_rows.is_empty());
+        assert_eq!(under_matching.unmatched_vars.len(), 1);
+
+        let under_dm = under_inc.dulmage_mendelsohn_partition();
+        assert_eq!(under_dm.underconstrained_rows, vec![0, 1]);
+        assert_eq!(sorted_values(under_dm.underconstrained_vars), vec![0, 1, 2]);
+        assert!(under_dm.overconstrained_rows.is_empty());
+        assert!(under_dm.overconstrained_vars.is_empty());
+        assert!(under_dm.square_rows.is_empty());
+        assert!(under_dm.square_vars.is_empty());
+
+        let bounds = equality_bounds(3);
+        let over_problem = graph_problem(
+            2,
+            &bounds,
+            &[(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1)],
+        );
+        let over_inc = EqualityIncidence::from_problem(&over_problem, TOL);
+        let over_matching = over_inc.maximum_matching();
+        assert_eq!(over_matching.unmatched_rows.len(), 1);
+        assert!(over_matching.unmatched_vars.is_empty());
+
+        let over_dm = over_inc.dulmage_mendelsohn_partition();
+        assert_eq!(over_dm.overconstrained_rows, vec![0, 1, 2]);
+        assert_eq!(over_dm.overconstrained_vars, vec![0, 1]);
+        assert!(over_dm.underconstrained_rows.is_empty());
+        assert!(over_dm.underconstrained_vars.is_empty());
+        assert!(over_dm.square_rows.is_empty());
+        assert!(over_dm.square_vars.is_empty());
+    }
+
+    #[test]
+    fn connected_components_match_pyomo_and_mathprogincidence_matrix_cases() {
+        // Mirrors Pyomo test_connected.py::test_decomposable_matrix.
+        let inc = equality_incidence(
+            5,
+            5,
+            &[
+                (0, 0),
+                (1, 0),
+                (1, 1),
+                (2, 2),
+                (2, 3),
+                (3, 3),
+                (3, 4),
+                (4, 4),
+            ],
+        );
+        let components = inc.connected_components(&all_indices(5), &all_indices(5));
+        assert_eq!(
+            sorted_block_pairs(&components),
+            vec![(vec![0, 1], vec![0, 1]), (vec![2, 3, 4], vec![2, 3, 4])]
+        );
+
+        // Same Pyomo matrix with deterministic row/column permutations.
+        let row_perm = [3, 1, 4, 0, 2];
+        let col_perm = [2, 4, 0, 3, 1];
+        let permuted_edges: Vec<_> = [
+            (0, 0),
+            (1, 0),
+            (1, 1),
+            (2, 2),
+            (2, 3),
+            (3, 3),
+            (3, 4),
+            (4, 4),
+        ]
+        .iter()
+        .map(|&(row, col)| (row_perm[row], col_perm[col]))
+        .collect();
+        let components = equality_incidence(5, 5, &permuted_edges)
+            .connected_components(&all_indices(5), &all_indices(5));
+        let mut expected = vec![
+            (
+                sorted_values(vec![row_perm[0], row_perm[1]]),
+                sorted_values(vec![col_perm[0], col_perm[1]]),
+            ),
+            (
+                sorted_values(vec![row_perm[2], row_perm[3], row_perm[4]]),
+                sorted_values(vec![col_perm[2], col_perm[3], col_perm[4]]),
+            ),
+        ];
+        expected.sort();
+        assert_eq!(sorted_block_pairs(&components), expected);
+
+        // Mirrors MathProgIncidence.jl/test/interface.jl::test_connected_components_matrix.
+        let components = equality_incidence(3, 3, &[(0, 0), (0, 2), (1, 0), (1, 2), (2, 1)])
+            .connected_components(&all_indices(3), &all_indices(3));
+        assert_eq!(
+            sorted_block_pairs(&components),
+            vec![(vec![0, 1], vec![0, 2]), (vec![2], vec![1])]
+        );
+
+        // Mirrors MathProgIncidence.jl/test/interface.jl::test_multiple_connected_components_igraph.
+        let components = equality_incidence(5, 3, &[(0, 0), (0, 2), (1, 1), (1, 3), (2, 4)])
+            .connected_components(&all_indices(3), &all_indices(5));
+        assert_eq!(
+            sorted_block_pairs(&components),
+            vec![
+                (vec![0], vec![0, 2]),
+                (vec![1], vec![1, 3]),
+                (vec![2], vec![4])
+            ]
+        );
     }
 
     #[test]
@@ -3196,6 +4146,161 @@ mod tests {
                 rows: vec![0, 1],
                 vars: vec![0, 1],
             }]
+        );
+    }
+
+    #[test]
+    fn btd_matches_mathprogincidence_matrix_example() {
+        // Mirrors MathProgIncidence.jl/test/interface.jl::test_block_triangularize_matrix.
+        // Julia uses 1-based matrix indices; these assertions use 0-based row/var indices.
+        let bounds = equality_bounds(3);
+        let problem = graph_problem(
+            3,
+            &bounds,
+            &[(0, 0), (0, 2), (1, 0), (1, 1), (1, 2), (2, 1)],
+        );
+        let inc = EqualityIncidence::from_problem(&problem, TOL);
+
+        let blocks = inc
+            .block_triangular_decomposition(&[0, 1, 2], &[0, 1, 2])
+            .unwrap();
+
+        assert_eq!(
+            blocks,
+            vec![
+                EqualityBlock {
+                    rows: vec![2],
+                    vars: vec![1],
+                },
+                EqualityBlock {
+                    rows: vec![0, 1],
+                    vars: vec![0, 2],
+                },
+            ]
+        );
+
+        // Mirrors MathProgIncidence.jl/test/interface.jl::test_block_triangularize.
+        // Rows: eq1, eq2, eq3. Vars: x[1], x[2], x[3].
+        let blocks = equality_incidence(3, 3, &[(0, 1), (0, 2), (1, 0), (1, 2), (2, 0), (2, 2)])
+            .block_triangular_decomposition(&all_indices(3), &all_indices(3))
+            .unwrap();
+        assert_eq!(
+            blocks,
+            vec![
+                EqualityBlock {
+                    rows: vec![1, 2],
+                    vars: vec![0, 2],
+                },
+                EqualityBlock {
+                    rows: vec![0],
+                    vars: vec![1],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn btd_matches_pyomo_triangularize_matrix_gallery_cases() {
+        // Mirrors pyomo/contrib/incidence_analysis/tests/test_triangularize.py.
+        let n = 5;
+
+        let identity_edges: Vec<_> = (0..n).map(|i| (i, i)).collect();
+        let blocks = equality_incidence(n, n, &identity_edges)
+            .block_triangular_decomposition(&all_indices(n), &all_indices(n))
+            .unwrap();
+        assert_eq!(blocks.len(), n);
+        assert!(blocks
+            .iter()
+            .all(|block| block.rows.len() == 1 && block.rows == block.vars));
+
+        let mut lower_tri = Vec::new();
+        lower_tri.extend((0..n).map(|i| (i, i)));
+        lower_tri.extend((1..n).map(|i| (i, i - 1)));
+        let blocks = equality_incidence(n, n, &lower_tri)
+            .block_triangular_decomposition(&all_indices(n), &all_indices(n))
+            .unwrap();
+        assert_eq!(
+            blocks,
+            (0..n)
+                .map(|i| EqualityBlock {
+                    rows: vec![i],
+                    vars: vec![i],
+                })
+                .collect::<Vec<_>>()
+        );
+
+        let mut upper_tri = Vec::new();
+        upper_tri.extend((0..n).map(|i| (i, i)));
+        upper_tri.extend((0..n - 1).map(|i| (i, i + 1)));
+        let blocks = equality_incidence(n, n, &upper_tri)
+            .block_triangular_decomposition(&all_indices(n), &all_indices(n))
+            .unwrap();
+        assert_eq!(
+            blocks,
+            (0..n)
+                .rev()
+                .map(|i| EqualityBlock {
+                    rows: vec![i],
+                    vars: vec![i],
+                })
+                .collect::<Vec<_>>()
+        );
+
+        let mut bordered = Vec::new();
+        bordered.extend((0..n - 1).map(|i| (i, i)));
+        bordered.extend((0..n - 1).map(|i| (n - 1, i)));
+        bordered.extend((0..n - 1).map(|i| (i, n - 1)));
+        let blocks = equality_incidence(n, n, &bordered)
+            .block_triangular_decomposition(&all_indices(n), &all_indices(n))
+            .unwrap();
+        assert_eq!(
+            blocks,
+            vec![EqualityBlock {
+                rows: all_indices(n),
+                vars: all_indices(n),
+            }]
+        );
+
+        let half = n / 2;
+        let mut decomposable_bordered = Vec::new();
+        decomposable_bordered.extend((0..n - 1).map(|i| (i, i)));
+        decomposable_bordered.extend((0..n - 1).map(|i| (n - 1, i)));
+        decomposable_bordered.extend((half..n - 1).map(|i| (i, n - 1)));
+        let blocks = equality_incidence(n, n, &decomposable_bordered)
+            .block_triangular_decomposition(&all_indices(n), &all_indices(n))
+            .unwrap();
+        assert_eq!(
+            sorted_block_pairs(&blocks),
+            vec![
+                (vec![0], vec![0]),
+                (vec![1], vec![1]),
+                (vec![2, 3, 4], vec![2, 3, 4])
+            ]
+        );
+
+        let mut decomposable_tridiagonal = Vec::new();
+        decomposable_tridiagonal.extend((0..n).map(|i| (i, i)));
+        decomposable_tridiagonal.extend((1..n).map(|i| (i, i - 1)));
+        decomposable_tridiagonal.extend((0..n - 1).filter(|i| i % 2 == 0).map(|i| (i, i + 1)));
+        let blocks = equality_incidence(n, n, &decomposable_tridiagonal)
+            .block_triangular_decomposition(&all_indices(n), &all_indices(n))
+            .unwrap();
+        assert_eq!(
+            blocks,
+            vec![
+                EqualityBlock {
+                    rows: vec![0, 1],
+                    vars: vec![0, 1],
+                },
+                EqualityBlock {
+                    rows: vec![2, 3],
+                    vars: vec![2, 3],
+                },
+                EqualityBlock {
+                    rows: vec![4],
+                    vars: vec![4],
+                },
+            ]
         );
     }
 
