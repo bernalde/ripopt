@@ -2977,6 +2977,22 @@ mod tests {
     }
 
     #[test]
+    fn matching_matches_mathprogincidence_matrix_example() {
+        // Mirrors MathProgIncidence.jl/test/interface.jl::test_maximum_matching_matrix.
+        // Julia uses 1-based matrix indices; these assertions use 0-based row/var indices.
+        let bounds = equality_bounds(3);
+        let problem = graph_problem(3, &bounds, &[(0, 1), (1, 2), (2, 0)]);
+        let inc = EqualityIncidence::from_problem(&problem, TOL);
+
+        let matching = inc.maximum_matching();
+
+        assert_eq!(matching.row_to_var, vec![Some(1), Some(2), Some(0)]);
+        assert_eq!(matching.var_to_row, vec![Some(2), Some(0), Some(1)]);
+        assert!(matching.unmatched_rows.is_empty());
+        assert!(matching.unmatched_vars.is_empty());
+    }
+
+    #[test]
     fn matching_handles_long_augmenting_path_iteratively() {
         let chain_len = 10_000;
         let bounds = equality_bounds(chain_len + 1);
@@ -3067,6 +3083,38 @@ mod tests {
         assert_eq!(dm.square_vars, vec![0, 1]);
         assert_eq!(dm.underconstrained_rows, vec![4]);
         assert_eq!(dm.underconstrained_vars, vec![3, 4]);
+    }
+
+    #[test]
+    fn dm_matches_mathprogincidence_matrix_example() {
+        // Mirrors MathProgIncidence.jl/test/interface.jl::test_dulmage_mendelsohn_matrix.
+        // Julia uses 1-based matrix indices; these assertions use 0-based row/var indices.
+        let bounds = equality_bounds(4);
+        let problem = graph_problem(
+            4,
+            &bounds,
+            &[(0, 0), (0, 1), (0, 3), (1, 2), (2, 3), (3, 3)],
+        );
+        let inc = EqualityIncidence::from_problem(&problem, TOL);
+
+        let dm = inc.dulmage_mendelsohn_partition();
+
+        assert_eq!(dm.underconstrained_rows, vec![0]);
+        assert_eq!(dm.square_rows, vec![1]);
+        assert_eq!(dm.square_vars, vec![2]);
+        assert_eq!(dm.overconstrained_vars, vec![3]);
+
+        let mut over_or_unmatched_rows = dm.overconstrained_rows.clone();
+        over_or_unmatched_rows.extend_from_slice(&dm.unmatched_rows);
+        over_or_unmatched_rows.sort_unstable();
+        over_or_unmatched_rows.dedup();
+        assert_eq!(over_or_unmatched_rows, vec![2, 3]);
+
+        let mut under_or_unmatched_vars = dm.underconstrained_vars.clone();
+        under_or_unmatched_vars.extend_from_slice(&dm.unmatched_vars);
+        under_or_unmatched_vars.sort_unstable();
+        under_or_unmatched_vars.dedup();
+        assert_eq!(under_or_unmatched_vars, vec![0, 1]);
     }
 
     #[test]
@@ -3196,6 +3244,37 @@ mod tests {
                 rows: vec![0, 1],
                 vars: vec![0, 1],
             }]
+        );
+    }
+
+    #[test]
+    fn btd_matches_mathprogincidence_matrix_example() {
+        // Mirrors MathProgIncidence.jl/test/interface.jl::test_block_triangularize_matrix.
+        // Julia uses 1-based matrix indices; these assertions use 0-based row/var indices.
+        let bounds = equality_bounds(3);
+        let problem = graph_problem(
+            3,
+            &bounds,
+            &[(0, 0), (0, 2), (1, 0), (1, 1), (1, 2), (2, 1)],
+        );
+        let inc = EqualityIncidence::from_problem(&problem, TOL);
+
+        let blocks = inc
+            .block_triangular_decomposition(&[0, 1, 2], &[0, 1, 2])
+            .unwrap();
+
+        assert_eq!(
+            blocks,
+            vec![
+                EqualityBlock {
+                    rows: vec![2],
+                    vars: vec![1],
+                },
+                EqualityBlock {
+                    rows: vec![0, 1],
+                    vars: vec![0, 2],
+                },
+            ]
         );
     }
 
