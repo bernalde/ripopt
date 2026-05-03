@@ -3657,6 +3657,255 @@ mod tests {
     }
 
     #[test]
+    fn incidence_examples_tutorial_singular_solid_workflow() {
+        // Mirrors ~/repos/incidence_examples/incidence_examples/tutorial/run_tutorial.py.
+        // Variable order:
+        // material_accumulation[A..C], energy_accumulation, flow_mass_comp[A..C],
+        // enth_mass, enth_mol_comp[A..C], flow_mass, mass_frac_comp[A..C],
+        // temperature, dens_mass_particle, dens_mass_skeletal, particle_porosity.
+        let base_edges = vec![
+            (0, 16),
+            (0, 12),
+            (1, 16),
+            (1, 13),
+            (2, 16),
+            (2, 14),
+            (3, 0),
+            (3, 11),
+            (3, 12),
+            (4, 1),
+            (4, 11),
+            (4, 13),
+            (5, 2),
+            (5, 11),
+            (5, 14),
+            (6, 16),
+            (6, 7),
+            (7, 3),
+            (7, 11),
+            (7, 7),
+            (8, 4),
+            (8, 11),
+            (8, 12),
+            (9, 5),
+            (9, 11),
+            (9, 13),
+            (10, 6),
+            (10, 11),
+            (10, 14),
+            (11, 8),
+            (11, 15),
+            (12, 9),
+            (12, 15),
+            (13, 10),
+            (13, 15),
+            (14, 7),
+            (14, 8),
+            (14, 9),
+            (14, 10),
+            (14, 12),
+            (14, 13),
+            (14, 14),
+            (15, 12),
+            (15, 13),
+            (15, 14),
+            (16, 16),
+            (16, 17),
+            (17, 17),
+            (17, 12),
+            (17, 13),
+            (17, 14),
+        ];
+
+        let inc = equality_incidence(18, 18, &base_edges);
+        let matching = inc.maximum_matching();
+        assert_eq!(matching_cardinality(&matching), 17);
+        assert_eq!(matching.unmatched_vars, vec![11]);
+
+        let dm = inc.dulmage_mendelsohn_partition();
+        assert_eq!(dm.unmatched_rows.len(), 1);
+        assert!(matches!(dm.unmatched_rows[0], 15 | 17));
+        assert_eq!(dm.unmatched_vars, vec![11]);
+        assert_eq!(dm.underconstrained_rows, vec![3, 4, 5, 7, 8, 9, 10]);
+        assert_eq!(
+            sorted_values(dm.underconstrained_vars.clone()),
+            vec![0, 1, 2, 3, 4, 5, 6, 11]
+        );
+        assert_eq!(dm.overconstrained_rows, vec![0, 1, 2, 15, 16, 17]);
+        assert_eq!(
+            sorted_values(dm.overconstrained_vars.clone()),
+            vec![12, 13, 14, 16, 17]
+        );
+        assert_eq!(dm.square_rows, vec![6, 11, 12, 13, 14]);
+        assert_eq!(dm.square_vars, vec![7, 8, 9, 10, 15]);
+
+        // The tutorial's first structural fix replaces sum_component_eqn with
+        // sum_flow_eqn. This is square and structurally nonsingular, but its
+        // BTD exposes a numerically singular 4x4 flow block.
+        let sum_flow_edges: Vec<_> = base_edges
+            .iter()
+            .copied()
+            .filter(|&(row, _)| row != 15)
+            .map(|(row, var)| {
+                if row == 16 {
+                    (15, var)
+                } else if row == 17 {
+                    (16, var)
+                } else {
+                    (row, var)
+                }
+            })
+            .chain([(17, 4), (17, 5), (17, 6), (17, 11)])
+            .collect();
+        let inc = equality_incidence(18, 18, &sum_flow_edges);
+        assert_perfect_matching(&inc);
+        let blocks = inc
+            .block_triangular_decomposition(&all_indices(18), &all_indices(18))
+            .unwrap();
+        assert_eq!(
+            sorted_block_pairs(&blocks),
+            vec![
+                (vec![0, 1, 2, 15, 16], vec![12, 13, 14, 16, 17]),
+                (vec![3], vec![0]),
+                (vec![4], vec![1]),
+                (vec![5], vec![2]),
+                (vec![6], vec![7]),
+                (vec![7], vec![3]),
+                (vec![8, 9, 10, 17], vec![4, 5, 6, 11]),
+                (vec![11, 12, 13, 14], vec![8, 9, 10, 15]),
+            ]
+        );
+
+        // The final tutorial fix restores sum_component_eqn, unfixes
+        // particle_porosity, and adds flow_density_eqn. This is both
+        // structurally nonsingular and block triangular.
+        let final_edges = base_edges
+            .iter()
+            .copied()
+            .chain([(16, 18), (18, 11), (18, 16)])
+            .collect::<Vec<_>>();
+        let inc = equality_incidence(19, 19, &final_edges);
+        assert_perfect_matching(&inc);
+        let blocks = inc
+            .block_triangular_decomposition(&all_indices(19), &all_indices(19))
+            .unwrap();
+        assert_eq!(
+            sorted_block_pairs(&blocks),
+            vec![
+                (vec![0, 1, 2, 15], vec![12, 13, 14, 16]),
+                (vec![3], vec![0]),
+                (vec![4], vec![1]),
+                (vec![5], vec![2]),
+                (vec![6], vec![7]),
+                (vec![7], vec![3]),
+                (vec![8], vec![4]),
+                (vec![9], vec![5]),
+                (vec![10], vec![6]),
+                (vec![11, 12, 13, 14], vec![8, 9, 10, 15]),
+                (vec![16], vec![18]),
+                (vec![17], vec![17]),
+                (vec![18], vec![11]),
+            ]
+        );
+    }
+
+    #[test]
+    fn incidence_examples_clc_dm_boundary_conditions_detect_wrong_endpoint_unfix() {
+        // Mirrors the structural lesson in
+        // incidence_examples/example1/run_clc_dm_example.py: zero degrees of
+        // freedom is not enough if initial conditions are unfixed at the wrong
+        // end of a counter-current dynamic reactor.
+        let correct = equality_incidence(
+            8,
+            8,
+            &[
+                (0, 0),
+                (1, 1),
+                (2, 2),
+                (3, 3),
+                (4, 0),
+                (4, 4),
+                (5, 1),
+                (5, 5),
+                (6, 2),
+                (6, 6),
+                (7, 3),
+                (7, 7),
+            ],
+        );
+        assert_perfect_matching(&correct);
+
+        let wrong_endpoint = equality_incidence(
+            8,
+            8,
+            &[
+                (0, 0),
+                (1, 1),
+                // Rows 2 and 3 are solid inlet boundary equations at xf. In
+                // the wrong specification, the xf initial-condition variables
+                // remain fixed, so these rows have no unfixed incident vars.
+                (4, 0),
+                (4, 4),
+                (5, 1),
+                (5, 5),
+                (6, 2),
+                (6, 6),
+                (7, 3),
+                (7, 7),
+            ],
+        );
+        let matching = wrong_endpoint.maximum_matching();
+        assert_eq!(matching_cardinality(&matching), 6);
+        assert_eq!(matching.unmatched_rows, vec![2, 3]);
+        assert_eq!(matching.unmatched_vars.len(), 2);
+
+        let dm = wrong_endpoint.dulmage_mendelsohn_partition();
+        assert_eq!(dm.overconstrained_rows, vec![2, 3]);
+        assert!(dm.overconstrained_vars.is_empty());
+        assert_eq!(dm.underconstrained_rows, vec![6, 7]);
+        assert_eq!(dm.underconstrained_vars, vec![2, 3, 6, 7]);
+        assert_eq!(dm.square_rows, vec![0, 1, 4, 5]);
+        assert_eq!(dm.square_vars, vec![0, 1, 4, 5]);
+    }
+
+    #[test]
+    fn incidence_examples_clc_scc_initialization_chain_blocks_are_ordered() {
+        // Mirrors incidence_examples/example2/run_scc_example.py at the graph
+        // level. The IDAES example solves a square moving-bed subsystem by
+        // strongly connected components; this fixture checks that repeated
+        // local SCCs with upstream dependencies are recovered in topological
+        // order.
+        let n_cells = 6;
+        let mut edges = Vec::new();
+        for cell in 0..n_cells {
+            let row = 2 * cell;
+            let var = 2 * cell;
+            edges.push((row, var));
+            edges.push((row, var + 1));
+            edges.push((row + 1, var));
+            edges.push((row + 1, var + 1));
+            if cell > 0 {
+                edges.push((row, var - 1));
+            }
+        }
+
+        let inc = equality_incidence(2 * n_cells, 2 * n_cells, &edges);
+        assert_perfect_matching(&inc);
+        let blocks = inc
+            .block_triangular_decomposition(&all_indices(2 * n_cells), &all_indices(2 * n_cells))
+            .unwrap();
+        assert_eq!(
+            blocks,
+            (0..n_cells)
+                .map(|cell| EqualityBlock {
+                    rows: vec![2 * cell, 2 * cell + 1],
+                    vars: vec![2 * cell, 2 * cell + 1],
+                })
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn matching_matches_incidence_examples_rectangular_gallery_cases() {
         // Mirrors the unmatched-variable and unmatched-constraint gallery cases
         // in Robbybp/incidence_examples/incidence_examples/images/generate_matching_images.py.
